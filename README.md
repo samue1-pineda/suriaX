@@ -1,11 +1,16 @@
 # suriaX
 
-<p align="center">
+<div align="center">
+  <picture>
   <img src="./assets/suri_banner_.png" alt="Banner" />
-</p>
+  </picture>
+  
+  [Español] | [website] | [getting started] | [learn] | [Documentation] 
+  
+</div>
 
-[Español] | [getting started] | [learn] | [Documentation] 
 
+[website]:suriaX/home
 [Español]:README_ES.md
 [getting started]:suriaX/learn/getting-started
 [learn]:suriaX/learn
