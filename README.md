@@ -14,47 +14,42 @@
 [Español]:README_ES.md
 [getting started]:suriaX/learn/getting-started
 [learn]:suriaX/learn
-[Documentation]:suriaX/Documentation 
+[Documentation]:Documentation.md
 <br>
-# English
 
 suriaX is a programming language whit the following goals:
-- have a python like syntax whit c/c++ features
-- visualice Compiler internals
-- be able to call c++ code by writing [bindings] on suriaX
-- use c philosphy, [LibsrX]
+- **compiler internals & visualization:** built for those students & enthusiasts who ask ¿what does every phase of the compiler give?
+- **friendly syntax:** based on python and c++ suriaX always look for a easier syntax 
+- **c++ interoperabilty:** by using custom [Bindings] suriaX let c++ run on your standar code
+- **c Philosophy([libsrX]):** suriaX trust on less reserved tokens & calls to libsrX
   
 [Bindings]:suriaX-lang/Documentation/bindings
 [LibsrX]:suriaX-lang/LibsrX
 
-## Why?
-
-
 ## project status
-currently on v.0.0.1 first public version is going to be all front-end & error handler
-working o errorhandler
 
-## installing
+the project is currently on **V.0.0.1 (Pre-Alpha)**, actively working on the frontend & the design of HIR and MIR
 
-waiting for [suriniX]
+[**x**] language syntax & EBNF grammar
 
-[suriniX]:https://github.com/samue1-pineda/suriniX
+[**/**] frontend(lexer,parser and AST generation) -**In progress**
 
-## try it online
+[ ] Intermediate Representations(HIR, MIR & lowering)
 
-waiting for [suri-web]
+[ ] LLVM Back-end Integration
 
-[suri-web]:suriaX-lang/home
+[ ] suriniX build system, web documentation & playground -**planned**
 
-waiting for [suriniX]
+*For the list of tasks, see [ROADMAP.md](ROADMAP.md).*
 
-[suriniX]:https://github.com/samue1-pineda/suriniX
-## documentation
+## architecture & internal pipeline
 
-waiting for [suri-web]
-
-[suri-web]:suriaX-lang/home
+[architecture](ARCHITECTURE.md)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+currently not accepting contributions 
+
+## License
+
+Distributed under the MIT License. See [`LICENSE`](LICENSE) for more information.
