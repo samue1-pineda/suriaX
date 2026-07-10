@@ -1,0 +1,22 @@
+# Dependencias del compilador suriaX (desarrollo).
+# esta lista es para los interesados en el desarrollo del compilador, no para los usuarios,
+# ellos con el .exe/.o no necesitan instalar nada de esto
+
+# Nota: LLVM-22 normalmente NO se instala con pip, sino con el gestor de
+# paquetes del sistema (apt/pacman/brew) o desde llvm.org. Se lista aqui como
+# referencia de version; compilerconfig.py lo detecta via 'llvm-config'.
+
+#backend / IR 
+llvm-22            # toolchain LLVM 22 (instalar por el sistema, ver how_to_run.md)
+protobuf           # serializacion del HIR (frontend Python <-> backend C++)
+                   # requiere tambien 'protoc' (compilador .proto) por el sistema
+
+# interoperabilidad C++
+pybind11           # bindings Python <-> C++ (incl. '#extern cpp{}')
+
+# config
+pyyaml             # formato de compilacion (.suriaX_config.yaml)
+
+# --- desarrollo / tests (opcional) ---
+# Los tests usan un runner propio (stdlib), sin framework externo.
+# Ver test/tests_to_add.txt para el plan de pruebas.

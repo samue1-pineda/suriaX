@@ -1,0 +1,43 @@
+/- io.libsrx — librería nativa de entrada/salida (ejemplo)
+
+ Una librería .libsrx declara tipos y funciones y SIEMPRE termina con
+
+ '#export <alias>'. Ese alias es el nombre con el que se importa:
+   #import IO;   ->   IO.printf("...");
+
+ Estado: válido a nivel léxico (probar con: #test lexer). La resolución real
+-/ de #import/#export es trabajo del parser/semántica (ver ROADMAP, Fase 9).
+
+// primitiva de bajo nivel: escribir a stdout, delegada a C++
+#extern cpp{
+    #include <cstdio>
+    extern "C" void suriax_write(const char* s) { std::fputs(s, stdout); }
+}
+
+// tipo cadena con su longitud (struct: nombre al final, estilo C)
+struct {
+    str text;
+    int len;
+} String;
+
+// métodos dunder del tipo String: invocables sin '__' desde el consumidor
+fn __print__(ptr String s) -> void {
+    suriax_write(s.text);
+}
+
+fn __len__(ptr String s) -> int {
+    return s.len;
+}
+
+// API pública
+fn printf(str fmt) -> void {
+    suriax_write(fmt);
+}
+
+fn println(str fmt) -> void {
+    printf(fmt);
+    printf("\n");
+}
+
+// cierre obligatorio: publica la librería con su alias
+#export IO

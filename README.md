@@ -10,11 +10,11 @@
 </div>
 
 
-[website]:suriaX/home
+[website]:
 [Español]:README_ES.md
-[getting started]:suriaX/learn/getting-started
-[learn]:suriaX/learn
-[Documentation]:Documentation.md
+[getting started]:how_to_run.md
+[learn]:
+[Documentation]: 
 <br>
 
 suriaX is a programming language whit the following goals:

@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- suriaX ---
+.suriaX_config.yaml
+*.o                      
+*.exe
+*.wasm
+out/                     
+test.srcx
+
+documentation/
+# documentation es una carpeta externa que contiene la documentacion WEB del proyecto
+
+.vscode/
+test/
+#temportalmente la carpeta test se ignora ya que aun no esta completa la implementacion

@@ -1,0 +1,230 @@
+(* ============================================================================
+   Gramática de suriaX  (EBNF)
+   ----------------------------------------------------------------------------
+   Esta es la gramática OBJETIVO (diseñada) del lenguaje. El parser todavía no
+   está implementado: hoy el frontend solo llega hasta la tokenización. Por eso
+   cada regla sintáctica lleva una marca de estado:
+
+     [LEX]  los tokens que la componen YA los produce el lexer.
+     [TBD]  la sintaxis concreta aún no está fijada (pendiente de parser).
+
+   Notación EBNF:
+     =        definición            |   alternativa
+     { }      cero o más            [ ]  opcional
+     ( )      agrupación            "x"  terminal literal
+     ?...?    descripción informal de un terminal léxico
+
+   Terminales = tipos de token (ver docs/gramar/t_types.md y V0/include/t_types.py).
+   ============================================================================ *)
+
+
+(* ========================= 1. ESTRUCTURA SINTÁCTICA ====================== *)
+
+program        = { top_level } EOF ;                                (* [LEX] *)
+
+top_level      = directive
+               | extern_block
+               | decorator_decl
+               | function_decl
+               | struct_decl
+               | enum_decl
+               | type_decl
+               | statement ;
+
+(* ----------------------------- directivas ------------------------------- *)
+(* El lexer emite DIRECTIVE('nombre'); el alias/objetivo son IDENTIFIER.    *)
+
+directive      = import_dir | export_dir | from_dir ;               (* [LEX] *)
+
+(* "as" NO es palabra reservada: el lexer lo emite como IDENTIFIER cuyo      *)
+(* lexema es "as" (keyword contextual). El parser comprueba el lexema. Es    *)
+(* coherente con la filosofía libsrX (pocos tokens reservados).             *)
+import_dir     = "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
+export_dir     = "#export" IDENTIFIER [ ";" ] ;                     (* cierra una .libsrx *)
+from_dir       = "#from" IDENTIFIER "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
+
+(* interoperabilidad C++: el cuerpo se captura crudo (RAW_BLOCK).           *)
+(* "cpp" aquí = IDENTIFIER('cpp'), tampoco es keyword (ver lexer).          *)
+extern_block   = "#extern" "cpp" RAW_BLOCK ;                        (* [LEX] *)
+                 (* RAW_BLOCK = "{" ?texto C++ crudo, llaves balanceadas? "}" *)
+
+(* ----------------------------- funciones -------------------------------- *)
+
+decorator_decl = DECORATOR function_decl ;                          (* [LEX] @nombre sobre una fn *)
+
+function_decl  = "fn" IDENTIFIER "(" [ param_list ] ")" "->" type block ;  (* [LEX]  "->" = ARROW *)
+
+param_list     = param { "," param } ;
+param          = type IDENTIFIER ;                                  (* tipo nombre *)
+
+block          = "{" { statement } "}" ;
+
+(* --------------------- tipos compuestos (declaración) ------------------- *)
+
+(* struct: nombre al final (estilo C typedef), según test.srcx:
+     struct{
+         int len;
+         str str;
+     }__str__;                                                              *)
+struct_decl    = "struct" "{" { field } "}" IDENTIFIER ";" ;        (* [LEX] *)
+field          = type IDENTIFIER ";" ;
+
+(* enum: estilo C++.                                                        *)
+enum_decl      = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}" ;  (* [LEX] *)
+enum_item      = IDENTIFIER [ "=" expression ] ;
+
+(* type: token reservado; la sintaxis concreta aún no está definida.        *)
+type_decl      = "type" IDENTIFIER "=" ?pendiente? ";" ;            (* [TBD] *)
+
+
+(* ============================== 2. SENTENCIAS =========================== *)
+
+statement      = var_decl
+               | region_stmt
+               | if_stmt
+               | while_stmt
+               | match_stmt
+               | return_stmt
+               | break_stmt
+               | continue_stmt
+               | move_stmt
+               | free_stmt
+               | expr_stmt ;
+
+(* declaración de variable: 'tipo nombre = valor;'  El ';' es OBLIGATORIO.  *)
+var_decl       = [ qualifier ] type IDENTIFIER [ "=" expression ] ";" ;   (* [LEX] *)
+qualifier      = "const" | "mutable" ;
+
+(* memoria: region-based + move-semantics                                   *)
+region_stmt    = "region" IDENTIFIER block ;                        (* [LEX] *)
+
+(* 'move' es una SENTENCIA, no un operador de expresión: 'move y;'. Antes    *)
+(* también figuraba en 'unary', lo que hacía ambiguo todo statement que      *)
+(* empezara por 'move' (move_stmt vs expr_stmt). Se quitó de 'unary'.        *)
+(* [REVISAR] si en el futuro se quiere 'x = move y;', hágase al revés:       *)
+(* 'move' solo en 'unary' y elimínese move_stmt.                             *)
+move_stmt      = "move" expression ";" ;                            (* [LEX] *)
+
+if_stmt        = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ] ;  (* [LEX] *)
+while_stmt     = "while" "(" expression ")" block ;                 (* [LEX] *)
+
+match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" ;  (* [LEX] *)
+case_arm       = "case" expression ":" ( statement | block ) ;
+
+return_stmt    = "return" [ expression ] ";" ;                      (* [LEX] *)
+break_stmt     = "break" ";" ;                                      (* [LEX] *)
+continue_stmt  = "continue" ";" ;                                   (* [LEX] *)
+
+expr_stmt      = expression ";" ;                                   (* [LEX] *)
+
+
+(* ============================= 3. EXPRESIONES =========================== *)
+(* Precedencia de menor a mayor (el parser será descenso recursivo + Pratt).*)
+
+expression     = logic_or ;                                         (* [LEX] *)
+
+logic_or       = logic_and { "or" logic_and } ;
+logic_and      = equality  { "and" equality } ;
+equality       = comparison { ( "==" | "!=" ) comparison } ;
+comparison     = term { ( "<" | "<=" | ">" | ">=" ) term } ;
+term           = factor { ( "+" | "-" ) factor } ;
+factor         = unary { ( "*" | "/" ) unary } ;
+
+unary          = ( "not" | "-" | "&" ) unary                       (* 'move' es sentencia, no unario *)
+               | placement ;
+
+(* asociación a región: 'expr at region'                                    *)
+placement      = postfix [ "at" IDENTIFIER ] ;
+
+postfix        = primary { ( "." IDENTIFIER
+                           | "(" [ arg_list ] ")"
+                           | "[" expression "]" ) } ;
+
+arg_list       = expression { "," expression } ;
+
+primary        = literal
+               | IDENTIFIER
+               | alloc_expr
+               | "sizeof" "(" type ")"
+               | "(" expression ")" ;
+
+(* construcción de valores en memoria: 'make'/'alloc' SÍ producen un valor   *)
+(* (p. ej. 'ptr int y = make int in scratch;').                              *)
+alloc_expr     = "make" type "in" IDENTIFIER                        (* make T in region *)
+               | "alloc" type ;
+(* [REVISAR] 'free' NO produce un valor útil; como expresión compondría en   *)
+(* aritmética ('free x + 1'). Se saca de alloc_expr y se modela como         *)
+(* sentencia propia (free_stmt) para que solo aparezca como 'free x;'.       *)
+free_stmt      = "free" expression ";" ;                           (* [LEX] *)
+
+(* Los literales usan tokens *_LIT, distintos de las palabras clave de tipo   *)
+(* (INT/FLOAT/CHAR/STR). Es decir: 'int' = INT (tipo) vs 10 = INT_LIT.        *)
+literal        = INT_LIT | FLOAT_LIT | STRING_LIT | CHAR_LIT
+               | "true" | "false" | "null" ;
+
+
+(* =============================== 4. TIPOS ============================== *)
+
+type           = base_type { type_suffix } ;                        (* [LEX] *)
+
+base_type      = "int" | "float" | "bool" | "char" | "str" | "void"
+               | "ptr" type            (* puntero: 'ptr int'           *)
+               | IDENTIFIER ;          (* tipo nominal definido por usuario *)
+
+type_suffix    = "?" ;                  (* nullable: 'int?'             *)
+
+
+(* ========================= 5. REGLAS LÉXICAS =========================== *)
+(* Cómo el lexer forma los terminales a partir de code points Unicode.      *)
+
+IDENTIFIER     = ident_start { ident_continue } ;                   (* [LEX] *)
+ident_start    = ?Unicode XID_Start? | "_" ;
+ident_continue = ?Unicode XID_Continue? | "_" ;
+
+INT_LIT        = digit { digit } ;                                 (* [LEX] *)
+FLOAT_LIT      = digit { digit } "." digit { digit } ;             (* [LEX] *)
+digit          = "0" … "9" ;
+
+(* string con interpolación: "...{expr}..."  ; '{{' y '}}' = llave literal. *)
+(* OJO: el lexer NO parsea 'expression' dentro de '{ }'; captura el texto    *)
+(* crudo de la interpolación (Interp) y su análisis queda para el parser.    *)
+STRING_LIT     = '"' { str_char | interp | escape } '"' ;          (* [LEX] *)
+interp         = "{" ?texto crudo de la expresión? "}" ;
+str_char       = ?cualquier code point excepto '"', '\', '{', '}' y salto de línea? ;
+
+CHAR_LIT       = "'" ( char_char | escape ) "'" ;                  (* [LEX] un solo code point *)
+char_char      = ?cualquier code point excepto "'", '\' y salto de línea? ;
+
+escape         = "\" ( "n" | "t" | "r" | "0" | "\" | '"' | "'" ) ; (* [LEX] *)
+
+ARROW          = "->" ;                                            (* [LEX] tipo de retorno de fn *)
+
+DIRECTIVE      = "#" directive_name ;                               (* [LEX] *)
+directive_name = "import" | "export" | "extern" | "test" | "from" ;
+
+DECORATOR      = "@" IDENTIFIER ;                                   (* [LEX] *)
+
+
+(* ======================= 6. COMENTARIOS Y ESPACIOS ===================== *)
+(* Reconocidos por el lexer y DESCARTADOS: no generan tokens.               *)
+
+line_comment   = "//" { ?cualquier code point excepto salto de línea? } ;  (* [LEX] *)
+block_comment  = "/-" { ?cualquier code point? } "-/" ;            (* [LEX] *)
+whitespace     = ?Unicode White_Space? ;                           (* [LEX] *)
+
+
+(* ============================== 7. NOTAS =============================== *)
+(*
+   - El ';' es el terminador de sentencia OBLIGATORIO.
+   - 'printf' / 'print' NO son palabras reservadas: son IDENTIFIER resueltos
+     contra una librería (filosofía libsrX). Se invocan como 'alias.fn(args)'
+     tras '#import', p. ej. 'IO.printf("...");'.
+   - 'test' (función nativa) es distinto de la directiva '#test'.
+   - Palabras clave de tipo vs literales: 'int'/'float'/'char'/'str' son los
+     tokens de TIPO (INT/FLOAT/CHAR/STR); los literales son tokens distintos
+     (INT_LIT/FLOAT_LIT/CHAR_LIT/STRING_LIT). Así el parser nunca confunde el
+     tipo 'str' con un literal de cadena "...".
+   - 'as' (import) y 'cpp' (#extern) son IDENTIFIER, no keywords reservadas.
+   - La verificación del modelo de memoria (lifetimes de región, validez de un
+     'move') NO es sintáctica: ocurre en semántica y en el lowering a MIR.
+*)
