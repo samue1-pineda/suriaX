@@ -32,7 +32,7 @@ _V0_ROOT = os.path.abspath(os.path.dirname(__file__))
 if _V0_ROOT not in sys.path:
     sys.path.insert(0, _V0_ROOT)
 
-import compilerconfig  # noqa: E402
+import config.compilerconfig as compilerconfig  # noqa: E402
 from src.frontend.lexer import source_reader  # noqa: E402
 from src.frontend.lexer.lexer import Lexer  # noqa: E402
 from src.frontend.parser.parser import Parser  # noqa: E402
