@@ -28,6 +28,8 @@ suriaX is a programming language whit the following goals:
 
 ## project status
 
+**FROZEN** for a month or less, keep an eye for new updates in the next update :)
+
 the project is currently on **V.0.0.1 (Pre-Alpha)**, actively working on the frontend & the design of HIR and MIR
 
 [**x**] language syntax & EBNF grammar
