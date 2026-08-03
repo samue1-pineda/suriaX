@@ -24,7 +24,7 @@ documentation/
 .vscode/
 
 test/**/__pycache__/
-test/
+
 
 build/
 #suriaX generated

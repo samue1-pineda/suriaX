@@ -1,0 +1,669 @@
+{
+  "__node__": "Program",
+  "ln": 1,
+  "col": 1,
+  "items": [
+    {
+      "__node__": "StructDecl",
+      "ln": 1,
+      "col": 1,
+      "fields": [
+        {
+          "__node__": "Field",
+          "ln": 1,
+          "col": 10,
+          "type": {
+            "__node__": "PrimitiveTypeExpr",
+            "ln": 1,
+            "col": 10,
+            "name": "int"
+          },
+          "name": "x",
+          "restype": {
+            "__node__": "Type",
+            "kind": "INT",
+            "name": null,
+            "inner": null,
+            "mut": false
+          }
+        },
+        {
+          "__node__": "Field",
+          "ln": 1,
+          "col": 25,
+          "type": {
+            "__node__": "NullableTypeExpr",
+            "ln": 1,
+            "col": 25,
+            "inner": {
+              "__node__": "PointerTypeExpr",
+              "ln": 1,
+              "col": 22,
+              "inner": {
+                "__node__": "NominalTypeExpr",
+                "ln": 1,
+                "col": 17,
+                "name": "Nodo"
+              },
+              "mutable": false
+            }
+          },
+          "name": "sig",
+          "restype": {
+            "__node__": "Type",
+            "kind": "NULLABLE",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "POINTER",
+              "name": null,
+              "inner": {
+                "__node__": "Type",
+                "kind": "NOMINAL",
+                "name": "Nodo",
+                "inner": null,
+                "mut": false
+              },
+              "mut": false
+            },
+            "mut": false
+          }
+        }
+      ],
+      "name": "Nodo",
+      "visibility": null
+    },
+    {
+      "__node__": "FunctionDecl",
+      "ln": 3,
+      "col": 1,
+      "name": "crea",
+      "params": [
+        {
+          "__node__": "Parameter",
+          "ln": 3,
+          "col": 9,
+          "type": {
+            "__node__": "PrimitiveTypeExpr",
+            "ln": 3,
+            "col": 9,
+            "name": "int"
+          },
+          "name": "v",
+          "restype": {
+            "__node__": "Type",
+            "kind": "INT",
+            "name": null,
+            "inner": null,
+            "mut": false
+          }
+        }
+      ],
+      "return_type": {
+        "__node__": "NullableTypeExpr",
+        "ln": 3,
+        "col": 27,
+        "inner": {
+          "__node__": "PointerTypeExpr",
+          "ln": 3,
+          "col": 24,
+          "inner": {
+            "__node__": "NominalTypeExpr",
+            "ln": 3,
+            "col": 19,
+            "name": "Nodo"
+          },
+          "mutable": false
+        }
+      },
+      "body": {
+        "__node__": "Block",
+        "ln": 3,
+        "col": 29,
+        "statements": [
+          {
+            "__node__": "VarDecl",
+            "ln": 4,
+            "col": 5,
+            "qualifier": "var",
+            "type": {
+              "__node__": "NominalTypeExpr",
+              "ln": 4,
+              "col": 9,
+              "name": "Nodo"
+            },
+            "name": "n",
+            "value": {
+              "__node__": "StructLiteral",
+              "ln": 4,
+              "col": 18,
+              "type_name": "Nodo",
+              "field_names": [
+                "x",
+                "sig"
+              ],
+              "values": [
+                {
+                  "__node__": "Identifier",
+                  "ln": 4,
+                  "col": 27,
+                  "name": "v",
+                  "restype": {
+                    "__node__": "Type",
+                    "kind": "INT",
+                    "name": null,
+                    "inner": null,
+                    "mut": false
+                  }
+                },
+                {
+                  "__node__": "Literal",
+                  "ln": 4,
+                  "col": 35,
+                  "value": null,
+                  "literal_kind": "null",
+                  "restype": null
+                }
+              ],
+              "restype": {
+                "__node__": "Type",
+                "kind": "NOMINAL",
+                "name": "Nodo",
+                "inner": null,
+                "mut": false
+              }
+            },
+            "restype": {
+              "__node__": "Type",
+              "kind": "NOMINAL",
+              "name": "Nodo",
+              "inner": null,
+              "mut": false
+            },
+            "visibility": null
+          },
+          {
+            "__node__": "ReturnStmt",
+            "ln": 5,
+            "col": 5,
+            "value": {
+              "__node__": "AddrOf",
+              "ln": 5,
+              "col": 12,
+              "operand": {
+                "__node__": "Identifier",
+                "ln": 5,
+                "col": 13,
+                "name": "n",
+                "restype": {
+                  "__node__": "Type",
+                  "kind": "NOMINAL",
+                  "name": "Nodo",
+                  "inner": null,
+                  "mut": false
+                }
+              },
+              "restype": {
+                "__node__": "Type",
+                "kind": "POINTER",
+                "name": null,
+                "inner": {
+                  "__node__": "Type",
+                  "kind": "NOMINAL",
+                  "name": "Nodo",
+                  "inner": null,
+                  "mut": false
+                },
+                "mut": true
+              },
+              "mut": true
+            }
+          }
+        ]
+      },
+      "return_restype": {
+        "__node__": "Type",
+        "kind": "NULLABLE",
+        "name": null,
+        "inner": {
+          "__node__": "Type",
+          "kind": "POINTER",
+          "name": null,
+          "inner": {
+            "__node__": "Type",
+            "kind": "NOMINAL",
+            "name": "Nodo",
+            "inner": null,
+            "mut": false
+          },
+          "mut": false
+        },
+        "mut": false
+      },
+      "dunder": null,
+      "specifier": null,
+      "visibility": null
+    },
+    {
+      "__node__": "FunctionDecl",
+      "ln": 8,
+      "col": 1,
+      "name": "suma",
+      "params": [
+        {
+          "__node__": "Parameter",
+          "ln": 8,
+          "col": 17,
+          "type": {
+            "__node__": "NullableTypeExpr",
+            "ln": 8,
+            "col": 17,
+            "inner": {
+              "__node__": "PointerTypeExpr",
+              "ln": 8,
+              "col": 14,
+              "inner": {
+                "__node__": "NominalTypeExpr",
+                "ln": 8,
+                "col": 9,
+                "name": "Nodo"
+              },
+              "mutable": false
+            }
+          },
+          "name": "n",
+          "restype": {
+            "__node__": "Type",
+            "kind": "NULLABLE",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "POINTER",
+              "name": null,
+              "inner": {
+                "__node__": "Type",
+                "kind": "NOMINAL",
+                "name": "Nodo",
+                "inner": null,
+                "mut": false
+              },
+              "mut": false
+            },
+            "mut": false
+          }
+        }
+      ],
+      "return_type": {
+        "__node__": "ErrorTypeExpr",
+        "ln": 8,
+        "col": 25,
+        "inner": {
+          "__node__": "PrimitiveTypeExpr",
+          "ln": 8,
+          "col": 31,
+          "name": "int"
+        }
+      },
+      "body": {
+        "__node__": "Block",
+        "ln": 8,
+        "col": 35,
+        "statements": [
+          {
+            "__node__": "IfStmt",
+            "ln": 9,
+            "col": 5,
+            "condition": {
+              "__node__": "BinaryOp",
+              "ln": 9,
+              "col": 9,
+              "operator": "==",
+              "left": {
+                "__node__": "Identifier",
+                "ln": 9,
+                "col": 9,
+                "name": "n",
+                "restype": {
+                  "__node__": "Type",
+                  "kind": "NULLABLE",
+                  "name": null,
+                  "inner": {
+                    "__node__": "Type",
+                    "kind": "POINTER",
+                    "name": null,
+                    "inner": {
+                      "__node__": "Type",
+                      "kind": "NOMINAL",
+                      "name": "Nodo",
+                      "inner": null,
+                      "mut": false
+                    },
+                    "mut": false
+                  },
+                  "mut": false
+                }
+              },
+              "right": {
+                "__node__": "Literal",
+                "ln": 9,
+                "col": 14,
+                "value": null,
+                "literal_kind": "null",
+                "restype": null
+              },
+              "restype": {
+                "__node__": "Type",
+                "kind": "BOOL",
+                "name": null,
+                "inner": null,
+                "mut": false
+              }
+            },
+            "then_block": {
+              "__node__": "Block",
+              "ln": 9,
+              "col": 20,
+              "statements": [
+                {
+                  "__node__": "ThrowStmt",
+                  "ln": 9,
+                  "col": 22,
+                  "value": {
+                    "__node__": "Literal",
+                    "ln": 9,
+                    "col": 28,
+                    "value": 0,
+                    "literal_kind": "int",
+                    "restype": {
+                      "__node__": "Type",
+                      "kind": "INT",
+                      "name": null,
+                      "inner": null,
+                      "mut": false
+                    }
+                  }
+                }
+              ]
+            },
+            "else_branch": null
+          },
+          {
+            "__node__": "ReturnStmt",
+            "ln": 10,
+            "col": 5,
+            "value": {
+              "__node__": "MemberAccess",
+              "ln": 10,
+              "col": 12,
+              "obj": {
+                "__node__": "Identifier",
+                "ln": 10,
+                "col": 12,
+                "name": "n",
+                "restype": null
+              },
+              "member": "x",
+              "restype": {
+                "__node__": "Type",
+                "kind": "INT",
+                "name": null,
+                "inner": null,
+                "mut": false
+              }
+            }
+          }
+        ]
+      },
+      "return_restype": {
+        "__node__": "Type",
+        "kind": "ERROR",
+        "name": null,
+        "inner": {
+          "__node__": "Type",
+          "kind": "INT",
+          "name": null,
+          "inner": null,
+          "mut": false
+        },
+        "mut": false
+      },
+      "dunder": null,
+      "specifier": null,
+      "visibility": null
+    },
+    {
+      "__node__": "FunctionDecl",
+      "ln": 13,
+      "col": 1,
+      "name": "main",
+      "params": [],
+      "return_type": {
+        "__node__": "PrimitiveTypeExpr",
+        "ln": 13,
+        "col": 14,
+        "name": "int"
+      },
+      "body": {
+        "__node__": "Block",
+        "ln": 13,
+        "col": 18,
+        "statements": [
+          {
+            "__node__": "VarDecl",
+            "ln": 14,
+            "col": 5,
+            "qualifier": "var",
+            "type": {
+              "__node__": "NullableTypeExpr",
+              "ln": 14,
+              "col": 17,
+              "inner": {
+                "__node__": "PointerTypeExpr",
+                "ln": 14,
+                "col": 14,
+                "inner": {
+                  "__node__": "NominalTypeExpr",
+                  "ln": 14,
+                  "col": 9,
+                  "name": "Nodo"
+                },
+                "mutable": false
+              }
+            },
+            "name": "cabeza",
+            "value": {
+              "__node__": "Call",
+              "ln": 14,
+              "col": 28,
+              "callee": {
+                "__node__": "Identifier",
+                "ln": 14,
+                "col": 28,
+                "name": "crea",
+                "restype": null
+              },
+              "args": [
+                {
+                  "__node__": "Literal",
+                  "ln": 14,
+                  "col": 33,
+                  "value": 7,
+                  "literal_kind": "int",
+                  "restype": {
+                    "__node__": "Type",
+                    "kind": "INT",
+                    "name": null,
+                    "inner": null,
+                    "mut": false
+                  }
+                }
+              ],
+              "restype": {
+                "__node__": "Type",
+                "kind": "NULLABLE",
+                "name": null,
+                "inner": {
+                  "__node__": "Type",
+                  "kind": "POINTER",
+                  "name": null,
+                  "inner": {
+                    "__node__": "Type",
+                    "kind": "NOMINAL",
+                    "name": "Nodo",
+                    "inner": null,
+                    "mut": false
+                  },
+                  "mut": false
+                },
+                "mut": false
+              },
+              "hook": null
+            },
+            "restype": {
+              "__node__": "Type",
+              "kind": "NULLABLE",
+              "name": null,
+              "inner": {
+                "__node__": "Type",
+                "kind": "POINTER",
+                "name": null,
+                "inner": {
+                  "__node__": "Type",
+                  "kind": "NOMINAL",
+                  "name": "Nodo",
+                  "inner": null,
+                  "mut": false
+                },
+                "mut": false
+              },
+              "mut": false
+            },
+            "visibility": null
+          },
+          {
+            "__node__": "TryStmt",
+            "ln": 15,
+            "col": 5,
+            "try_block": {
+              "__node__": "Block",
+              "ln": 15,
+              "col": 9,
+              "statements": [
+                {
+                  "__node__": "VarDecl",
+                  "ln": 16,
+                  "col": 9,
+                  "qualifier": "var",
+                  "type": {
+                    "__node__": "PrimitiveTypeExpr",
+                    "ln": 16,
+                    "col": 13,
+                    "name": "int"
+                  },
+                  "name": "t",
+                  "value": {
+                    "__node__": "Call",
+                    "ln": 16,
+                    "col": 21,
+                    "callee": {
+                      "__node__": "Identifier",
+                      "ln": 16,
+                      "col": 21,
+                      "name": "suma",
+                      "restype": null
+                    },
+                    "args": [
+                      {
+                        "__node__": "Identifier",
+                        "ln": 16,
+                        "col": 26,
+                        "name": "cabeza",
+                        "restype": {
+                          "__node__": "Type",
+                          "kind": "NULLABLE",
+                          "name": null,
+                          "inner": {
+                            "__node__": "Type",
+                            "kind": "POINTER",
+                            "name": null,
+                            "inner": {
+                              "__node__": "Type",
+                              "kind": "NOMINAL",
+                              "name": "Nodo",
+                              "inner": null,
+                              "mut": false
+                            },
+                            "mut": false
+                          },
+                          "mut": false
+                        }
+                      }
+                    ],
+                    "restype": {
+                      "__node__": "Type",
+                      "kind": "ERROR",
+                      "name": null,
+                      "inner": {
+                        "__node__": "Type",
+                        "kind": "INT",
+                        "name": null,
+                        "inner": null,
+                        "mut": false
+                      },
+                      "mut": false
+                    },
+                    "hook": null
+                  },
+                  "restype": {
+                    "__node__": "Type",
+                    "kind": "INT",
+                    "name": null,
+                    "inner": null,
+                    "mut": false
+                  },
+                  "visibility": null
+                }
+              ]
+            },
+            "catch_name": "e",
+            "catch_block": {
+              "__node__": "Block",
+              "ln": 17,
+              "col": 17,
+              "statements": []
+            }
+          },
+          {
+            "__node__": "ReturnStmt",
+            "ln": 18,
+            "col": 5,
+            "value": {
+              "__node__": "Literal",
+              "ln": 18,
+              "col": 12,
+              "value": 0,
+              "literal_kind": "int",
+              "restype": {
+                "__node__": "Type",
+                "kind": "INT",
+                "name": null,
+                "inner": null,
+                "mut": false
+              }
+            }
+          }
+        ]
+      },
+      "return_restype": {
+        "__node__": "Type",
+        "kind": "INT",
+        "name": null,
+        "inner": null,
+        "mut": false
+      },
+      "dunder": null,
+      "specifier": null,
+      "visibility": null
+    }
+  ]
+}

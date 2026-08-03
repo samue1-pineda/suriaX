@@ -1,0 +1,260 @@
+"""fuzz/stress — entradas que ponen a sudar al compilador.
+
+Dos objetivos distintos:
+
+ 1. **Robustez**: entradas adversariales (anidamiento extremo, cadenas
+    enormes, basura aleatoria) no deben *colgar* ni lanzar excepciones sin
+    controlar — o fallan con un diagnóstico limpio, o compilan. Nunca un
+    traceback de Python.
+ 2. **Escala**: programas grandes (miles de símbolos/sentencias) deben
+    compilar en tiempo razonable — cada pasada es O(n) por diseño, así que
+    un cambio que introduzca cuadraticidad se nota aquí.
+
+Los umbrales de tiempo son GENEROSOS a propósito (buscan detectar un salto
+de complejidad, no medir la máquina).
+"""
+
+from __future__ import annotations
+
+import os
+import random
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from helpers import analyze, assert_output, lex, parse  # noqa: E402
+
+WRITE = "fn __write__(str s) -> void;\n"
+
+
+def _timed(fn, *args, **kwargs):
+    t0 = time.perf_counter()
+    result = fn(*args, **kwargs)
+    return result, time.perf_counter() - t0
+
+
+# --------------------------------------------------------------------------- #
+# 1. robustez ante entradas adversariales
+# --------------------------------------------------------------------------- #
+
+def test_parentesis_muy_anidados_no_revientan():
+    """500 niveles de anidamiento: o parsea, o da ExpressionTooDeep — pero
+    NUNCA un RecursionError sin controlar (ver grammar/program.py)."""
+    depth = 500
+    src = f"fn f() -> void {{ var int a = {'(' * depth}1{')' * depth}; }};"
+    program, errors, _ = parse(src)
+    codes = [e.code for e in errors]
+    assert all(c.startswith("PAR") for c in codes), (
+        f"solo se admiten diagnósticos PARxxx controlados, hubo: {codes}"
+    )
+
+
+def test_anidamiento_extremo_da_error_controlado():
+    """5000 niveles: debe reportar ExpressionTooDeep, no matar el proceso."""
+    depth = 5000
+    src = f"fn f() -> void {{ var int a = {'(' * depth}1{')' * depth}; }};"
+    _, errors, _ = parse(src)
+    assert errors, "un anidamiento extremo debe reportarse"
+    assert all(e.code.startswith("PAR") for e in errors), [e.code for e in errors]
+
+
+def test_bloques_anidados_profundos():
+    """200 'if' anidados: el walker es iterativo, no debe desbordar."""
+    depth = 200
+    src = ("fn f() -> void {\n" + "".join(
+        f"{'  ' * i}if (true) {{\n" for i in range(depth)
+    ) + "".join(f"{'  ' * (depth - i - 1)}}};\n" for i in range(depth)) + "};")
+    _, _, errors = analyze(src)
+    assert not errors, f"bloques anidados válidos no deben fallar: {errors[:3]}"
+
+
+def test_cadena_muy_larga():
+    """Una cadena de 100k caracteres pasa por el lexer sin degradarse."""
+    literal = "x" * 100_000
+    (tokens, errs), elapsed = _timed(lex, f'fn f() -> void {{ var str s = "{literal}"; }};')
+    assert not errs, errs
+    assert elapsed < 5.0, f"lexer tardó {elapsed:.2f}s en una cadena de 100k"
+
+
+def test_muchas_interpolaciones_en_una_fstring():
+    parts = "".join(f"{{a}}" for _ in range(500))
+    src = f'fn f() -> void {{ var int a = 1; var str s = f"{parts}"; }};'
+    _, _, errors = analyze(src)
+    assert not errors, errors[:3]
+
+
+def test_basura_aleatoria_no_produce_traceback():
+    """Fuzz: 300 entradas aleatorias — el compilador SIEMPRE termina con
+    diagnósticos, nunca con una excepción no controlada."""
+    rng = random.Random(20240720)  # semilla fija: fallo reproducible
+    alfabeto = list("{}()[];:,.<>=+-*/&?!|@#\"'\\ \tabcXY019_") + [
+        "fn", "int", "if", "while", "return", "struct", "error", "try",
+        "catch", "throw", "cast", "test", "ptr", "var", "const", "move",
+    ]
+    for i in range(300):
+        n = rng.randint(1, 60)
+        src = "".join(rng.choice(alfabeto) for _ in range(n))
+        try:
+            analyze(src)
+        except RecursionError:
+            raise AssertionError(f"RecursionError sin controlar con: {src!r}")
+        except Exception as exc:  # noqa: BLE001 - eso es justo lo que se caza
+            raise AssertionError(
+                f"excepción no controlada ({type(exc).__name__}: {exc}) "
+                f"en la entrada #{i}: {src!r}"
+            )
+
+
+def test_archivo_vacio_y_solo_comentarios():
+    for src in ("", "\n\n", "// solo un comentario\n", "/- bloque -/\n"):
+        program, errors, _ = parse(src)
+        assert not errors, f"{src!r} -> {errors}"
+        assert program.items == [], f"{src!r} no debería producir items"
+
+
+def test_utf8_e_identificadores_unicode():
+    """Comentarios y cadenas con no-ASCII no rompen posiciones ni decodificación."""
+    src = WRITE + ('// ácentos, ñ, 中文, emoji 🎉\n'
+                   'fn main() -> int { __write__("añ中🎉\\n"); return 0; };')
+    _, _, errors = analyze(src)
+    assert not errors, errors
+
+
+# --------------------------------------------------------------------------- #
+# 2. escala: el pipeline es O(n), no cuadrático
+# --------------------------------------------------------------------------- #
+
+def test_mil_funciones():
+    src = "".join(f"fn f{i}(int a) -> int {{ return a + {i}; }};\n" for i in range(1000))
+    (result, elapsed) = _timed(analyze, src)
+    _, table, errors = result
+    assert not errors, errors[:3]
+    assert len(table.global_scope.values) == 1000
+    assert elapsed < 20.0, f"1000 funciones tardaron {elapsed:.2f}s"
+
+
+def test_mil_variables_en_una_funcion():
+    cuerpo = "".join(f"    var int v{i} = {i};\n" for i in range(1000))
+    src = f"fn f() -> void {{\n{cuerpo}}};"
+    (result, elapsed) = _timed(analyze, src)
+    _, _, errors = result
+    assert not errors, errors[:3]
+    assert elapsed < 20.0, f"1000 variables tardaron {elapsed:.2f}s"
+
+
+def test_struct_con_muchos_campos():
+    campos = "".join(f"    int c{i};\n" for i in range(500))
+    src = f"struct {{\n{campos}}} Grande;"
+    _, table, errors = analyze(src)
+    assert not errors, errors[:3]
+    assert len(table.global_scope.types["Grande"].members) == 500
+
+
+def test_expresion_binaria_muy_larga():
+    """Una suma de 2000 términos.
+
+    Con el recursionlimit que fija ``V0/main.py`` (10k) compila limpio; con
+    el límite por defecto de Python el análisis semántico —que recorre las
+    expresiones recursivamente— agota la pila y debe degradar a SEM017, no
+    a un ``RecursionError`` sin controlar (contrato: la fase nunca lanza).
+    """
+    src = "fn f() -> void { var int a = " + " + ".join(str(i) for i in range(2000)) + "; };"
+    previo = sys.getrecursionlimit()
+    sys.setrecursionlimit(10_000)  # el mismo margen que usa el CLI real
+    try:
+        (result, elapsed) = _timed(analyze, src)
+    finally:
+        sys.setrecursionlimit(previo)
+    _, _, errors = result
+    assert not errors, errors[:3]
+    assert elapsed < 20.0, f"2000 términos tardaron {elapsed:.2f}s"
+
+
+def test_anidamiento_semantico_degrada_a_diagnostico():
+    """Sin margen de pila, la Semántica reporta SEM017 en vez de reventar."""
+    src = "fn f() -> void { var int a = " + " + ".join(str(i) for i in range(4000)) + "; };"
+    previo = sys.getrecursionlimit()
+    sys.setrecursionlimit(1_000)  # margen deliberadamente insuficiente
+    try:
+        _, _, errors = analyze(src)
+    except RecursionError:
+        raise AssertionError("la Semántica lanzó RecursionError en vez de degradar")
+    finally:
+        sys.setrecursionlimit(previo)
+    codes = [e.code for e in errors]
+    assert "SEM017" in codes, f"esperaba SEM017 (too deep); códigos: {codes}"
+
+
+def test_escalado_lineal_del_frontend():
+    """El tiempo debe crecer ~linealmente con el tamaño, no al cuadrado.
+
+    Se compara 200 vs 800 funciones (4x el tamaño): un pipeline O(n) tarda
+    ~4x; uno cuadrático tardaría ~16x. El umbral (10x) deja margen de sobra
+    para el ruido de medición pero atrapa un salto de complejidad real.
+    """
+    def gen(n):
+        return "".join(f"fn f{i}(int a) -> int {{ return a + {i}; }};\n"
+                       for i in range(n))
+
+    _, t_small = _timed(analyze, gen(200))
+    _, t_large = _timed(analyze, gen(800))
+    if t_small < 0.01:  # demasiado rápido para medir con fiabilidad
+        return
+    ratio = t_large / t_small
+    assert ratio < 10.0, (
+        f"escalado sospechoso: 4x el tamaño costó {ratio:.1f}x el tiempo "
+        "(¿se introdujo una pasada cuadrática?)"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 3. escala del intérprete (end-to-end)
+# --------------------------------------------------------------------------- #
+
+def test_bucle_de_cien_mil_iteraciones():
+    """El tree-walk sostiene 100k iteraciones sin degradarse ni desbordar."""
+    src = WRITE + """
+fn main() -> int {
+    var int i = 0;
+    var int suma = 0;
+    while (i < 100000) {
+        suma = suma + i;
+        i = i + 1;
+    };
+    __write__(f"{suma}\\n");
+    return 0;
+};
+"""
+    assert_output(src, "4999950000")
+
+
+def test_recursion_profunda_en_el_interprete():
+    """1000 niveles de recursión: el evaluator usa la pila de Python, así que
+    'V0/main.py' sube el recursionlimit — esto verifica que alcance."""
+    src = WRITE + """
+fn cuenta(int n) -> int {
+    if (n <= 0) { return 0; };
+    return 1 + cuenta(n - 1);
+};
+fn main() -> int { __write__(f"{cuenta(1000)}\\n"); return 0; };
+"""
+    assert_output(src, "1000")
+
+
+def test_muchas_asignaciones_a_campos_por_puntero():
+    src = WRITE + """
+struct { int x; } C;
+fn main() -> int {
+    var C c = C{ x: 0 };
+    var C ptr mutable p = &c;
+    var int i = 0;
+    while (i < 10000) {
+        p.x = p.x + 1;
+        i = i + 1;
+    };
+    __write__(f"{c.x}\\n");
+    return 0;
+};
+"""
+    assert_output(src, "10000")

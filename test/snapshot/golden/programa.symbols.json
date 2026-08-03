@@ -1,0 +1,221 @@
+{
+  "global": {
+    "types": {
+      "Nodo": {
+        "__node__": "Symbol",
+        "name": "Nodo",
+        "kind": "STRUCT",
+        "ln": 1,
+        "col": 1,
+        "type": {
+          "__node__": "Type",
+          "kind": "NOMINAL",
+          "name": "Nodo",
+          "inner": null,
+          "mut": false
+        },
+        "mutable": false,
+        "region": null,
+        "shared": false,
+        "region_mutable": false,
+        "region_na": false,
+        "visibility": null,
+        "moved_at": null,
+        "hook_kind": null,
+        "hook_owner": null,
+        "param_types": null,
+        "members": {
+          "x": {
+            "__node__": "Symbol",
+            "name": "x",
+            "kind": "FIELD",
+            "ln": 1,
+            "col": 10,
+            "type": {
+              "__node__": "Type",
+              "kind": "INT",
+              "name": null,
+              "inner": null,
+              "mut": false
+            },
+            "mutable": true,
+            "region": null,
+            "shared": false,
+            "region_mutable": false,
+            "region_na": false,
+            "visibility": null,
+            "moved_at": null,
+            "hook_kind": null,
+            "hook_owner": null,
+            "param_types": null,
+            "members": null
+          },
+          "sig": {
+            "__node__": "Symbol",
+            "name": "sig",
+            "kind": "FIELD",
+            "ln": 1,
+            "col": 25,
+            "type": {
+              "__node__": "Type",
+              "kind": "NULLABLE",
+              "name": null,
+              "inner": {
+                "__node__": "Type",
+                "kind": "POINTER",
+                "name": null,
+                "inner": {
+                  "__node__": "Type",
+                  "kind": "NOMINAL",
+                  "name": "Nodo",
+                  "inner": null,
+                  "mut": false
+                },
+                "mut": false
+              },
+              "mut": false
+            },
+            "mutable": true,
+            "region": null,
+            "shared": false,
+            "region_mutable": false,
+            "region_na": false,
+            "visibility": null,
+            "moved_at": null,
+            "hook_kind": null,
+            "hook_owner": null,
+            "param_types": null,
+            "members": null
+          }
+        }
+      }
+    },
+    "values": {
+      "crea": {
+        "__node__": "Symbol",
+        "name": "crea",
+        "kind": "FUNCTION",
+        "ln": 3,
+        "col": 1,
+        "type": {
+          "__node__": "Type",
+          "kind": "NULLABLE",
+          "name": null,
+          "inner": {
+            "__node__": "Type",
+            "kind": "POINTER",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "NOMINAL",
+              "name": "Nodo",
+              "inner": null,
+              "mut": false
+            },
+            "mut": false
+          },
+          "mut": false
+        },
+        "mutable": false,
+        "region": null,
+        "shared": false,
+        "region_mutable": false,
+        "region_na": false,
+        "visibility": null,
+        "moved_at": null,
+        "hook_kind": null,
+        "hook_owner": null,
+        "param_types": [
+          {
+            "__node__": "Type",
+            "kind": "INT",
+            "name": null,
+            "inner": null,
+            "mut": false
+          }
+        ],
+        "members": null
+      },
+      "suma": {
+        "__node__": "Symbol",
+        "name": "suma",
+        "kind": "FUNCTION",
+        "ln": 8,
+        "col": 1,
+        "type": {
+          "__node__": "Type",
+          "kind": "ERROR",
+          "name": null,
+          "inner": {
+            "__node__": "Type",
+            "kind": "INT",
+            "name": null,
+            "inner": null,
+            "mut": false
+          },
+          "mut": false
+        },
+        "mutable": false,
+        "region": null,
+        "shared": false,
+        "region_mutable": false,
+        "region_na": false,
+        "visibility": null,
+        "moved_at": null,
+        "hook_kind": null,
+        "hook_owner": null,
+        "param_types": [
+          {
+            "__node__": "Type",
+            "kind": "NULLABLE",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "POINTER",
+              "name": null,
+              "inner": {
+                "__node__": "Type",
+                "kind": "NOMINAL",
+                "name": "Nodo",
+                "inner": null,
+                "mut": false
+              },
+              "mut": false
+            },
+            "mut": false
+          }
+        ],
+        "members": null
+      },
+      "main": {
+        "__node__": "Symbol",
+        "name": "main",
+        "kind": "FUNCTION",
+        "ln": 13,
+        "col": 1,
+        "type": {
+          "__node__": "Type",
+          "kind": "INT",
+          "name": null,
+          "inner": null,
+          "mut": false
+        },
+        "mutable": false,
+        "region": null,
+        "shared": false,
+        "region_mutable": false,
+        "region_na": false,
+        "visibility": null,
+        "moved_at": null,
+        "hook_kind": null,
+        "hook_owner": null,
+        "param_types": [],
+        "members": null
+      }
+    }
+  },
+  "hooks": [],
+  "casts": [],
+  "dunders": [],
+  "traits": []
+}

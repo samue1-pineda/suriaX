@@ -1,0 +1,12 @@
+#test lexer
+
+// 'printf' NO es una palabra reservada: es una funcion de una libreria nativa
+// (libsrX). El lexer la trata como un IDENTIFIER cualquiera. La filosofia del
+// lenguaje es: pocos tokens reservados, casi todo viene de libsrX.
+
+int a = 10;
+printf("hola{a}");
+
+// interpolacion con varias expresiones y llaves literales escapadas
+str nombre = "mundo";
+printf("hola {nombre}, a vale {a} y esto es una llave literal: {{ }}");

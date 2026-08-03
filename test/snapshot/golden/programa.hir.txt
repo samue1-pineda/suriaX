@@ -1,0 +1,481 @@
+schema_version: 1
+source_file: "<normalizado>"
+symbols {
+  types {
+    key: "Nodo"
+    value {
+      name: "Nodo"
+      kind: STRUCT
+      ln: 1
+      col: 1
+      type {
+        kind: NOMINAL
+        name: "Nodo"
+      }
+      members {
+        key: "sig"
+        value {
+          name: "sig"
+          kind: FIELD
+          ln: 1
+          col: 25
+          type {
+            kind: NULLABLE
+            inner {
+              kind: POINTER
+              inner {
+                kind: NOMINAL
+                name: "Nodo"
+              }
+            }
+          }
+          mutable: true
+        }
+      }
+      members {
+        key: "x"
+        value {
+          name: "x"
+          kind: FIELD
+          ln: 1
+          col: 10
+          type {
+            kind: INT
+          }
+          mutable: true
+        }
+      }
+    }
+  }
+  values {
+    key: "crea"
+    value {
+      name: "crea"
+      kind: FUNCTION
+      ln: 3
+      col: 1
+      type {
+        kind: NULLABLE
+        inner {
+          kind: POINTER
+          inner {
+            kind: NOMINAL
+            name: "Nodo"
+          }
+        }
+      }
+      param_types {
+        kind: INT
+      }
+    }
+  }
+  values {
+    key: "main"
+    value {
+      name: "main"
+      kind: FUNCTION
+      ln: 13
+      col: 1
+      type {
+        kind: INT
+      }
+    }
+  }
+  values {
+    key: "suma"
+    value {
+      name: "suma"
+      kind: FUNCTION
+      ln: 8
+      col: 1
+      type {
+        kind: ERROR
+        inner {
+          kind: INT
+        }
+      }
+      param_types {
+        kind: NULLABLE
+        inner {
+          kind: POINTER
+          inner {
+            kind: NOMINAL
+            name: "Nodo"
+          }
+        }
+      }
+    }
+  }
+}
+items {
+  ln: 1
+  col: 1
+  struct_decl {
+    name: "Nodo"
+    fields {
+      type {
+        kind: INT
+      }
+      name: "x"
+    }
+    fields {
+      type {
+        kind: NULLABLE
+        inner {
+          kind: POINTER
+          inner {
+            kind: NOMINAL
+            name: "Nodo"
+          }
+        }
+      }
+      name: "sig"
+    }
+  }
+}
+items {
+  ln: 3
+  col: 1
+  function {
+    name: "crea"
+    params {
+      type {
+        kind: INT
+      }
+      name: "v"
+    }
+    return_type {
+      kind: NULLABLE
+      inner {
+        kind: POINTER
+        inner {
+          kind: NOMINAL
+          name: "Nodo"
+        }
+      }
+    }
+    body {
+      statements {
+        ln: 4
+        col: 5
+        var_decl {
+          qualifier: "var"
+          type {
+            kind: NOMINAL
+            name: "Nodo"
+          }
+          name: "n"
+          value {
+            ln: 4
+            col: 18
+            restype {
+              kind: NOMINAL
+              name: "Nodo"
+            }
+            struct_literal {
+              type_name: "Nodo"
+              field_names: "x"
+              field_names: "sig"
+              values {
+                ln: 4
+                col: 27
+                restype {
+                  kind: INT
+                }
+                identifier {
+                  name: "v"
+                }
+              }
+              values {
+                ln: 4
+                col: 35
+                literal {
+                  kind: "null"
+                }
+              }
+            }
+          }
+        }
+      }
+      statements {
+        ln: 5
+        col: 5
+        return_stmt {
+          value {
+            ln: 5
+            col: 12
+            restype {
+              kind: POINTER
+              inner {
+                kind: NOMINAL
+                name: "Nodo"
+              }
+              mut: true
+            }
+            addr_of {
+              operand {
+                ln: 5
+                col: 13
+                restype {
+                  kind: NOMINAL
+                  name: "Nodo"
+                }
+                identifier {
+                  name: "n"
+                }
+              }
+              mut: true
+            }
+          }
+        }
+      }
+    }
+  }
+}
+items {
+  ln: 8
+  col: 1
+  function {
+    name: "suma"
+    params {
+      type {
+        kind: NULLABLE
+        inner {
+          kind: POINTER
+          inner {
+            kind: NOMINAL
+            name: "Nodo"
+          }
+        }
+      }
+      name: "n"
+    }
+    return_type {
+      kind: ERROR
+      inner {
+        kind: INT
+      }
+    }
+    body {
+      statements {
+        ln: 9
+        col: 5
+        if_stmt {
+          condition {
+            ln: 9
+            col: 9
+            restype {
+              kind: BOOL
+            }
+            binary {
+              op: "=="
+              left {
+                ln: 9
+                col: 9
+                restype {
+                  kind: NULLABLE
+                  inner {
+                    kind: POINTER
+                    inner {
+                      kind: NOMINAL
+                      name: "Nodo"
+                    }
+                  }
+                }
+                identifier {
+                  name: "n"
+                }
+              }
+              right {
+                ln: 9
+                col: 14
+                literal {
+                  kind: "null"
+                }
+              }
+            }
+          }
+          then_block {
+            statements {
+              ln: 9
+              col: 22
+              throw_stmt {
+                value {
+                  ln: 9
+                  col: 28
+                  restype {
+                    kind: INT
+                  }
+                  literal {
+                    kind: "int"
+                    int_value: 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      statements {
+        ln: 10
+        col: 5
+        return_stmt {
+          value {
+            ln: 10
+            col: 12
+            restype {
+              kind: INT
+            }
+            member {
+              obj {
+                ln: 10
+                col: 12
+                identifier {
+                  name: "n"
+                }
+              }
+              member: "x"
+            }
+          }
+        }
+      }
+    }
+  }
+}
+items {
+  ln: 13
+  col: 1
+  function {
+    name: "main"
+    return_type {
+      kind: INT
+    }
+    body {
+      statements {
+        ln: 14
+        col: 5
+        var_decl {
+          qualifier: "var"
+          type {
+            kind: NULLABLE
+            inner {
+              kind: POINTER
+              inner {
+                kind: NOMINAL
+                name: "Nodo"
+              }
+            }
+          }
+          name: "cabeza"
+          value {
+            ln: 14
+            col: 28
+            restype {
+              kind: NULLABLE
+              inner {
+                kind: POINTER
+                inner {
+                  kind: NOMINAL
+                  name: "Nodo"
+                }
+              }
+            }
+            call {
+              callee {
+                ln: 14
+                col: 28
+                identifier {
+                  name: "crea"
+                }
+              }
+              args {
+                ln: 14
+                col: 33
+                restype {
+                  kind: INT
+                }
+                literal {
+                  kind: "int"
+                  int_value: 7
+                }
+              }
+            }
+          }
+        }
+      }
+      statements {
+        ln: 15
+        col: 5
+        try_stmt {
+          try_block {
+            statements {
+              ln: 16
+              col: 9
+              var_decl {
+                qualifier: "var"
+                type {
+                  kind: INT
+                }
+                name: "t"
+                value {
+                  ln: 16
+                  col: 21
+                  restype {
+                    kind: ERROR
+                    inner {
+                      kind: INT
+                    }
+                  }
+                  call {
+                    callee {
+                      ln: 16
+                      col: 21
+                      identifier {
+                        name: "suma"
+                      }
+                    }
+                    args {
+                      ln: 16
+                      col: 26
+                      restype {
+                        kind: NULLABLE
+                        inner {
+                          kind: POINTER
+                          inner {
+                            kind: NOMINAL
+                            name: "Nodo"
+                          }
+                        }
+                      }
+                      identifier {
+                        name: "cabeza"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          catch_name: "e"
+        }
+      }
+      statements {
+        ln: 18
+        col: 5
+        return_stmt {
+          value {
+            ln: 18
+            col: 12
+            restype {
+              kind: INT
+            }
+            literal {
+              kind: "int"
+              int_value: 0
+            }
+          }
+        }
+      }
+    }
+  }
+}
