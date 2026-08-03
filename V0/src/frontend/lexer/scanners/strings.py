@@ -1,17 +1,28 @@
-"""Scanner de literales de cadena (STRING) y de caracter (CHAR).
+"""Scanner de literales de cadena (STRING), f-string (interpolada) y CHAR.
 
- - cadenas: delimitadas por comillas dobles ``"..."``. Soportan
-   **interpolacion**: ``"hola{a}"`` descompone el valor en segmentos de texto
-   literal e interpolaciones ``{expr}`` (ver :class:`StringValue`). Para una
-   llave literal se escribe ``{{`` o ``}}`` (estilo f-string de Python).
+ - cadenas planas: delimitadas por comillas dobles ``"..."``. **No**
+   interpolan: ``{`` y ``}`` son caracteres literales como cualquier otro
+   (``"hola {x}"`` es exactamente ese texto). Decision de diseno: la
+   interpolacion es OPT-IN, asi ``print`` (texto plano) y ``printf``
+   (formateado) son operaciones distintas.
+ - f-strings: prefijo explicito ``f"..."``. Soportan **interpolacion**:
+   ``f"hola{a}"`` descompone el valor en segmentos de texto literal e
+   interpolaciones ``{expr}`` (ver :class:`StringValue`). Para una llave
+   literal dentro de una f-string se escribe ``{{`` o ``}}`` (estilo
+   f-string de Python).
  - caracteres: delimitados por comillas simples ``'x'`` (un solo code point,
    sin interpolacion).
+
+Ambas formas de cadena producen el mismo ``TokenType.STRING_LIT`` con un
+:class:`StringValue` como valor: las fases posteriores distinguen por
+``StringValue.is_interpolated``, no por el prefijo (el prefijo solo habilita
+el mecanismo, no cambia el tipo del literal: siempre ``str``).
 
 Soporta secuencias de escape basicas. Una cadena/caracter sin cerrar produce
 :class:`UnterminatedStringError` (LEX003); un escape no reconocido produce
 :class:`InvalidEscapeSequenceError` (LEX005); un literal de caracter vacio o de
 mas de un code point produce :class:`InvalidCharacterLiteralError` (LEX012);
-una interpolacion sin cerrar (``{`` sin ``}``) produce
+una interpolacion sin cerrar (``{`` sin ``}``) en una f-string produce
 :class:`InvalidTokenError` (LEX002).
 """
 
@@ -55,17 +66,31 @@ def _string_end(src: str, n: int, pos: int) -> int:
 
 
 def scan_string(lx) -> Token:
-    """Reconoce ``"..."`` con interpolacion ``{expr}`` y escapes ``{{`` ``}}``.
+    """Cadena PLANA ``"..."``: sin interpolacion, ``{``/``}`` literales."""
+    return _scan_quoted(lx, interpolate=False, prefix_len=0)
 
-    El ``value`` del token es un :class:`StringValue` con los segmentos en
-    orden. Se construye en una sola pasada.
+
+def scan_fstring(lx) -> Token:
+    """F-string ``f"..."``: interpolacion ``{expr}`` y escapes ``{{`` ``}}``.
+
+    El dispatcher del lexer la reconoce por el par ``f`` + ``"`` adyacentes
+    (``lx.pos`` apunta a la ``f``). El lexema del token incluye el prefijo.
+    """
+    return _scan_quoted(lx, interpolate=True, prefix_len=1)
+
+
+def _scan_quoted(lx, *, interpolate: bool, prefix_len: int) -> Token:
+    """Nucleo compartido de ``scan_string``/``scan_fstring``: una sola pasada.
+
+    ``prefix_len`` es cuantos caracteres de prefijo (``f``) preceden a la
+    comilla de apertura; el lexema del token los incluye.
     """
     src = lx.source
     n = lx.length
     start = lx.pos
     start_col = lx.col
 
-    pos = start + 1  # saltar la comilla de apertura
+    pos = start + prefix_len + 1  # saltar prefijo + comilla de apertura
     parts: list = []          # segmentos finales (str | Interp)
     buf: list[str] = []       # texto literal acumulado
 
@@ -107,13 +132,13 @@ def scan_string(lx) -> Token:
             pos += 1
             continue
 
-        # llave de apertura: interpolacion o '{{' literal
-        if ch == "{":
+        # llaves: solo tienen significado en una f-string
+        if interpolate and ch == "{":
             if pos + 1 < n and src[pos + 1] == "{":
                 buf.append("{")
                 pos += 2
                 continue
-            # interpolacion: leer hasta '}' (sin anidamiento de llaves)
+            # interpolacion: leer hasta '}' balanceado en la misma linea
             flush_literal()
             expr_start = pos + 1
             expr_col = expr_start - lx._line_start + 1
@@ -148,15 +173,15 @@ def scan_string(lx) -> Token:
             pos = j + 1
             continue
 
-        # llave de cierre: solo valida como '}}' literal
-        if ch == "}":
+        # llave de cierre en f-string: solo valida como '}}' literal
+        if interpolate and ch == "}":
             if pos + 1 < n and src[pos + 1] == "}":
                 buf.append("}")
                 pos += 2
                 continue
             lx.jump_to(_string_end(src, n, pos + 1))
             raise lex_error.InvalidTokenError(
-                "'}' suelto en un string; usa '}}' para una llave literal",
+                "'}' suelto en una f-string; usa '}}' para una llave literal",
                 line=lx.ln,
                 column=start_col,
                 file=lx.file,

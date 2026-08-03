@@ -1,0 +1,25 @@
+/- stdpf — 'printf' de suriaX (submódulo del paquete IO).
+
+ Contrato TEMPORAL (V.0.0.3): el lenguaje aún no tiene varargs ni
+ format-specifiers, así que 'printf' NO hace '%d'/'%s'. Escribe la cadena
+ TAL CUAL (sin newline). La interpolación la aportan los f-strings (opt-in
+ del lexer), que ya sustituyen cualquier valor:
+
+   #from IO.stdpf #import printf;
+   printf(f"n={n}\n");     // el f-string interpola; printf solo escribe
+
+ Cuando el lenguaje tenga varargs, 'printf' ganará los format-specifiers sin
+ cambiar su nombre ni romper el uso con f-strings. 'stdp' (print/println) se
+ queda igual; 'stdpf' es su hermano orientado a la salida formateada.
+-/
+
+// primitiva del host: escribe una cadena a la salida estandar.
+internal fn __write__(str s) -> void;
+
+// escribe 'fmt' tal cual (sin newline). Pensado para f-strings ya
+// interpolados: printf(f"...{x}...").
+public fn printf(str fmt) -> void {
+    __write__(fmt);
+}
+
+#export as stdpf

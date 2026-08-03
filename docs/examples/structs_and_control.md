@@ -13,10 +13,10 @@ struct {
     int y;
 } punto;
 
-fn distancia_origen(ptr Punto p) -> int {
+fn distancia_origen(Punto ptr p) -> int {
     // (simplificado: suma de magnitudes)
-    mutable int dx = punto.x;
-    mutable int dy = punto.y;
+    var int dx = punto.x;
+    var int dy = punto.y;
     if (dx < 0) { dx = 0 - dx; }
     if (dy < 0) { dy = 0 - dy; }
     return dx + dy;
@@ -53,7 +53,7 @@ fn describir(Estado s) -> void {
 const IO = #import IO;
 
 fn fizzbuzz(int n) -> void {
-    mutable int i = 1;
+    var int i = 1;
     while (i <= n) {
         if (i / 3 * 3 == i and i / 5 * 5 == i) {
             IO.printf("FizzBuzz\n");
@@ -64,7 +64,7 @@ fn fizzbuzz(int n) -> void {
                 if (i / 5 * 5 == i) {
                     IO.printf("Buzz\n");
                 }; else {
-                    IO.printf("{i}\n");
+                    IO.printf(f"{i}\n");
                 };
             };
         };
@@ -85,7 +85,7 @@ struct {
 
 enum Cuadrante { Origen, Eje, Interior };
 
-fn clasificar(ptr Punto p) -> Cuadrante {
+fn clasificar(Punto ptr p) -> Cuadrante {
     if (p.x == 0 and p.y == 0) {
         return Origen;
     };
@@ -97,7 +97,7 @@ fn clasificar(ptr Punto p) -> Cuadrante {
 
 fn main() -> void {
     region r {
-        ptr Punto p = make Punto in r;
+        Punto ptr mutable p = make Punto in r;
         p.x = 3;
         p.y = 0;
 

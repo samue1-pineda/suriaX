@@ -1,0 +1,11 @@
+/- main.libsrx — archivo PADRE del paquete 'array'.
+
+ El submódulo 'vector.libsrx' se descubre SOLO (no se importa aquí: hacerlo
+ crearía una unidad suelta 'vector' además de la del paquete 'array.vector').
+ El padre solo cierra el paquete con su alias.
+
+   #import array;              ->  array.vector.new(2);
+   #import array.vector as v;  ->  v.new(2);
+-/
+
+#export package as array

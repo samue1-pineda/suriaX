@@ -1,0 +1,92 @@
+/- vector — VECTOR de CAPACIDAD FIJA de enteros, con MÉTODOS (@impl).
+
+ Filosofía libsrX: el vector es una LIBRERÍA sobre las primitivas de 'mem'
+ (__reserve__ + indexación cruda 'buf[i]'), no un tipo mágico del compilador.
+ Sus operaciones son MÉTODOS de nombre llano (bloque '@impl Vector { ... }'),
+ con el receptor explícito 'Vector ptr [mutable] self':
+
+   #import array.vector as vec
+   var vec.Vector v = vec.make(6);   // 6 espacios FIJOS, 0 elementos
+   v.push(10);                        // v.get(0) == 10
+   v.push(20);
+   v.get(1);                          // 20
+   v.len();                           // 2
+   v.pop();                           // 20 (quita el último)
+
+ CAPACIDAD FIJA: 'make(cap)' reserva 'cap' espacios y NO crece; 'push' sobre un
+ vector lleno LANZA. 'v nums[5]' (azúcar de declaración con tamaño) y 'v[i]'
+ (azúcar de indexado por el hook __index__) llegan en un paso posterior; hoy se
+ usa 'vec.make(n)' y 'v.get(i)'.
+
+ [REVISAR] MONOMÓRFICO (int): espera genéricos para 'T'.
+-/
+
+#import mem
+
+struct {
+    int ptr mutable datos;   // bloque contiguo reservado con mem.reserve
+    int len;                 // elementos en uso
+    int cap;                 // capacidad FIJA del bloque
+} Vector;
+
+// constructor: vector vacío con capacidad FIJA 'cap' (usa 1 si te pasan 0).
+// 'new' es palabra reservada (init de región); 'make' es la fábrica de librería.
+fn make(int cap) -> Vector {
+    var int real = cap;
+    if (cap < 1) { real = 1; }
+    return Vector{ datos: mem.reserve(real), len: 0, cap: real };
+}
+
+// métodos del tipo: 'v.push(x)', 'v.pop()', ... (receptor explícito 'self').
+@impl Vector {
+    // agrega 'x' al final. Capacidad FIJA: si está lleno, LANZA (no crece).
+    fn push(Vector ptr mutable self, int x) -> void {
+        if (self.len == self.cap) { throw "push sobre un vector lleno (capacidad fija)"; }
+        self.datos[self.len] = x;
+        self.len = self.len + 1;
+    }
+
+    // quita y devuelve el último; 'throw' si el vector está vacío.
+    fn pop(Vector ptr mutable self) -> int {
+        if (self.len == 0) { throw "pop sobre un vector vacío"; }
+        self.len = self.len - 1;
+        return self.datos[self.len];
+    }
+
+    // elemento en 'i' (mem verifica límites: RT013 si i está fuera de rango).
+    fn get(Vector ptr self, int i) -> int {
+        return self.datos[i];
+    }
+}
+
+// indexado 'v[i]' (lectura): el hook __index__ se dispara con la sintaxis '[]'
+// sobre un Vector. Es un hook del set fijo, va fuera del bloque @impl.
+hook fn __index__(Vector ptr self, int i) -> int {
+    return self.datos[i];
+}
+
+// escritura por indice 'v[i] = x' (dentro del rango ya reservado; mem verifica
+// limites con RT013). Complementa __index__ para un indexado completo.
+hook fn __index_set__(Vector ptr mutable self, int i, int x) -> void {
+    self.datos[i] = x;
+}
+
+@impl Vector {
+
+    // reemplaza el elemento en 'i' por 'x'.
+    fn set(Vector ptr mutable self, int i, int x) -> void {
+        self.datos[i] = x;
+    }
+
+    // cantidad de elementos en uso.
+    fn len(Vector ptr self) -> int {
+        return self.len;
+    }
+
+    // capacidad FIJA (cuántos espacios se reservaron).
+    fn cap(Vector ptr self) -> int {
+        return self.cap;
+    }
+}
+
+#export as vector

@@ -1,0 +1,45 @@
+/- mem — primitivas de MEMORIA de suriaX (base de los vectores).
+
+ Filosofia: un hook NUEVO no deberia costar una implementacion dentro del
+ compilador. Igual que '__write__' (el hook de salida) es solo un PROTOTIPO
+ ligado a una primitiva del host, aqui se publican dos hooks de memoria por
+ el mismo patron 'prototipo + intrinseco', SIN tocar la Semantica:
+
+   __reserve__(int n)            reserva un bloque de n celdas contiguas.
+   __copy__(dst, src, n)         copia n celdas de un bloque a otro.
+
+ El host (runtime/interpreter/intrinsics.py) provee su implementacion bajo el
+ target 'interp'; el backend nativo ligara los mismos nombres a su '#extern'.
+ Sobre estas dos primitivas se construye un vector (reservar, indexar con
+ buf[i], crecer = reservar mayor + __copy__ + liberar el viejo).
+
+ [REVISAR] MONOMORFICO: sin genericos todavia, el elemento es 'int'. Cuando
+ el sistema de tipos tenga genericos, estas firmas se generalizan a 'T'; el
+ intrinseco del interprete ya es agnostico al tipo (celdas genericas), asi
+ que solo cambian las firmas, no la implementacion del host.
+
+   #import mem;                       -> mem.reserve(n), mem.copy(d, s, n)
+   #from mem #import reserve, copy;   -> reserve(n), copy(d, s, n)
+-/
+
+// --- hooks nativos (prototipos ligados a un intrinseco del host) ---------- //
+
+// reserva cruda: n celdas contiguas y escribibles. Devuelve un puntero
+// MUTABLE al primer elemento (escribir por indice exige 'ptr mutable').
+private fn __reserve__(int n) -> int ptr mutable;
+
+// copia n elementos de 'src' a 'dst' (por valor, celda a celda).
+private fn __copy__(int ptr mutable dst, int ptr src, int n) -> void;
+
+// --- API publica (envoltorios finos, invocables entre modulos) ------------ //
+
+public fn reserve(int n) -> int ptr mutable {
+    return __reserve__(n);
+}
+
+public fn copy(int ptr mutable dst, int ptr src, int n) -> void {
+    __copy__(dst, src, n);
+}
+
+// cierre del paquete: el alias 'mem' es el nombre del import.
+#export package as mem

@@ -54,9 +54,6 @@ class Lexer:
         # erroes recuperables acumulados; se reportan al final.
         self.errors: List[CompilerError] = []
 
-    # ------------------------------------------------------------------ #
-    # estado / navegacion (usado por los scanners)
-    # ------------------------------------------------------------------ #
     @property
     def col(self) -> int:
         """Columna 1-based de la posicion actual."""
@@ -117,10 +114,16 @@ class Lexer:
         self.tokens.append(Token(TokenType.EOF, "", None, self.ln, eof_col))
         return self.tokens
 
-    # ------------------------------------------------------------------ #
-    # dispatch
-    # ------------------------------------------------------------------ #
     def _dispatch(self, ch: str) -> Optional[Token]:
+        # f-string: prefijo 'f' pegado a '"' (la interpolacion es OPT-IN;
+        # una cadena plana no interpola, ver scanners/strings.py). El costo
+        # es una comparacion extra SOLO cuando el token empieza por 'f'.
+        if (
+            ch == "f"
+            and self.pos + 1 < self.length
+            and self.source[self.pos + 1] == '"'
+        ):
+            return self._guard(strings.scan_fstring)
         # identificadores / palabras reservadas
         if ch == "_" or ch.isidentifier():
             return self._guard(ident.scan)
@@ -142,15 +145,9 @@ class Lexer:
         return self._guard(operators.scan)
 
     def _guard(self, fn):
-        """Ejecuta un scanner capturando errores lexicos recuperables.
-
-        Ante un ``LexError`` se registra el error y se emite un token
-        ``ERROR`` sintetico para que el flujo continue (recuperacion). El
-        scanner ya avanzo ``pos`` antes de lanzar, evitando bucles infinitos.
-        """
-        start = self.pos
-        start_col = self.col
-        start_ln = self.ln
+        start = self.pos #posicion inicial
+        start_col = self.col #columna inicial
+        start_ln = self.ln #linea inicial
         try:
             return fn(self)
         except lex_error.LexError as exc:
@@ -160,13 +157,10 @@ class Lexer:
             lexeme = self.source[start:self.pos]
             return Token(TokenType.ERROR, lexeme, exc.code, start_ln, start_col)
 
-    # ------------------------------------------------------------------ #
-    # helpers
-    # ------------------------------------------------------------------ #
     def _skip_whitespace(self) -> int:
-        src = self.source
-        n = self.length
-        pos = self.pos
+        src = self.source #codigo fuente
+        n = self.length #largo del codigo 
+        pos = self.pos #posicion 
         while pos < n and src[pos].isspace():
             pos += 1
         return pos

@@ -12,11 +12,8 @@ protobuf           # serializacion del HIR (frontend Python <-> backend C++)
                    # requiere tambien 'protoc' (compilador .proto) por el sistema
 
 # interoperabilidad C++
-pybind11           # bindings Python <-> C++ (incl. '#extern cpp{}')
+pybind11           # bindings Python <-> C++
 
 # config
 pyyaml             # formato de compilacion (.suriaX_config.yaml)
 
-# --- desarrollo / tests (opcional) ---
-# Los tests usan un runner propio (stdlib), sin framework externo.
-# Ver test/tests_to_add.txt para el plan de pruebas.

@@ -28,7 +28,7 @@ fn suma(int a, int b) -> int {
 
 // variables
 const int x = 10;
-mutable int y = 0;
+var int y = 0;
 int z = 3;
 
 // control de flujo
@@ -44,7 +44,7 @@ while (y < x) {
 
 // memoria: region-based + move-semantics
 region scratch {
-    ptr int p = make int in scratch;
+    int ptr p = make int in scratch;
     move p;
 }   // se libera toda la región
 ```
@@ -52,9 +52,12 @@ region scratch {
 ## Secciones
 
 - Declaraciones: funciones, `struct`, `enum`, `type` (pendiente).
+- Visibilidad (prefijo opcional, default público): `public`/`private`/`internal`.
+- Métodos especiales: `hook fn __x__` (set fijo del compilador) / `dunder fn __x__` (libre).
 - Sentencias: `var`, `if`, `while`, `match`, `return`, `break`, `continue`.
 - Expresiones: aritméticas, comparación, lógicas, llamadas, acceso `.`.
-- Memoria: `region`, `make ... in`, `at`, `move`, `ptr`/`&`/`?`.
+- Memoria: `region` (mods `shrd`/`mutable`/`na`), `new`/`delete`/`in region`,
+  `move region a -> region b`, `make ... in`, `at`, `move`, `ptr`/`&`/`?`.
 - Directivas: `#import`, `#export`, `#from`, `#test`, `#extern cpp{}`.
 
 ## Ejemplos

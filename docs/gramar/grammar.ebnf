@@ -24,12 +24,32 @@ program        = { top_level } EOF ;                                (* [LEX] *)
 
 top_level      = directive
                | extern_block
-               | decorator_decl
-               | function_decl
-               | struct_decl
-               | enum_decl
-               | type_decl
-               | statement ;
+               | test_decl
+               | decorator_decl                (* incluye '@trait' -> trait_decl *)
+               | [ visibility ] ( [ specifier ] function_decl
+                                | struct_decl
+                                | enum_decl
+                                | type_decl
+                                | statement ) ;
+
+(* RESERVAS de visibilidad: prefijo opcional de una declaracion top-level.   *)
+(* Sin token = 'public'. 'private' = mismo paquete; 'internal' = mismo        *)
+(* archivo. NO aplica a directivas ni a 'test'. El enforcement es semantico.  *)
+visibility     = "public" | "private" | "internal" ;                (* [LEX] *)
+
+(* Especificador de metodo especial: el compilador YA NO adivina por la forma *)
+(* '__x__'. 'hook' = del set fijo (semantic/hooks.py), validado y despachado. *)
+(* 'dunder' = metodo especial LIBRE del usuario, indexado por (tipo, nombre)  *)
+(* como un hook (habilita los traits). Solo precede a 'fn'; un 'fn __x__' a   *)
+(* secas es una funcion corriente. Un 'dunder fn' toma 'T ptr self' (el tipo  *)
+(* dueño) como primer parametro y se despacha con 'x.__x__()'.                *)
+specifier      = "hook" | "dunder" ;                                 (* [LEX] *)
+
+(* bloque de prueba nombrado (estilo Zig). Es una DECLARACIÓN de primer     *)
+(* nivel, no una función: no se invoca ni tiene firma. El runner del        *)
+(* intérprete lo ejecuta ('--test'); la compilación normal solo lo valida.  *)
+(* 'test' es keyword de declaración — ya NO una "función nativa" invocable. *)
+test_decl      = "test" STRING_LIT block [ ";" ] ;
 
 (* ----------------------------- directivas ------------------------------- *)
 (* El lexer emite DIRECTIVE('nombre'); el alias/objetivo son IDENTIFIER.    *)
@@ -39,9 +59,17 @@ directive      = import_dir | export_dir | from_dir ;               (* [LEX] *)
 (* "as" NO es palabra reservada: el lexer lo emite como IDENTIFIER cuyo      *)
 (* lexema es "as" (keyword contextual). El parser comprueba el lexema. Es    *)
 (* coherente con la filosofía libsrX (pocos tokens reservados).             *)
-import_dir     = "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
-export_dir     = "#export" IDENTIFIER [ ";" ] ;                     (* cierra una .libsrx *)
-from_dir       = "#from" IDENTIFIER "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
+import_dir     = "#import" lib_name [ "as" IDENTIFIER ] [ ";" ] ;
+export_dir     = "#export" ( [ "as" ] IDENTIFIER
+                           | "package" "as" IDENTIFIER ) [ ";" ] ;
+                                       (* cierra una .libsrx; el 'as' de la forma  *)
+                                       (* simple es OPCIONAL ('#export io' y       *)
+                                       (* '#export as io' son equivalentes). La    *)
+                                       (* forma 'package' declara el archivo PADRE *)
+                                       (* de un paquete y ahi 'as' es obligatorio. *)
+                                       (* Corolario: 'as' no puede ser un alias.   *)
+lib_name       = IDENTIFIER { "." IDENTIFIER } ;   (* 'io' | 'io.print' (submodulo) *)
+from_dir       = "#from" lib_name "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
 
 (* interoperabilidad C++: el cuerpo se captura crudo (RAW_BLOCK).           *)
 (* "cpp" aquí = IDENTIFIER('cpp'), tampoco es keyword (ver lexer).          *)
@@ -50,9 +78,37 @@ extern_block   = "#extern" "cpp" RAW_BLOCK ;                        (* [LEX] *)
 
 (* ----------------------------- funciones -------------------------------- *)
 
-decorator_decl = DECORATOR function_decl ;                          (* [LEX] @nombre sobre una fn *)
+(* DECORADORES GENERALIZADOS: el decorador va PRIMERO y es dueño de su       *)
+(* prefijo (visibilidad, especificador). Admite argumentos '@impl(iterable)'  *)
+(* y aplica a fn/struct/enum. '@trait' es especial: produce un 'trait_decl'.  *)
+decorator_decl = DECORATOR [ "(" [ deco_args ] ")" ] [ visibility ]
+                 ( trait_body | [ specifier ] ( function_decl | struct_decl | enum_decl ) ) ;
+deco_args      = ( IDENTIFIER | DUNDER ) { "," ( IDENTIFIER | DUNDER ) } ;
 
-function_decl  = "fn" IDENTIFIER "(" [ param_list ] ")" "->" type block ;  (* [LEX]  "->" = ARROW *)
+(* TRAITS: contratos definidos por el usuario ('@trait'), verificados por el   *)
+(* compilador ('@impl(trait)'). Un trait agrupa firmas de metodo dunder; el    *)
+(* tipo que lo implementa debe proveerlas ('self' -> el tipo). Dos formas:     *)
+(*   struct: '@trait struct { <trait_method>... } Nombre;'                     *)
+(*   suelta: '@trait [dunder] fn __x__(<tipos>) -> T;'  (trait de un metodo)   *)
+(* La conformidad la verifica 'semantic/traits.py' (SEM021); '@impl' es un     *)
+(* decorador general con argumentos sobre un struct.                           *)
+trait_body     = "struct" "{" { trait_method } "}" IDENTIFIER ";"
+               | [ specifier ] "fn" ( IDENTIFIER | DUNDER )
+                 "(" [ trait_params ] ")" [ "->" type ] ";" ;
+trait_method   = [ specifier ] "fn" ( IDENTIFIER | DUNDER )
+                 "(" [ trait_params ] ")" [ "->" type ] ";" ;
+trait_params   = type { "," type } ;   (* TIPOS sin nombre; 'self' = el tipo que hara @impl *)
+
+function_decl  = "fn" ( IDENTIFIER | DUNDER )                       (* [LEX]  "->" = ARROW *)
+                 "(" [ param_list ] ")" [ "->" type ] ( block | ";" ) ;
+                                       (* El 'specifier' opcional ('hook'/'dunder',  *)
+                                       (* secc. top_level) va DELANTE de 'fn' y EXIGE *)
+                                       (* que el nombre sea DUNDER ('__x__'). Un      *)
+                                       (* 'fn __x__' sin specifier es funcion normal  *)
+                                       (* (el compilador ya no adivina). '->'         *)
+                                       (* OPCIONAL: sin el, retorno 'void'. Un ';' en *)
+                                       (* vez del bloque declara un PROTOTIPO (solo   *)
+                                       (* firma; la implementa el backend/'#extern'). *)
 
 param_list     = param { "," param } ;
 param          = type IDENTIFIER ;                                  (* tipo nombre *)
@@ -73,14 +129,27 @@ field          = type IDENTIFIER ";" ;
 enum_decl      = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}" ;  (* [LEX] *)
 enum_item      = IDENTIFIER [ "=" expression ] ;
 
-(* type: token reservado; la sintaxis concreta aún no está definida.        *)
-type_decl      = "type" IDENTIFIER "=" ?pendiente? ";" ;            (* [TBD] *)
+(* type: declara un TIPO NOMINAL OPACO -- con nombre y sin representación   *)
+(* escrita en suriaX (su layout lo aportan el backend o sus hooks). Es la    *)
+(* forma en que una librería publica tipos NO nativos:                       *)
+(*     const type int8;      const type float16;                            *)
+(* y el consumidor los usa como cualquier otro tipo ('const dt.int8 x;').   *)
+(* 'const' liga el nombre a ESE tipo para siempre; sin qualifier (o con      *)
+(* 'var') es redefinible -- mismo modelo que las variables, coherente con    *)
+(* que 'type' sea un tipo de primera clase (ver base_type, secc. 4).        *)
+(* El inicializador opcional es una expresión que PRODUZCA un tipo, p. ej.  *)
+(* una llamada a una 'fn ... -> type':  const type Blk = _block_def(4, c);  *)
+type_decl      = [ qualifier ] "type" IDENTIFIER [ "=" expression ] ";" ;  (* [LEX] *)
 
 
 (* ============================== 2. SENTENCIAS =========================== *)
 
 statement      = var_decl
+               | type_decl                (* 'const type int8;' (secc. 1)  *)
                | region_stmt
+               | new_stmt                  (* 'new(shrd region r);'          *)
+               | delete_stmt               (* 'delete(region r);' / 'delete()' *)
+               | in_region_stmt            (* 'in region r: ...'             *)
                | if_stmt
                | while_stmt
                | match_stmt
@@ -89,27 +158,55 @@ statement      = var_decl
                | continue_stmt
                | move_stmt
                | free_stmt
+               | throw_stmt
+               | try_stmt
                | expr_stmt ;
 
+(* manejo de errores por EXCEPCIONES. 'throw' inicia la propagación de un   *)
+(* valor por la pila de llamadas; el 'try' más cercano la intercepta, liga  *)
+(* el valor al nombre del 'catch' y ejecuta su bloque (el binding vive SOLO *)
+(* en ese bloque). Un throw que escapa de todo catch aborta la ejecución.   *)
+(* El TIPO 'error T' (sección 4) anota que un valor puede ser un error.     *)
+throw_stmt     = "throw" expression ";" ;                           (* [LEX] *)
+try_stmt       = "try" block "catch" "(" IDENTIFIER ")" block [ ";" ] ;
+
 (* declaración de variable: 'tipo nombre = valor;'  El ';' es OBLIGATORIO.  *)
+(* var_decl y type_decl comparten prefijo y se distinguen con UN token: el   *)
+(* 'type' tras el qualifier arranca un type_decl.                           *)
 var_decl       = [ qualifier ] type IDENTIFIER [ "=" expression ] ";" ;   (* [LEX] *)
-qualifier      = "const" | "mutable" ;
+qualifier      = "const" | "var" ;    (* sin qualifier = 'var' (mutable, estilo C); *)
+                                      (* 'mutable' ya NO califica variables: solo   *)
+                                      (* punteros ('T ptr mutable', regla 'type')   *)
 
-(* memoria: region-based + move-semantics                                   *)
-region_stmt    = "region" IDENTIFIER block ;                        (* [LEX] *)
+(* memoria: region-based + move-semantics. Modelo HIBRIDO (bloque + handle). *)
+(* Los 3 modificadores son componibles y de ORDEN LIBRE                       *)
+(* ('shrd mutable na region r' es valido):                                    *)
+(*   shrd    = COMPARTIBLE entre regiones                                     *)
+(*   mutable = puede MUTAR y dividirse (split)                                *)
+(*   na      = "no auto": NO se auto-libera; hay que 'delete'-arla            *)
+(* La ejecucion REAL del modelo RBMM la hace el runtime de forma AGNOSTICA    *)
+(* DEL TARGET (interprete -> C++ via pybind11), no se difiere al MIR.         *)
+region_mods    = { "shrd" | "mutable" | "na" } ;                    (* [LEX] orden libre *)
+region_stmt    = region_mods "region" IDENTIFIER block ;            (* forma con BLOQUE  *)
+new_stmt       = "new" "(" region_mods "region" IDENTIFIER ")" ";" ;(* handle (sin bloque)*)
+delete_stmt    = "delete" "(" [ "region" IDENTIFIER ] ")" ";" ;     (* externa | interna  *)
+in_region_stmt = "in" "region" IDENTIFIER ( ":" statement | block ) ;
 
-(* 'move' es una SENTENCIA, no un operador de expresión: 'move y;'. Antes    *)
-(* también figuraba en 'unary', lo que hacía ambiguo todo statement que      *)
-(* empezara por 'move' (move_stmt vs expr_stmt). Se quitó de 'unary'.        *)
-(* [REVISAR] si en el futuro se quiere 'x = move y;', hágase al revés:       *)
-(* 'move' solo en 'unary' y elimínese move_stmt.                             *)
-move_stmt      = "move" expression ";" ;                            (* [LEX] *)
+(* 'move' es una SENTENCIA, no un operador de expresión: 'move y;'. Con el    *)
+(* prefijo 'region' es move-semantics DE REGIONES ('move region a -> region   *)
+(* b'), que transfiere (no copia) el contenido de a a b. Se distingue con UN  *)
+(* token de lookahead ('region' tras 'move').                                 *)
+move_stmt      = "move" ( "region" IDENTIFIER "->" "region" IDENTIFIER
+                        | expression ) ";" ;                        (* [LEX] *)
 
 if_stmt        = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ] ;  (* [LEX] *)
 while_stmt     = "while" "(" expression ")" block ;                 (* [LEX] *)
 
 match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" ;  (* [LEX] *)
-case_arm       = "case" expression ":" ( statement | block ) ;
+(* el ':' es obligatorio SOLO cuando el cuerpo NO es un bloque: con llaves  *)
+(* se omite ('case X { ... }'), sin ellas se exige ('case X: stmt;'). Es la *)
+(* forma del corpus real (docs/examples/structs_and_control.md).            *)
+case_arm       = "case" expression ( ":" statement | block ) ;
 
 return_stmt    = "return" [ expression ] ";" ;                      (* [LEX] *)
 break_stmt     = "break" ";" ;                                      (* [LEX] *)
@@ -130,30 +227,58 @@ comparison     = term { ( "<" | "<=" | ">" | ">=" ) term } ;
 term           = factor { ( "+" | "-" ) factor } ;
 factor         = unary { ( "*" | "/" ) unary } ;
 
-unary          = ( "not" | "-" | "&" ) unary                       (* 'move' es sentencia, no unario *)
+(* '&' produce un NODO PROPIO (AddrOf), no un UnaryOp genérico: sus reglas  *)
+(* (exige lvalue; la mutabilidad del puntero resultante se hereda del       *)
+(* binding — 'var' -> 'ptr mutable', 'const' -> 'ptr') son semántica de ese  *)
+(* nodo y viajan resueltas en el HIR.                                       *)
+unary          = ( "not" | "-" ) unary                       (* 'move' es sentencia, no unario *)
+               | "&" unary                                   (* addr_of *)
                | placement ;
 
 (* asociación a región: 'expr at region'                                    *)
 placement      = postfix [ "at" IDENTIFIER ] ;
 
-postfix        = primary { ( "." IDENTIFIER
-                           | "(" [ arg_list ] ")"
-                           | "[" expression "]" ) } ;
+postfix        = ( primary | struct_literal )
+                 { ( "." IDENTIFIER
+                   | "(" [ arg_list ] ")"
+                   | "[" expression "]" ) } ;
+
+(* instanciación de un struct nominal: ÚNICA forma nativa de construir un   *)
+(* valor de struct (sin RBMM ni 'alloc'). Se reconoce cuando un NOMBRE va   *)
+(* seguido de '{' — sin ambigüedad con los bloques, porque las condiciones  *)
+(* van entre paréntesis y un bloque es una sentencia, nunca sigue a un      *)
+(* nombre en posición de expresión. Coma final tolerada.                    *)
+(* El nombre puede ir CUALIFICADO por su módulo ('point.Point{ x: 1 }'):    *)
+(* un struct publicado por una librería se escribe igual en un literal que  *)
+(* en una anotación de tipo. La Semántica lo canonicaliza al nombre con     *)
+(* que la librería lo declaró.                                             *)
+struct_literal = IDENTIFIER { "." IDENTIFIER } "{" [ field_init { "," field_init } [ "," ] ] "}" ;
+field_init     = IDENTIFIER ":" expression ;
 
 arg_list       = expression { "," expression } ;
 
 primary        = literal
                | IDENTIFIER
-               | alloc_expr
+               | cast_expr
                | "sizeof" "(" type ")"
                | "(" expression ")" ;
 
-(* construcción de valores en memoria: 'make'/'alloc' SÍ producen un valor   *)
-(* (p. ej. 'ptr int y = make int in scratch;').                              *)
-alloc_expr     = "make" type "in" IDENTIFIER                        (* make T in region *)
-               | "alloc" type ;
+(* [RETIRADA] 'make T in r' construía un valor en una región (RBMM). RBMM no *)
+(* forma parte del lenguaje v1: 'region' se rechaza al emitir el HIR (HIR005) *)
+(* y 'make' ha dejado de ser palabra clave — reservarla solo impedía usarla   *)
+(* como nombre corriente ('fn make(int n) -> vec', la fábrica natural de una  *)
+(* librería). 'alloc' tampoco es keyword: la reserva cruda la aporta una      *)
+(* librería. Reponer RBMM = devolver 'make' a KEYWORDS y su handler a         *)
+(* parser/expressions/nud.PRIMARY_HANDLERS.                                   *)
+(* make_expr   = "make" type "in" IDENTIFIER ;                     (* make T in region *) *)
+
+(* conversión EXPLÍCITA de tipo: la ÚNICA vía (sin coerciones implícitas).   *)
+(* 'type_args' es la posición COMPARTIDA de argumentos de tipo: hoy la usa   *)
+(* solo 'cast'; los genéricos de librería ('vec<int>') la reutilizarán.      *)
+cast_expr      = "cast" type_args "(" expression ")" ;              (* cast<int8>(x) *)
+type_args      = "<" type { "," type } ">" ;
 (* [REVISAR] 'free' NO produce un valor útil; como expresión compondría en   *)
-(* aritmética ('free x + 1'). Se saca de alloc_expr y se modela como         *)
+(* aritmética ('free x + 1'). Se saca de make_expr y se modela como          *)
 (* sentencia propia (free_stmt) para que solo aparezca como 'free x;'.       *)
 free_stmt      = "free" expression ";" ;                           (* [LEX] *)
 
@@ -168,10 +293,37 @@ literal        = INT_LIT | FLOAT_LIT | STRING_LIT | CHAR_LIT
 type           = base_type { type_suffix } ;                        (* [LEX] *)
 
 base_type      = "int" | "float" | "bool" | "char" | "str" | "void"
-               | "ptr" type            (* puntero: 'ptr int'           *)
-               | IDENTIFIER ;          (* tipo nominal definido por usuario *)
+               | "type"                (* METATIPO: el tipo de un tipo.            *)
+                                       (* 'fn f(int len) -> type' devuelve un TIPO  *)
+                                       (* como valor (ver type_decl, secc. 1).      *)
+               | error_type            (* unión valor-o-error (ver abajo)          *)
+               | "self"                (* placeholder: el tipo que hara @impl.     *)
+                                       (* NO es keyword (sigue usable como nombre); *)
+                                       (* solo valido en un prototipo de trait.     *)
+               | qualified_name ;      (* tipo nominal definido por usuario *)
 
-type_suffix    = "?" ;                  (* nullable: 'int?'             *)
+(* 'error T' = "un T, o un error"; 'error' sola = solo error. En el modelo   *)
+(* de EXCEPCIONES el tipo es transparente en la ruta de éxito (un 'error T'  *)
+(* se usa como T; el fallo viaja por throw/catch, no por el valor).          *)
+(* El inner es GREEDY: hay inner si el token siguiente arranca un tipo, así  *)
+(* 'error int n' = error<int> + nombre 'n', y 'fn f() -> error;' = error     *)
+(* sola. Corolario: un binding de tipo 'error' puro seguido de nombre        *)
+(* ('error n;') no es escribible — caso marginal, use 'error void n;'.       *)
+error_type     = "error" [ type ] ;
+
+(* nombre CUALIFICADO: un tipo publicado por una librería importada.        *)
+(*     #from d_types #import dt_variables as dt;                            *)
+(*     const dt.int8 abc;              -- 'int8' lo declara la librería      *)
+(* Así los tipos no nativos (int8/float16/...) se usan igual que un struct.  *)
+qualified_name = IDENTIFIER { "." IDENTIFIER } ;
+
+type_suffix    = "?"                    (* nullable: 'int?'                          *)
+               | "ptr" [ "mutable" ] ;  (* puntero POSTFIJO: 'char ptr' = 'char *'  *)
+                                       (* de C. 'T ptr' solo lectura a traves de el;*)
+                                       (* 'T ptr mutable' permite escribir. Los      *)
+                                       (* sufijos se aplican izq->der, asi que el    *)
+                                       (* orden desambigua: 'char ptr?' (ptr         *)
+                                       (* nullable) vs 'char? ptr' (ptr a nullable). *)
 
 
 (* ========================= 5. REGLAS LÉXICAS =========================== *)
@@ -185,11 +337,16 @@ INT_LIT        = digit { digit } ;                                 (* [LEX] *)
 FLOAT_LIT      = digit { digit } "." digit { digit } ;             (* [LEX] *)
 digit          = "0" … "9" ;
 
-(* string con interpolación: "...{expr}..."  ; '{{' y '}}' = llave literal. *)
-(* OJO: el lexer NO parsea 'expression' dentro de '{ }'; captura el texto    *)
-(* crudo de la interpolación (Interp) y su análisis queda para el parser.    *)
-STRING_LIT     = '"' { str_char | interp | escape } '"' ;          (* [LEX] *)
+(* cadena PLANA: sin interpolación; '{' y '}' son caracteres literales.      *)
+(* f-string: prefijo 'f' pegado a '"'. SOLO ella interpola: "...{expr}...",  *)
+(* con '{{' y '}}' como llave literal. OJO: el lexer NO parsea 'expression'  *)
+(* dentro de '{ }'; captura el texto crudo (Interp) y su análisis queda      *)
+(* para el parser. Ambas formas producen el mismo token STRING_LIT.          *)
+STRING_LIT     = plain_string | f_string ;                         (* [LEX] *)
+plain_string   = '"' { plain_char | escape } '"' ;
+f_string       = "f" '"' { str_char | interp | escape } '"' ;
 interp         = "{" ?texto crudo de la expresión? "}" ;
+plain_char     = ?cualquier code point excepto '"', '\' y salto de línea? ;
 str_char       = ?cualquier code point excepto '"', '\', '{', '}' y salto de línea? ;
 
 CHAR_LIT       = "'" ( char_char | escape ) "'" ;                  (* [LEX] un solo code point *)

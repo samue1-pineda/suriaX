@@ -24,7 +24,8 @@ except ImportError:  # pragma: no cover - ejecucion directa
     import lex_error  # type: ignore
 
 
-# BOM UTF-8 opcional al inicio del archivo.
+# BOM UTF-8 opcional al inicio del archivo
+# EF BB BF
 _BOM = "﻿"
 
 

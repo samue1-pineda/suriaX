@@ -11,7 +11,7 @@ class TokenType(Enum):
     CHAR_LIT = 2       # 'x'   (literal de caracter)
     INT_LIT = 3        # 10    (literal entero)
     FLOAT_LIT = 4      # 3.14  (literal flotante)
-    STRING_LIT = 5     # "..." (literal de cadena; puede llevar interpolacion)
+    STRING_LIT = 5     # "..." plana o f"..." interpolada (mismo token; ver StringValue)
     TRUE = 6
     FALSE = 7
     NULL = 8
@@ -27,12 +27,23 @@ class TokenType(Enum):
 
     # --- declaracion / bindings ---
     CONST = 15
-    MUTABLE = 16       # 'mutable'
+    MUTABLE = 16       # 'mutable': califica PUNTEROS ('ptr mutable T') y REGIONES ('mutable region r')
+    VAR = 24           # 'var': binding mutable ('var int x = 10;')
     FUNCTION = 17      # 'fn'
     STRUCT = 18
     ENUM = 19
     SIZEOF = 20
-    DUNDER = 21        # __foo__
+    DUNDER = 21        # __foo__  (FORMA de un nombre; NO implica hook, ver HOOK/DUNDER_KW)
+
+    # --- visibilidad (reservas): prefijo opcional de una declaracion top-level ---
+    # sin token = publico (default). 'private' = mismo paquete; 'internal' = mismo archivo.
+    PUBLIC = 34
+    PRIVATE = 35
+    INTERNAL = 36
+
+    # --- especificador de metodo especial (antes se ADIVINABA por la forma __x__) ---
+    HOOK = 37          # 'hook': metodo del set fijo del compilador (free/make/sizeof/print/len/cast)
+    DUNDER_KW = 38     # 'dunder': metodo especial LIBRE del usuario ('dunder fn __xxx__()')
 
     # --- control de flujo ---
     IF = 25
@@ -47,15 +58,27 @@ class TokenType(Enum):
 
     # --- memoria: region-based + move-semantics ---
     REGION = 40        # 'region', declara una region de memoria
-    IN = 41            # 'in', asocia un valor a una region (make T in r)
+    SHRD = 44          # 'shrd', modifica una region: compartible ('shrd region r {}')
+    NA = 45            # 'na', modifica una region: NO auto-liberada ('na region r {}', usa delete())
+    IN = 41            # 'in', operacion imperativa sobre una region ('in region r: delete(x)')
     AT = 42            # 'at', ubica/asocia un valor en una region (x at r)
-    MOVE = 43          # 'move', transferencia de propiedad (move-semantics)
+    MOVE = 43          # 'move', transferencia de propiedad (move-semantics) / de region ('move region a -> region b')
     FREE = 46          # keyword del lenguaje
-    ALLOC = 47         # keyword del lenguaje
+    NEW = 57           # 'new', inicializa una region ('new(shrd region r);')
+    DELETE = 58        # 'delete', libera una region ('delete(region r)' o 'delete()' dentro de ella)
+    # 47 retirado: 'alloc' dejo de ser keyword (la reserva cruda ahora la
+    # aporta una libreria; no reutilizar el valor).
     MAKE = 48          # keyword del lenguaje
     POINTER = 49       # 'ptr'
     ADDRESS = 50       # '&'
     NULLABLE = 51      # '?'
+    CAST = 52          # 'cast': conversion explicita 'cast<T>(expr)'
+
+    # --- manejo de errores (excepciones) ---
+    ERRORTYPE = 53     # 'error': tipo union 'error T' / 'error' (NO el synthetic ERROR=98)
+    TRY = 54           # 'try', abre un bloque protegido
+    CATCH = 55         # 'catch', captura el error propagado
+    THROW = 56         # 'throw', inicia la propagacion
 
     # --- operadores aritmeticos ---
     ASSIGN = 60        # =
@@ -122,11 +145,24 @@ KEYWORDS: dict[str, TokenType] = {
     "type": TokenType.TYPE,
     # declaracion
     "const": TokenType.CONST,
-    "mutable": TokenType.MUTABLE,
+    "var": TokenType.VAR,
+    "mutable": TokenType.MUTABLE,  # tipos puntero ('ptr mutable T') y regiones ('mutable region r')
     "fn": TokenType.FUNCTION,
     "struct": TokenType.STRUCT,
     "enum": TokenType.ENUM,
     "sizeof": TokenType.SIZEOF,
+    # visibilidad (reservas): sin token = publico
+    "public": TokenType.PUBLIC,
+    "private": TokenType.PRIVATE,
+    "internal": TokenType.INTERNAL,
+    # especificador de metodo especial (ya no se adivina por la forma __x__)
+    "hook": TokenType.HOOK,
+    "dunder": TokenType.DUNDER_KW,
+    # manejo de errores (excepciones)
+    "error": TokenType.ERRORTYPE,
+    "try": TokenType.TRY,
+    "catch": TokenType.CATCH,
+    "throw": TokenType.THROW,
     # control de flujo
     "if": TokenType.IF,
     "else": TokenType.ELSE,
@@ -139,13 +175,23 @@ KEYWORDS: dict[str, TokenType] = {
     "test": TokenType.TEST,
     # memoria: region-based + move-semantics
     "region": TokenType.REGION,
+    "shrd": TokenType.SHRD,
+    "na": TokenType.NA,
     "in": TokenType.IN,
     "at": TokenType.AT,
     "move": TokenType.MOVE,
     "free": TokenType.FREE,
-    "alloc": TokenType.ALLOC,
-    "make": TokenType.MAKE,
+    "new": TokenType.NEW,
+    "delete": TokenType.DELETE,
+    # 'make' NO es palabra clave: 'make T in r' es RBMM, que no forma parte
+    # del lenguaje v1 (hir.proto la tiene 'reserved' y el emisor rechaza
+    # 'region' con HIR005). Reservarla solo impedia usar 'make' como nombre
+    # corriente — justo el nombre natural de una fabrica de libreria
+    # ('fn make(int n) -> vec'). TokenType.MAKE y ast.MakeExpr se conservan:
+    # devolver RBMM al lenguaje es reponer esta entrada y su handler en
+    # 'expressions/nud.PRIMARY_HANDLERS'.
     "ptr": TokenType.POINTER,
+    "cast": TokenType.CAST,
     # operadores logicos (son palabras, no simbolos)
     "and": TokenType.AND,
     "or": TokenType.OR,
@@ -161,7 +207,10 @@ DIRECTIVES: frozenset[str] = frozenset(
 
 @dataclass(slots=True, frozen=True)
 class Interp:
-    """Referencia interpolada dentro de un string: el ``a`` de ``"hola{a}"``.
+    """Referencia interpolada dentro de una f-string: el ``a`` de ``f"hola{a}"``.
+
+    Solo una f-string (prefijo ``f``) produce segmentos ``Interp``; una
+    cadena plana ``"..."`` nunca interpola (``{``/``}`` son literales).
 
     Por ahora solo guarda el texto crudo de la expresion (``expr``). El parser
     es quien la analizara como una expresion real; el lexer solo la delimita.

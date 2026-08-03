@@ -2,6 +2,29 @@ from __future__ import annotations
 from typing import Optional, Any
 
 
+class Severity:
+    """Niveles de severidad de un diagnostico (creciente en gravedad).
+
+    Una sola escala compartida por compilacion y runtime, para que las
+    herramientas (extension/LSP, CI) decidan color y comportamiento sin
+    interpretar el codigo:
+
+      NOTE     informativo; no rompe nada ('los de siempre', p. ej. NOTA001).
+      WARNING  puede romper algo pero la compilacion continua.
+      CRITICAL detiene la compilacion directamente (la mayoria de LEX/PAR/
+               AST/SEM/HIR).
+      PANIC    como CRITICAL pero mayor gravedad: violaciones de MEMORIA
+               (use-after-free/move, doble free/move) y fallos internos.
+    """
+    NOTE = "note"
+    WARNING = "warning"
+    CRITICAL = "critical"
+    PANIC = "panic"
+
+    #: orden para comparar/ordenar por gravedad.
+    ORDER = {"note": 0, "warning": 1, "critical": 2, "panic": 3}
+
+
 class SourceLocation:
     """Representa la ubicación de un problema en el código fuente.
 
@@ -74,6 +97,10 @@ class CompilerError(Exception):
     - exponerse a logs, tests o JSON.
     """
 
+    #: severidad por defecto de un error de compilacion (ver :class:`Severity`).
+    #: Las subclases de memoria la suben a ``PANIC``.
+    severity: str = Severity.CRITICAL
+
     def __init__(
         self,
         message: Any,
@@ -135,6 +162,7 @@ class CompilerError(Exception):
             "column": self.column,
             "file": self.file,
             "phase": self.phase,
+            "severity": self.severity,
             "location": self.loc.strformat() if self.loc else None,
         }
 

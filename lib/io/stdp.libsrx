@@ -1,0 +1,36 @@
+
+// primitiva del host: escribe una cadena a la salida estandar.
+internal fn __write__(str s) -> void;
+
+// cadena con su longitud 
+internal struct {
+    str text;
+    int len;
+} String;
+
+// hook de impresion del tipo String: 'print(x)' con x:String despacha aqui.
+// primer parametro 'String ptr s' (puntero POSTFIJO a String), la forma que
+// exige todo hook que opera sobre una instancia (ver semantic/hooks.py).
+private hook fn __print__(String ptr s) -> void {
+    __write__(s.text);
+}
+
+// longitud del String, sin recorrerlo: 'len(x)' despacha aqui.
+private hook fn __len__(String ptr s) -> int {
+    return s.len;
+}
+
+// API publica: imprime una cadena plana tal cual (sin interpolar; la
+// interpolacion es opt-in del lexer, solo f"...").
+public fn print(str s) -> void {
+    __write__(s);
+}
+
+public fn println(str s) -> void {
+    __write__(s);
+    __write__("\n");
+
+}
+
+// cierre obligatorio: publica el submodulo con su alias.
+#export as stdp

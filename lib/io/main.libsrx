@@ -1,0 +1,12 @@
+/- main.libsrx — archivo PADRE del paquete IO.
+
+ En un paquete, cada otro .libsrx de la carpeta (aqui 'stdp.libsrx') es un
+ submodulo que se descubre solo: NO hace falta importarlo aqui — hacerlo
+ crearia una unidad suelta 'stdp' ADEMAS de la del paquete ('IO.stdp'). El
+ padre solo declara lo que sea la raiz del paquete (nada, en este caso) y lo
+ cierra con '#export package as <alias>'. El alias es el nombre del import:
+   #import IO;        ->   IO.stdp.print("...");
+   #import IO.stdp;   ->   stdp.print("...");
+-/
+
+#export package as IO

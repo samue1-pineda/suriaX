@@ -14,12 +14,20 @@ env/
 *.o                      
 *.exe
 *.wasm
-out/                     
+out/     
+dumps/                
 test.srcx
 
 documentation/
 # documentation es una carpeta externa que contiene la documentacion WEB del proyecto
 
 .vscode/
+
+test/**/__pycache__/
 test/
-#temportalmente la carpeta test se ignora ya que aun no esta completa la implementacion
+
+build/
+#suriaX generated
+log/
+V0/src/HIR/gen/
+# stubs protobuf del HIR: se generan en build con protoc (ver V0/src/HIR/stubs.py)

@@ -1,0 +1,21 @@
+public fn add(float a, float b) -> float { return a + b; }
+public fn sub(float a, float b) -> float { return a - b; }
+public fn mul(float a, float b) -> float { return a * b; }
+public fn div(float a, float b) -> float { return a / b; }
+
+public fn min(float a, float b) -> float {
+    if (a < b) { return a; }
+    return b;
+}
+
+public fn max(float a, float b) -> float {
+    if (a > b) { return a; }
+    return b;
+}
+
+public fn abs(float x) -> float {
+    if (x < 0.0) { return 0.0 - x; }
+    return x;
+}
+
+#export as basic

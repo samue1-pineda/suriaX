@@ -25,17 +25,18 @@ Puntos clave:
 
 ## Variante con interpolación
 
-Los strings admiten interpolación con `{expr}` (y `{{` / `}}` para llave
-literal), importante destacar que print y printf no son lo mismo, incluso si vienen de la misma libreria, un ejemplo: 
+La interpolación es **opt-in**: solo una **f-string** (`f"..."`) interpola
+`{expr}` (con `{{` / `}}` para llave literal); una cadena plana `"..."`
+nunca interpola — `{veces}` ahí es texto literal. Por eso `print` y `printf`
+no son lo mismo, incluso si vienen de la misma librería:
 
 ```srcx
 const IO = #import IO;
 
 int veces = 3;
-IO.printf("Hola mundo x{veces}");
+IO.printf(f"Hola mundo x{veces}");   // f-string: interpola -> "Hola mundo x3"
 
-IO.print("Hola mundo x{veces}");//errorxxx: print no soporta "{veces}"
-
+IO.print("Hola mundo x{veces}");     // cadena plana: imprime "{veces}" tal cual
 ```
 
 ## Probar la tokenización

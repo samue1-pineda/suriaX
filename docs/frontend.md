@@ -28,7 +28,8 @@ observe el pipeline global en [ARCHITECTURE.md](../ARCHITECTURE.md).
   carácter inicial: identificadores/keywords, números, strings/chars,
   operadores, directivas/comentarios.
 - **Comentarios** `//` y `/- -/` saltados en el mismo paso.
-- **Interpolación de strings** (`"hola{a}"`) y **bloque crudo** `#extern cpp{}`.
+- **Interpolación de strings** solo con prefijo explícito (`f"hola{a}"`;
+  una cadena plana `"..."` nunca interpola) y **bloque crudo** `#extern cpp{}`.
 - **Recuperación de errores**: emite token `ERROR` y continúa.
 
 Salida: `list[Token]` terminada en `EOF`. Detalle de tokens en

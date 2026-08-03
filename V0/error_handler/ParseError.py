@@ -11,8 +11,8 @@ except ImportError:  # pragma: no cover - compatibility for direct execution
 class ParseError(CompilerError):
     """Base para los errores del parser.
 
-    Se producen cuando el flujo de tokens no encaja con la gramática del
-    lenguaje o cuando una construcción sintáctica no puede cerrarse.
+    Se usa cuando el flujo de tokens no encaja con la gramática del lenguaje o
+    cuando una construcción sintáctica no puede cerrarse correctamente.
     """
 
     def __init__(
@@ -201,7 +201,7 @@ class InvalidMemoryQualifierError(ParseError):
 
     Cubre los tokens del modelo *region-based + move-semantics*: ``MOVE``,
     ``IN`` / ``AT`` (asociación a región), ``POINTER`` (``ptr``), ``ADDRESS``
-    (``&``) o ``MAKE`` / ``ALLOC`` / ``FREE`` cuando aparecen donde la gramática
+    (``&``) o ``MAKE`` / ``FREE`` cuando aparecen donde la gramática
     no los admite. La validación semántica (propiedad, lifetimes de la región,
     move) NO ocurre aquí, sino en la fase de semántica / lowering a MIR.
     """
@@ -247,6 +247,31 @@ class InvalidExternBlockError(ParseError):
         super().__init__(message, code="PAR024", **kwargs)
 
 
+class ExpressionTooDeepError(ParseError):
+    """La construcción anidada excede la profundidad de recursión soportada.
+
+    El parser usa llamadas recursivas para leer paréntesis, prefijos unarios y
+    otras estructuras anidadas. Cuando el anidamiento es extremo, se convierte
+    el fallo en un diagnóstico controlado en vez de dejar un traceback.
+    """
+
+    def __init__(self, message: Any = "expresión demasiado anidada", **kwargs: Any):
+        super().__init__(message, code="PAR025", **kwargs)
+
+
+class InvalidLibraryNameError(ParseError):
+    """Un componente de ``lib_name`` (``#import a.b``) no puede nombrar un módulo.
+
+    Caso típico: el alias de un ``#export`` coincide con una palabra
+    reservada (``#import io.str``). El ``expect(IDENTIFIER)`` genérico
+    reportaría el TOKEN encontrado (``STR``), que no dice nada al usuario;
+    esto nombra la causa y la salida.
+    """
+
+    def __init__(self, message: Any = "nombre de módulo inválido", **kwargs: Any):
+        super().__init__(message, code="PAR026", **kwargs)
+
+
 # Alias de compatibilidad.
 syntaxError = SyntaxError
 unexpectedToken = UnexpectedTokenError
@@ -272,6 +297,8 @@ invalidMemoryQualifier = InvalidMemoryQualifierError
 invalidRegionDeclaration = InvalidRegionDeclarationError
 missingTypeAnnotation = MissingTypeAnnotationError
 invalidExternBlock = InvalidExternBlockError
+expressionTooDeep = ExpressionTooDeepError
+invalidLibraryName = InvalidLibraryNameError
 
 __all__ = [
     "ParseError",
@@ -299,6 +326,8 @@ __all__ = [
     "InvalidRegionDeclarationError",
     "MissingTypeAnnotationError",
     "InvalidExternBlockError",
+    "ExpressionTooDeepError",
+    "InvalidLibraryNameError",
     "syntaxError",
     "unexpectedToken",
     "expectedToken",
@@ -323,4 +352,6 @@ __all__ = [
     "invalidRegionDeclaration",
     "missingTypeAnnotation",
     "invalidExternBlock",
+    "expressionTooDeep",
+    "invalidLibraryName",
 ]

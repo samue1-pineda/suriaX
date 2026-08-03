@@ -5,16 +5,20 @@
   <img src="./assets/suri_banner_.png" alt="Banner" />
   </picture>
   
-  [Español] | [website] | [getting started] | [learn] | [Documentation] 
+  [Español] | [website] | [getting started] | [current_errors] | [Documentation] 
   
 </div>
 
 
-[website]:
+[website]:TODO
+
 [Español]:README_ES.md
+
 [getting started]:how_to_run.md
-[learn]:
-[Documentation]: 
+
+[current_errors]:c_errorstfix.md
+
+[Documentation]:./docs/ 
 <br>
 
 suriaX is a programming language whit the following goals:
@@ -28,21 +32,21 @@ suriaX is a programming language whit the following goals:
 
 ## project status
 
-**FROZEN** for a month or less, keep an eye for new updates in the next update :)
+**FROZEN**, working on [iriscX](https://github.com/samue1-pineda/iriscx) and [myrscX](https://github.com/samue1-pineda/MyrscX) nexts versions **aren't implementations but changes to the documentation**.
 
-the project is currently on **V.0.0.1 (Pre-Alpha)**, actively working on the frontend & the design of HIR and MIR
+the project is currently on **V.0.1.0 (Pre-Alpha Preview)**,
 
 [**x**] language syntax & EBNF grammar
 
-[**/**] frontend(lexer,parser and AST generation) -**In progress**
+[**x**] frontend(lexer,parser and AST generation) -**In progress**
 
-[ ] Intermediate Representations(HIR, MIR & lowering)
+[**/**] Intermediate Representations(HIR, MIR & lowering)
 
 [ ] LLVM Back-end Integration
 
 [ ] suriniX build system, web documentation & playground -**planned**
 
-*For the list of tasks, see [ROADMAP.md](ROADMAP.md).*
+*For the  full list of tasks, see [ROADMAP.md](ROADMAP.md).*
 
 ## architecture & internal pipeline
 

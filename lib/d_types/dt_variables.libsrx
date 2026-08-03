@@ -1,0 +1,35 @@
+/- dt_variables — tipos numericos de ANCHO FIJO (no primitivos del lenguaje).
+
+ Cada tipo publica su tamano con el hook __sizeof__ (despacho por tipo), asi
+ 'sizeof(int32)' devuelve 4 bajo 'target: interp'. Es la via para que un tipo
+ NO primitivo tenga tamano SIN cablearlo en el compilador: __sizeof__ ya es
+ vocabulario de hook, aqui solo se declara un cuerpo por tipo.
+
+ Tabla (bytes):  int8=1  int16=2  int32=4  float16=2  float32=4  float64=8
+
+ NOTA: el 'int' PRIMITIVO del lenguaje NO puede llevar __sizeof__ (SEM006
+ exige un tipo NOMINAL: 'T ptr' con T nominal). Su layout es cosa del
+ backend/MIR. 'int32' es el equivalente de ancho fijo al 'int tradicional'
+ (4 bytes / 32 bits). En el interprete el valor sigue siendo un entero de
+ Python: __sizeof__ modela el TAMANO, no trunca el valor (el ancho real de la
+ aritmetica lo aplica el MIR).
+-/
+
+const type int8;
+const type int16;
+const type int32;
+
+const type float16;
+const type float32;
+const type float64;
+
+// tamano de cada tipo (un cuerpo de __sizeof__ por tipo dueno; overload por
+// tipo, igual que __cast__). 'sizeof(int8)' despacha al que tiene owner int8.
+hook fn __sizeof__(int8 ptr _)    -> int { return 1; }
+hook fn __sizeof__(int16 ptr _)   -> int { return 2; }
+hook fn __sizeof__(int32 ptr _)   -> int { return 4; }
+hook fn __sizeof__(float16 ptr _) -> int { return 2; }
+hook fn __sizeof__(float32 ptr _) -> int { return 4; }
+hook fn __sizeof__(float64 ptr _) -> int { return 8; }
+
+#export as dt_variables

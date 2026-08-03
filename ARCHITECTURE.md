@@ -42,12 +42,12 @@ cada etapa) hace que estas fronteras sean explícitas.
 | Fase | Entrada → Salida | Responsabilidad |
 |------|------------------|-----------------|
 | **source_reader** | bytes → `str` Unicode | Decodifica UTF-8 (una vez), normaliza saltos de línea. No tokeniza. |
-| **Lexer** | `str` → `list[Token]` | Tokeniza en una pasada; salta comentarios; reconoce interpolación de strings y el bloque crudo `#extern cpp{}`. Termina en `EOF`. |
+| **Lexer** | `str` → `list[Token]` | Tokeniza en una pasada; salta comentarios; reconoce f-strings (`f"..."`, única forma con interpolación) y el bloque crudo `#extern cpp{}`. Termina en `EOF`. |
 | **Parser** | `list[Token]` → AST | Descenso recursivo + Pratt |
 | **AST** | tokens → árbol | Representación sintáctica del programa. |
 | **AST-tipado** | AST → AST con tipos | Anotación de tipos (sistema **estático fuerte y nominal**). |
 | **Semántica** | AST-tipado → AST validado | Resolución de símbolos, scopes, reglas del modelo de memoria (regiones, move). |
-| **HIR (protobuf)** | AST validado → HIR | Representación intermedia **serializada en protobuf**, este es el puente Python → C++. |
+| **HIR (protobuf)** | AST validado → HIR | Representación intermedia **serializada en protobuf**, puente Python → C++/intérprete. **v1 sin RBMM/move** (rechazo fail-fast `HIR005`, tags `reserved`); las reglas de punteros viajan (`Type.mut`, nodo `AddrOf` con mutabilidad resuelta). Ver `docs/hir.md`. |
 
 El **sistema de tipos** no es una fase única: opera transversalmente sobre AST,
 AST-tipado y semántica, y enriquece una tabla de símbolos persistente que viaja
@@ -61,6 +61,11 @@ serializada dentro del HIR.
 | **Backend (LLVM IR)** | MIR → LLVM IR | Genera **LLVM IR** (LLVM-22) y, a partir de él, el objeto del target. |
 | **Targets** | LLVM IR → artefacto | de acuerdo a la `compilerconfig` obtenida: `IS_WEB`→**wASM**, `IS_WIN32`→**.exe**, `IS_LINUX`→**.o**. |
 | **Linker** | objeto(s) → ejecutable | Etapa **final dentro del backend C++**: enlaza el/los objeto(s) y produce el ejecutable. `compilerconfig` aporta rutas/flags. |
+
+> Nota de lenguaje: `alloc` fue **eliminado** (keyword, expresión y nodo).
+> La reserva "cruda" de memoria la aporta una librería (p. ej. una
+> `fn alloc(...)` de un `.libsrx`); la vía nativa recomendada sigue siendo
+> `make T in r` sobre regiones.
 
 ## El puente: HIR en protobuf
 
