@@ -42,7 +42,7 @@ jobs:
 
       - name: Run basic tests
         run: |
-          python test/main.py unit
+          python test/main.py 
 
       - name: Package preview release
         if: startsWith(github.ref, 'refs/tags/v')
