@@ -14,11 +14,11 @@
 
 [Español]:README_ES.md
 
-[getting started]:how_to_run.md
+[getting started]:https://samue1-pineda.github.io/suriaX/usage.html#tu-primer-programa
 
 [current_errors]:c_errorstfix.md
 
-[Documentation]:./docs/ 
+[Documentation]:https://samue1-pineda.github.io/suriaX/
 <br>
 
 suriaX is a programming language whit the following goals:
@@ -30,9 +30,11 @@ suriaX is a programming language whit the following goals:
 
 ## project status
 
-**ACTIVE**, working on things that already works and looking for alternatives to fix errors that already exists
+**ACTIVE**, working on things that already work and looking for alternatives to fix errors that already exists
 
-the project is currently on **V.0.1.1 (Pre-Alpha Preview)**,
+**First version of the web documentation built**!
+
+the project is currently on **V.0.1.2 (Pre-Alpha Preview)**,
 
 [**x**] language syntax & EBNF grammar
 
