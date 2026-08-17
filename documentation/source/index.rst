@@ -64,13 +64,7 @@ El pipeline, de principio a fin:
    repo/ROADMAP
    repo/CONTRIBUTING
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Referencia técnica
-
-   repo/protobuf_bridge
-   repo/interpreter_internals
-   repo/web_backend
+.. include:: _appendices.rst
 
 Índices
 -------

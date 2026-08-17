@@ -49,7 +49,7 @@ extensions = [
 ]
 
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "_appendices.rst"]
 language = "es"
 
 # Los dos formatos conviven: las páginas nuevas en Markdown, las antiguas en
@@ -186,7 +186,7 @@ def _rewrite_link(origin_rel: str, target: str) -> str | None:
     resolved = _normalize((Path(origin_rel).parent / target).as_posix())
 
     published = _DOC_BY_SOURCE.get(resolved)
-    if published is not None:
+    if published is not None and (_REPO_ROOT / resolved).exists():
         return Path(published).name + anchor
 
     destination = _REPO_ROOT / resolved
@@ -222,6 +222,40 @@ def _normalize(path: str) -> str:
     return "/".join(parts)
 
 
+#: Apéndices técnicos: se publican si su archivo está en el repositorio. El
+#: playground y el backend web viven fuera del control de versiones mientras
+#: cambian de forma, así que su documentación aparece o no según el checkout.
+APPENDICES: tuple[tuple[str, str], ...] = (
+    ("repo/protobuf_bridge", "El puente protobuf en detalle"),
+    ("repo/interpreter_internals", "Interioridades del intérprete"),
+    ("repo/web_backend", "Backend web: guía del paquete"),
+)
+
+
+def _write_appendix_toc(publicados: set[str]) -> None:
+    """Escribe el ``toctree`` de apéndices con los que EXISTEN.
+
+    Un ``toctree`` es estático y falla si nombra un documento ausente. Como la
+    lista depende de qué haya en el checkout —hay documentación que vive junto
+    a código todavía sin versionar—, se genera aquí, con la misma pasada que
+    copia los archivos. Así el sitio se construye igual con el repositorio
+    completo o con una parte.
+    """
+    lineas = [
+        ".. Generado por conf.py: no editar a mano.",
+        "",
+        ".. toctree::",
+        "   :maxdepth: 1",
+        "   :caption: Referencia técnica",
+        "",
+    ]
+    lineas += [f"   {doc}" for doc, _ in APPENDICES if doc in publicados]
+    if len(lineas) == 6:            # ninguno disponible: un toctree vacío avisa
+        lineas = [".. Generado por conf.py: no hay apéndices en este checkout."]
+    (_SOURCE_DIR / "_appendices.rst").write_text("\n".join(lineas) + "\n",
+                                                 encoding="utf-8")
+
+
 def _sync_repo_docs(app, config) -> None:  # noqa: ANN001 - firma de Sphinx
     """Copia a ``source/repo/`` la documentación que vive en el repositorio.
 
@@ -230,10 +264,12 @@ def _sync_repo_docs(app, config) -> None:  # noqa: ANN001 - firma de Sphinx
     """
     target_root = _SOURCE_DIR / "repo"
     target_root.mkdir(exist_ok=True)
+    publicados: set[str] = set()
     for source, target in REPO_DOCS:
         origin = _REPO_ROOT / source
         if not origin.is_file():
             continue
+        publicados.add(target.removesuffix(".md"))
         destination = _SOURCE_DIR / target
         destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -243,6 +279,7 @@ def _sync_repo_docs(app, config) -> None:  # noqa: ANN001 - firma de Sphinx
             destination.write_text(text, encoding="utf-8")
         else:
             shutil.copyfile(origin, destination)
+    _write_appendix_toc(publicados)
 
 
 # -- Resaltado de suriaX -----------------------------------------------------
