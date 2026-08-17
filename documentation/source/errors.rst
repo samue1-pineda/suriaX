@@ -8,19 +8,19 @@ columna.
 .. table:: Familias
    :widths: auto
 
-   ==========  ==================  ==========================================
-   Prefijo     Fase                Momento
-   ==========  ==================  ==========================================
-   ``EXT``     Extensiones (HTIMS) Antes del léxico, al leer ``extends.srcx``
-                                   y las declaraciones del proyecto.
-   ``LEX``     Lexer               Al formar los tokens.
-   ``PAR``     Parser              Al construir el árbol.
-   ``AST``     AST-tipado          Al resolver los tipos.
-   ``SEM``     Semántica           Al validar nombres, reglas y contratos.
-   ``HIR``     Emisor del HIR      Al serializar el programa validado.
-   ``RT``      Intérprete          Durante la ejecución.
-   ``WEB``     Target web          Al preparar y generar WebAssembly.
-   ==========  ==================  ==========================================
+   ==========  ====================  ============================================
+   Prefijo     Fase                    Momento
+   ==========  ====================  ============================================
+   ``EXT``     Extensiones (HTIMS)    Antes del léxico, al leer ``extends.srcx``
+                                      y las declaraciones del proyecto.
+   ``LEX``     Lexer                  Al formar los tokens.
+   ``PAR``     Parser                 Al construir el árbol.
+   ``AST``     AST-tipado             Al resolver los tipos.
+   ``SEM``     Semántica              Al validar nombres, reglas y contratos.
+   ``HIR``     Emisor del HIR         Al serializar el programa validado.
+   ``RT``      Intérprete             Durante la ejecución.
+   ``WEB``     Target web             Al preparar y generar WebAssembly.
+   ==========  ==================  ==============================================
 
 Ninguna fase se detiene en el primer problema: acumula todo lo que encuentra y
 lo devuelve junto. Para obtenerlos en JSON, con rango y severidad:
