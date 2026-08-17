@@ -1,0 +1,74 @@
+
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "documentation/**"
+      - "docs/**"
+      - "*.md"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "documentation/**"
+      - "docs/**"
+      - "*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Construir el sitio (Sphinx)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: documentation/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r documentation/requirements.txt
+
+      - name: Build
+        run: |
+          sphinx-build -b html -W --keep-going \
+            documentation/source documentation/build/html
+
+      - name: Check links
+        continue-on-error: true    
+        run: |
+          sphinx-build -b linkcheck \
+            documentation/source documentation/build/linkcheck
+
+      - name: Upload artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: documentation/build/html
+
+  deploy:
+    name: Publicar en GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

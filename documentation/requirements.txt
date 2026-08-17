@@ -1,0 +1,10 @@
+# Dependencias de la documentación (Sphinx). No son dependencias del
+# compilador: 'requirements.txt' de la raíz sigue siendo el del proyecto.
+sphinx>=8.1
+# La documentación del repo está en Markdown (ARCHITECTURE.md, docs/*.md):
+# MyST deja incluirla tal cual, sin reescribirla a reStructuredText.
+myst-parser[linkify]>=4.0
+# Tema moderno, con búsqueda y modo oscuro. Cambiarlo es una línea en conf.py.
+furo>=2024.8.6
+# Los diagramas del pipeline (ARCHITECTURE.md) son mermaid: se renderizan.
+sphinxcontrib-mermaid>=1.0

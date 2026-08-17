@@ -18,8 +18,10 @@ out/
 dumps/                
 test.srcx
 
-documentation/
-# documentation es una carpeta externa que contiene la documentacion WEB del proyecto
+#documentation
+documentation/build/
+documentation/source/repo/
+documentation/web/
 
 .vscode/
 

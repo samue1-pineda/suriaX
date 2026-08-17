@@ -24,27 +24,25 @@
 suriaX is a programming language whit the following goals:
 - **compiler internals & visualization:** built for those students & enthusiasts who ask ¿what does every phase of the compiler give?
 - **friendly syntax:** based on python and c++ suriaX always look for a easier syntax 
-- **c++ interoperabilty:** by using custom [Bindings] suriaX let c++ run on your standar code
-- **c Philosophy([libsrX]):** suriaX trust on less reserved tokens & calls to libsrX
+- **c++ interoperabilty:** by using custom Bindings suriaX let c++ run on your standar code
+- **c Philosophy(libsrX):** suriaX trust on less reserved tokens & calls to libsrX
   
-[Bindings]:suriaX-lang/Documentation/bindings
-[LibsrX]:suriaX-lang/LibsrX
 
 ## project status
 
-**FROZEN**, working on [iriscX](https://github.com/samue1-pineda/iriscx) and [myrscX](https://github.com/samue1-pineda/MyrscX) nexts versions **aren't implementations but changes to the documentation**.
+**ACTIVE**, working on things that already works and looking for alternatives to fix errors that already exists
 
-the project is currently on **V.0.1.0 (Pre-Alpha Preview)**,
+the project is currently on **V.0.1.1 (Pre-Alpha Preview)**,
 
 [**x**] language syntax & EBNF grammar
 
-[**x**] frontend(lexer,parser and AST generation) -**In progress**
+[**x**] frontend(lexer,parser and AST generation) 
 
 [**/**] Intermediate Representations(HIR, MIR & lowering)
 
-[ ] LLVM Back-end Integration
+[ ] Backend VM JIT
 
-[ ] suriniX build system, web documentation & playground -**planned**
+[ ] suriniX build system, web documentation & playground using LLVM -**planned**
 
 *For the  full list of tasks, see [ROADMAP.md](ROADMAP.md).*
 

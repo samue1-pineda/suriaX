@@ -1,0 +1,279 @@
+"""Configuración de Sphinx para la documentación de suriaX.
+
+Dos decisiones que explican casi todo el archivo:
+
+1. **La documentación del proyecto vive en Markdown** (``ARCHITECTURE.md``,
+   ``docs/*.md``, los README de cada subsistema) y se escribe ahí porque es
+   lo que se lee desde GitHub. Reescribirla a reStructuredText sería
+   duplicarla y condenarla a desincronizarse, así que MyST la lee tal cual.
+
+2. **Los archivos de la raíz no se copian a mano.** Sphinx solo mira dentro
+   de ``source/``, y un ``cp`` en el workflow haría que el build local y el
+   de CI fueran distintos. En vez de eso, este mismo archivo los copia al
+   arrancar (``config-inited``): ``make html`` y la Action producen
+   exactamente el mismo sitio.
+
+Ver https://www.sphinx-doc.org/en/master/usage/configuration.html
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import sys
+from pathlib import Path
+
+#: URL base para enlazar al código fuente desde la documentación.
+GITHUB_BLOB = "https://github.com/samue1-pineda/suriaX/blob/main"
+
+# -- Información del proyecto ------------------------------------------------
+
+project = "suriaX"
+copyright = "2026, Samuel Pineda"
+author = "Samuel Pineda"
+release = "0.1.1"
+version = "0.1.1"
+
+# -- Configuración general ---------------------------------------------------
+
+extensions = [
+    "myst_parser",             # Markdown (CommonMark + extensiones)
+    "sphinx.ext.autodoc",      # docstrings del frontend Python, cuando se documente
+    "sphinx.ext.viewcode",     # enlace al fuente desde el API
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.todo",
+    "sphinxcontrib.mermaid",   # los diagramas de ARCHITECTURE.md, renderizados
+]
+
+templates_path = ["_templates"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+language = "es"
+
+# Los dos formatos conviven: las páginas nuevas en Markdown, las antiguas en
+# reStructuredText, sin migración forzosa.
+source_suffix = {
+    ".rst": "restructuredtext",
+    ".md": "markdown",
+}
+
+# -- MyST --------------------------------------------------------------------
+
+myst_enable_extensions = [
+    "colon_fence",     # ::: bloques de directiva sin backticks
+    "deflist",         # listas de definición
+    "linkify",         # URLs sueltas -> enlaces
+    "substitution",
+    "tasklist",        # [x] del ROADMAP
+]
+#: Ancla automática hasta ``###``: permite enlazar a una sección de un .md.
+myst_heading_anchors = 3
+#: Los .md del repo se enlazan entre ellos con rutas relativas ('./ROADMAP.md');
+#: MyST las convierte en enlaces internos del sitio.
+myst_all_links_external = False
+#: Un bloque ```mermaid del Markdown se trata como la directiva de mermaid, así
+#: que el diagrama del pipeline se DIBUJA en vez de mostrarse como texto.
+myst_fence_as_directive = ["mermaid"]
+
+# -- todo --------------------------------------------------------------------
+
+#: El proyecto está en Pre-Alpha: lo pendiente se muestra, no se esconde.
+todo_include_todos = True
+
+# -- HTML --------------------------------------------------------------------
+
+html_theme = "furo"
+html_static_path = ["_static"]
+#: Copiado tal cual a la raíz del sitio. Contiene '.nojekyll': sin ese archivo,
+#: un despliegue por rama ignoraría los directorios que empiezan por '_' y el
+#: sitio saldría sin estilos. El despliegue por Actions no usa Jekyll, pero el
+#: archivo cuesta nada y cubre el día que se cambie de método.
+html_extra_path = ["_extra"]
+#: Página de proyecto de GitHub Pages: el sitio cuelga de /suriaX/.
+html_baseurl = "https://samue1-pineda.github.io/suriaX/"
+html_title = f"suriaX {release}"
+html_short_title = "suriaX"
+html_theme_options = {
+    "source_repository": "https://github.com/samue1-pineda/suriaX/",
+    "source_branch": "main",
+    "source_directory": "documentation/source/",
+}
+
+# -- intersphinx -------------------------------------------------------------
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+}
+
+# -- Documentación que vive en la raíz del repositorio -----------------------
+
+#: (origen relativo a la raíz del repo, destino relativo a source/)
+REPO_DOCS: tuple[tuple[str, str], ...] = (
+    # Documentos del proyecto: se leen desde GitHub y desde el sitio, así que
+    # su fuente sigue siendo el archivo del repositorio.
+    ("ARCHITECTURE.md", "repo/ARCHITECTURE.md"),
+    ("ROADMAP.md", "repo/ROADMAP.md"),
+    ("DESIGN_PRINCIPLES.md", "repo/DESIGN_PRINCIPLES.md"),
+    ("CONTRIBUTING.md", "repo/CONTRIBUTING.md"),
+    # Referencia generada por el propio código: la gramática y el vocabulario
+    # de tokens son la fuente de verdad, no una copia editable.
+    ("docs/gramar/grammar.ebnf", "repo/grammar.ebnf"),
+    ("docs/gramar/t_types.md", "repo/t_types.md"),
+    # Documentos técnicos de un subsistema, con más detalle del que cabe en un
+    # capítulo: se publican como apéndices.
+    ("V0/src/HIR/PROTOBUF_BRIDGE.md", "repo/protobuf_bridge.md"),
+    ("runtime/interpreter/ARQUITECTURA.md", "repo/interpreter_internals.md"),
+    ("web/README.md", "repo/web_backend.md"),
+)
+
+_SOURCE_DIR = Path(__file__).parent
+_REPO_ROOT = _SOURCE_DIR.parents[1]
+
+
+#: ``origen en el repo -> nombre del documento`` para reescribir enlaces.
+_DOC_BY_SOURCE = {source: target for source, target in REPO_DOCS}
+
+#: Enlace Markdown ``[texto](destino)`` con destino relativo (no http/mailto/#).
+_MD_LINK = re.compile(r"\[([^\]]*)\]\((?!https?://|mailto:|#)([^)\s]+)\)")
+
+
+def _rewrite_link(origin_rel: str, target: str) -> str:
+    """Reescribe un enlace relativo del repositorio.
+
+    Un ``.md`` del repositorio enlaza a sus vecinos con rutas relativas
+    (``docs/hir.md``, ``../test/e2e/x.py``). En el sitio publicado esas rutas
+    no existen, así que:
+
+    - si el destino es OTRO documento que también se publica, se enlaza a su
+      página (los dos viven en ``repo/``, así que basta el nombre);
+    - si no, se enlaza al **fuente en GitHub**, que es donde está de verdad.
+
+    Sin esto, cada enlace a código produce un aviso — y el workflow compila
+    con ``-W``, así que un aviso es un build roto.
+    """
+    anchor = ""
+    if "#" in target:
+        target, _, anchor = target.partition("#")
+        anchor = f"#{anchor}"
+    if target == "":
+        return anchor  # enlace a una sección del mismo documento
+
+    resolved = _normalize((Path(origin_rel).parent / target).as_posix())
+
+    published = _DOC_BY_SOURCE.get(resolved)
+    if published is not None:
+        return Path(published).name + anchor
+    return f"{GITHUB_BLOB}/{resolved}{anchor}"
+
+
+def _normalize(path: str) -> str:
+    """Colapsa ``a/../b`` sin tocar el disco (los destinos pueden no existir)."""
+    parts: list[str] = []
+    for part in path.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _sync_repo_docs(app, config) -> None:  # noqa: ANN001 - firma de Sphinx
+    """Copia a ``source/repo/`` la documentación que vive en el repositorio.
+
+    Se salta en silencio lo que no exista: el proyecto está vivo y un
+    documento puede aún no estar escrito; eso no debe romper el build.
+    """
+    target_root = _SOURCE_DIR / "repo"
+    target_root.mkdir(exist_ok=True)
+    for source, target in REPO_DOCS:
+        origin = _REPO_ROOT / source
+        if not origin.is_file():
+            continue
+        destination = _SOURCE_DIR / target
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        if origin.suffix == ".md":
+            text = origin.read_text(encoding="utf-8")
+            text = _MD_LINK.sub(
+                lambda m: f"[{m.group(1)}]({_rewrite_link(source, m.group(2))})",
+                text,
+            )
+            destination.write_text(text, encoding="utf-8")
+        else:
+            shutil.copyfile(origin, destination)
+
+
+# -- Resaltado de suriaX -----------------------------------------------------
+
+def _srcx_lexer():
+    """Lexer de Pygments para ``.srcx``, construido con las keywords REALES.
+
+    El vocabulario se importa de ``V0/include/t_types.py`` en vez de copiarse:
+    es el mismo sitio del que sale ``--emit-lang-info`` para el editor. Si
+    mañana entra una palabra clave, la documentación la resalta sin que nadie
+    se acuerde de actualizar esta lista.
+    """
+    from pygments.lexer import RegexLexer, words
+    from pygments.token import (Comment, Keyword, Name, Number, Operator,
+                                Punctuation, String, Text)
+
+    keywords = ("fn", "struct", "enum", "if", "else", "while", "return",
+                "match", "case", "break", "continue", "const", "var", "true",
+                "false", "null", "and", "or", "not")
+    types = ("int", "float", "bool", "char", "str", "void", "type", "ptr")
+    try:
+        sys.path.insert(0, str(_REPO_ROOT / "V0"))
+        from include.t_types import KEYWORDS  # type: ignore[import-not-found]
+        keywords = tuple(sorted(KEYWORDS))
+    except Exception:  # noqa: BLE001 - sin el compilador, la lista de reserva
+        pass
+
+    class SuriaXLexer(RegexLexer):
+        name = "suriaX"
+        aliases = ["srcx", "suriax"]
+        filenames = ["*.srcx", "*.libsrx"]
+
+        tokens = {
+            "root": [
+                (r"//[^\n]*", Comment.Single),
+                (r"/-", Comment.Multiline, "blockcomment"),
+                (r"#(import|export|extern|test|from)\b", Comment.Preproc),
+                (r"@[A-Za-z_]\w*", Name.Decorator),
+                (r"__\w+__", Name.Function.Magic),
+                (r'f?"', String, "string"),
+                (r"'(\\.|[^'\\])'", String.Char),
+                (r"\d+\.\d+", Number.Float),
+                (r"\d+", Number.Integer),
+                (words(types, suffix=r"\b"), Keyword.Type),
+                (words(keywords, suffix=r"\b"), Keyword),
+                (r"->|==|!=|<=|>=|[-+*/<>=&?]", Operator),
+                (r"[{}()\[\];:,.]", Punctuation),
+                (r"[A-Za-z_]\w*", Name),
+                (r"\s+", Text),
+                (r".", Text),
+            ],
+            "string": [
+                (r'[^"\\{]+', String),
+                (r"\\.", String.Escape),
+                (r"\{[^}]*\}", String.Interpol),
+                (r'"', String, "#pop"),
+            ],
+            "blockcomment": [
+                (r"[^-]+", Comment.Multiline),
+                (r"-/", Comment.Multiline, "#pop"),
+                (r"-", Comment.Multiline),
+            ],
+        }
+
+    return SuriaXLexer
+
+
+def setup(app):  # noqa: ANN001, ANN201 - firma de Sphinx
+    app.connect("config-inited", _sync_repo_docs)
+    try:
+        app.add_lexer("srcx", _srcx_lexer())
+    except Exception:  # noqa: BLE001 - sin Pygments no hay resaltado, no un fallo
+        pass
+    return {"parallel_read_safe": True, "parallel_write_safe": True}
