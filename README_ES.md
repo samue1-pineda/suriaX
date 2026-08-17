@@ -35,7 +35,7 @@ suriaX es un lenguaje de programacion con los siguientes objetivos:
 
 [iriscX] y [myrscX] pasan a 2do plano hasta nuevas versiones
 
-el proyecto se encuentra en **V.0.1.1(Pre-Alpha Preview)**
+el proyecto se encuentra en **V.0.1.4 (Pre-Alpha Preview)**
 
 [**X**] definicion de la sintaxis del lenguaje y gramatica mediante EBNF
 

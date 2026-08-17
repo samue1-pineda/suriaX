@@ -68,7 +68,8 @@ Todo artefacto de inspección va a `./dumps` (configurable con
 | `--emit-tokens` | `<fuente>.tokens.txt` — el arreglo de tokens |
 | `--emit-ast-json` | `<fuente>.ast.json` — AST-tipado anotado |
 | `--emit-hir` | `<fuente>.phir` — HIR serializado (+ un `.phir` por librería) |
-| `--hir-text` | añade `<fuente>.phir.txt` — el HIR en texto protobuf, legible |
+| `--hir-text` | añade `<fuente>.phir.txt` — el árbol crudo del protobuf (para depurar el *formato*) |
+| `--hir-pretty` | escribe `<fuente>.phir.pretty` — el HIR **legible**: una línea por sentencia, con tipos resueltos y posiciones. Es la vista para leer lo que le llegó al intérprete |
 | `--debug` | **`<fuente>.debug.txt`** — reporte UNIFICADO (ver abajo) |
 | `--time` | tiempos por fase, a consola |
 | `--trace-exec` | traza de ejecución (llamadas/retornos anidados) |
@@ -79,7 +80,7 @@ Todo artefacto de inspección va a `./dumps` (configurable con
 **`--debug` es el atajo para reportar un bug**: reúne en un solo `.txt` el
 entorno, el estado de dependencias, métricas, tokens, AST-tipado, tabla de
 símbolos, HIR en texto, la traza de ejecución y los tiempos por fase. Implica
-`--time` y `--hir-text`. Combínalo con `--run --trace-exec --trace-memory`
+`--time` y `--hir-pretty`. Combínalo con `--run --trace-exec --trace-memory`
 para incluir la ejecución paso a paso:
 
 ```bash

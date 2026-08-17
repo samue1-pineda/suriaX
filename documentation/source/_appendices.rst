@@ -7,3 +7,4 @@
    repo/protobuf_bridge
    repo/interpreter_internals
    repo/web_backend
+   repo/htims

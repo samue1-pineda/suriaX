@@ -1,6 +1,6 @@
 # Informe de errores y riesgos visibles en el repositorio
 
-**INFORME DE LA VERSION PUBLICA 0.1.0**
+**INFORME DE LA VERSION PUBLICA 0.1.4**
 
 Este documento resume los problemas y riesgos que se observan actualmente en el proyecto, errores a solucionar en la proxima version
 
@@ -24,6 +24,8 @@ Esto sugiere que la estructura o la gramática aceptada por el parser no está a
 #### solucion propuesta
 
 ardua revision para la version **0.1.1** del todas las fases antes de la semantica.
+
+**pospuesto para la version 0.1.6**
 
 ### 2. Inconsistencias de sintaxis con la filosofía del lenguaje
 
@@ -64,7 +66,7 @@ para la version **0.2.0** dejar la depencia al runtime para el sistema de librer
 
 Hay varios documentos en la raíz y en la documentación que parecen estar desactualizados respecto a lo que el proyecto realmente soporta. Esto es un problema para una publicación porque podria confundir a cualquiera.
 
-#### solucion
+#### solucion (casi terminado)
 
 para la version **0.1.1** ardua correcion de los readme, la version se lanza bajo presion y con cambios muy recientes asi que es importante destacar que **multiples archivos y readme pueden ser extraños o poco comprensibles**
 

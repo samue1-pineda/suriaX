@@ -17,6 +17,7 @@ graph TD
 
 subgraph Python_Frontend [Python: frontend]
 direction TB
+HTIMS-->SR
 SR[source_reader]-->lexer;
 lexer-->parser;
 parser-->AST;
@@ -40,7 +41,7 @@ MIR --> VM_JIT[VM bytecode / JIT]
 end
 
 subgraph Web_target [target web · TypeScript]
-HIR_web --> contencion[contención WEB0xx]
+HIR_web --> contencion[contención]
 contencion --> DCE[OPT1]
 DCE --> WIR[WIR · pila, estructurado]
 WIR --> wasm[.wasm]
@@ -63,6 +64,7 @@ end
 
 | Fase | Entrada → Salida | Responsabilidad |
 |------|------------------|-----------------|
+| **HTIMS** | proyecto → `ExtensionSet` | Capa **previa al léxico**: descubre y valida las extensiones del proyecto (`extends.srcx` + `extensions:` del yaml) para que el vocabulario de hooks pueda declararlo el usuario. Vive en [htims/](htims/readme.md), fuera de `V0/`; no importa nada del frontend y nunca ejecuta el `.py` del usuario. |
 | **source_reader** | bytes → `str` Unicode | Decodifica UTF-8 (una vez), normaliza saltos de línea. No tokeniza. |
 | **Lexer** | `str` → `list[Token]` | Tokeniza en una pasada; salta comentarios; reconoce f-strings (`f"..."`, única forma con interpolación) y el bloque crudo `#extern cpp{}`. Termina en `EOF`. Recupera ante caracteres inválidos en vez de abortar. |
 | **Parser** | `list[Token]` → AST | Descenso recursivo + Pratt para expresiones. Recuperación en modo pánico: ante un error anota y resincroniza, así un fallo no oculta los demás. |

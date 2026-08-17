@@ -58,11 +58,17 @@ un *differential test*: el backend C++ y el de Python dan idéntica salida.
 
 Requiere `pybind11` y CMake ≥ 3.20, con el MISMO Python del intérprete.
 
+El build es **único para todo el repo** (ya no hay un `CMakeLists.txt` por
+módulo: ver [`CMake/README.md`](../../CMake/README.md)), y se lanza desde la
+raíz:
+
 ```bash
-cd runtime/logic_mem/build
-cmake ..          # solo la primera vez
-cmake --build .   # -> memory_c.cpython-<ver>-<plat>.so
+cmake -S . -B build       # solo la primera vez
+cmake --build build -j    # -> runtime/logic_mem/build/memory_c.cpython-<ver>-<plat>.so
 ```
+
+El `.so` sigue quedando en `runtime/logic_mem/build/`, que es donde lo busca
+`runtime/cxx_api.py`.
 
 `runtime/cxx_api.py` descubre y carga el `.so` bajo `runtime/*/build`.
 

@@ -15,7 +15,7 @@ proyecto:
    $ python V0/main.py ejemplo.srcx --emit-tokens
    $ python V0/main.py ejemplo.srcx --emit-ast-json
    $ python V0/main.py ejemplo.srcx --dump-symbols-table
-   $ python V0/main.py ejemplo.srcx --emit-hir --hir-text
+   $ python V0/main.py ejemplo.srcx --hir-pretty
 
 .. toctree::
    :maxdepth: 2

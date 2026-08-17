@@ -34,8 +34,8 @@ GITHUB_TREE = "https://github.com/samue1-pineda/suriaX/tree/main"
 project = "suriaX"
 copyright = "2026, Samuel Pineda"
 author = "Samuel Pineda"
-release = "0.1.1"
-version = "0.1.1"
+release = "0.1.4"
+version = "0.1.4"
 
 # -- Configuración general ---------------------------------------------------
 
@@ -132,11 +132,16 @@ REPO_DOCS: tuple[tuple[str, str], ...] = (
     # publican desde donde viven, sin copia editable en medio.
     ("docs/gramar/grammar.ebnf", "repo/grammar.ebnf"),
     ("docs/gramar/t_types.md", "repo/t_types.md"),
+    # La guía de hooks/dunders/traits vive junto a las librerías, que es donde
+    # se escribe: se publica desde ahí para no tener dos versiones del mismo
+    # vocabulario (el capítulo del sitio y el archivo que lee quien abre lib/).
+    ("lib/HOOKS.md", "repo/hooks.md"),
     # Documentos técnicos de un subsistema, con más detalle del que cabe en un
     # capítulo: se publican como apéndices.
     ("V0/src/HIR/PROTOBUF_BRIDGE.md", "repo/protobuf_bridge.md"),
     ("runtime/interpreter/ARQUITECTURA.md", "repo/interpreter_internals.md"),
     ("web/README.md", "repo/web_backend.md"),
+    ("htims/readme.md", "repo/htims.md"),
 )
 
 _SOURCE_DIR = Path(__file__).parent
@@ -229,6 +234,7 @@ APPENDICES: tuple[tuple[str, str], ...] = (
     ("repo/protobuf_bridge", "El puente protobuf en detalle"),
     ("repo/interpreter_internals", "Interioridades del intérprete"),
     ("repo/web_backend", "Backend web: guía del paquete"),
+    ("repo/htims", "HTIMS: extensiones del proyecto"),
 )
 
 

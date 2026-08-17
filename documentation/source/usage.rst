@@ -167,7 +167,13 @@ Volcados
    * - ``--emit-hir [ARCHIVO]``
      - El HIR serializado (``.phir``) tras una compilación limpia.
    * - ``--hir-text``
-     - Además del binario, la vista de texto ``.phir.txt``.
+     - Además del binario, el **árbol crudo** del protobuf (``.phir.txt``):
+       para depurar el *formato*, no para leer el programa.
+   * - ``--hir-pretty [ARCHIVO]``
+     - La vista **legible** del HIR (``.phir.pretty``): una línea por
+       sentencia, cada expresión con su tipo resuelto, los hooks que enlazó
+       la Semántica y la posición del fuente al margen. Es la forma de ver
+       *qué le llegó al intérprete*.
    * - ``--dump-symbols-table [ARCHIVO]``
      - La tabla de símbolos como diagrama de clases UML (Mermaid).
    * - ``--emit-stage FASE``
@@ -189,7 +195,8 @@ Ejecución
    ``--trace-memory``    Traza las instrucciones de memoria (``&``, ``move``, ``free``).
    ``--time``            Tiempo de cada fase, en milisegundos.
    ``--debug``           Reporte completo: entorno, métricas, tokens, AST, símbolos,
-                         HIR en texto, traza y tiempos, todo en un archivo.
+                         traza y tiempos, todo en un archivo. Implica
+                         ``--time`` y ``--hir-pretty``.
    ====================  ===================================================================
 
 Integración con editores
@@ -212,6 +219,11 @@ Integración con editores
    * - ``--emit-lang-info``
      - La especificación del lenguaje en JSON: palabras clave por categoría,
        tokens, directivas, hooks y códigos de error.
+   * - ``--emit-extensions``
+     - Las extensiones del proyecto en JSON (HTIMS): el nombre del proyecto,
+       cada hook declarado con su firma y su posición, y las líneas
+       equivalentes para el ``.suriaX_config.yaml``. **No importa ni ejecuta**
+       el ``.py`` del usuario: lo lee con ``ast.parse``.
 
 Entorno
 ~~~~~~~~

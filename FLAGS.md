@@ -38,6 +38,7 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 | `--check` | verifica las dependencias del compilador y termina |
 | `--init-config` | genera un `.suriaX_config.yaml` por defecto y termina (requiere `pyyaml`) |
 | `--emit-lang-info` | imprime en stdout la **especificación del lenguaje** en JSON (keywords por categoría, tokens, directivas, hooks, códigos de error). Fuente única para el LSP/extensión. No necesita `source` |
+| `--emit-extensions` | descubre las **extensiones del proyecto** (HTIMS: `extends.srcx` + la lista `extensions:` del YAML) y emite en stdout un JSON con el proyecto, los hooks declarados con su firma y posición, y las líneas de config equivalentes. **No importa ni ejecuta** el `.py` del usuario (lo lee con `ast.parse`). Sin `source` usa el directorio actual como raíz; con él, la raíz del proyecto de ese fuente. **exit 4** si el manifiesto o una declaración tienen errores. Ver [htims/readme.md](htims/readme.md) |
 
 ### 2.2 Ejecución
 
@@ -52,7 +53,9 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 | `--emit-tokens [ARCHIVO]` | `<fuente>.tokens.txt` — el arreglo de tokens |
 | `--emit-ast-json [ARCHIVO]` | `<fuente>.ast.json` — el AST-tipado anotado por la Semántica |
 | `--emit-hir [ARCHIVO]` | `<fuente>.phir` — el HIR serializado en protobuf (+ un `.phir` por librería importada). Requiere `protobuf` |
-| `--hir-text` | añade `<fuente>.phir.txt` — el HIR en texto protobuf legible |
+| `--hir-text` | añade `<fuente>.phir.txt` — el **árbol crudo** del protobuf, para depurar el *formato* (qué tag lleva qué). Para leer el programa, `--hir-pretty` |
+| `--hir-pretty` | escribe `<fuente>.phir.pretty` — la vista **legible** del HIR: una línea por sentencia, expresiones con su tipo resuelto, hooks enlazados y la posición del fuente al margen. Es como se lee *lo que le llegó al intérprete*. Se escribe en streaming (para un programa de 175 k tokens: 306 ms y 1,3 MB, frente a 1,9 s y 20,6 MB del texto protobuf) |
+| `--emit-stage FASE` | vuelca **una** fase del pipeline (`lexer`, `parser`, `ast`, `sem`, `hir`) a stdout, sin que el archivo traiga `#test`. Mismo contenido que la directiva; lo consume el visualizador de la extensión. Una fase desconocida lista las válidas y sale con 2 |
 | `--dump-symbols-table [ARCHIVO]` | `<fuente>.symbols.mmd` — la tabla de símbolos como diagrama de clases UML (Mermaid `classDiagram`): structs→clases con campos y métodos, enums→`<<enumeration>>`, campos nominales→asociaciones. Lo consume la web de `/documentation`. Solo librería estándar (sin protobuf) |
 
 > En los tres `--emit-*` con `[ARCHIVO]`, si das una ruta va ahí; sin ella, al
@@ -65,7 +68,8 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 | `--time` | imprime cuánto tomó cada fase de la compilación (ms), a consola |
 | `--trace-exec` | traza la ejecución (llamadas/retornos anidados) al `--run` |
 | `--trace-memory` | traza las instrucciones de memoria (`&`, `move`, `free`) al `--run` |
-| `--debug` | reporte **UNIFICADO** en `<dumps_dir>/<fuente>.debug.txt` (entorno, dependencias, métricas, tokens, AST, símbolos, HIR en texto, traza y tiempos). **Implica `--time` y `--hir-text`.** Combínalo con `--run --trace-exec --trace-memory` para incluir la ejecución paso a paso |
+| `--debug` | reporte **UNIFICADO** en `<dumps_dir>/<fuente>.debug.txt` (entorno, dependencias, métricas, tokens, AST, símbolos, HIR en texto, traza y tiempos). **Implica `--time` y `--hir-pretty`.** Combínalo con `--run --trace-exec --trace-memory` para incluir la ejecución paso a paso |
+| `--stdin` | con `--emit-diagnostics` o `--emit-stage`: lee el **fuente** de la entrada estándar en vez del disco. El argumento de archivo sigue siendo obligatorio y sigue anclando la resolución de `.libsrx`, pero no hace falta que exista todavía — permite a un editor analizar un buffer sin guardar |
 | `--emit-diagnostics` | corre el frontend y emite en stdout un JSON con **todos** los diagnósticos (código/mensaje/línea/columna/fase/severidad) y notas, sin tocar disco. Incluye una detección **ligera** de la fase HIR: marca los constructos RBMM (`region`, `new`, `at`, …) con `HIR005` **sin** construir el HIR ni requerir protobuf, para que el editor no se los salte. Canal en vivo para el LSP; **exit 0** aunque haya diagnósticos (van en el JSON) |
 
 ---
@@ -81,7 +85,8 @@ hace esto en un solo paso; aquí se invoca por separado.
 | `--exec` | liga las unidades (main + librerías) y **ejecuta** la función de entrada |
 | `--test` | ejecuta los bloques `test "..." { }` del módulo principal |
 | `--entry FN` | función de entrada (por defecto `interpreter.entry` del YAML, o `main`) |
-| `--text` | imprime además el `Module` completo en texto protobuf |
+| `--text` | imprime además el `Module` completo en texto protobuf (el árbol crudo) |
+| `--pretty` | imprime el HIR en su vista **legible** — la forma de inspeccionar un `.phir` que ya existe |
 | `--trace-exec` | traza la ejecución (llamadas y retornos, con anidamiento) |
 | `--trace-memory` | traza las instrucciones de memoria (`&`, `move`, `free`) |
 
@@ -122,6 +127,7 @@ desconocido lista los disponibles.
 | `1` | errores de compilación (léxicos/sintácticos/semánticos/HIR) |
 | `2` | archivo fuente no encontrado |
 | `3` | dependencia faltante para la operación pedida |
+| `4` | error de las **extensiones** del proyecto (`EXT0xx`: manifiesto `extends.srcx` o declaraciones). Se detecta antes del léxico, así que la compilación no llega a empezar |
 | `70` | error de ejecución (runtime del intérprete: `RTxxx`, throw no capturado) |
 
 ---

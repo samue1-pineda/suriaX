@@ -1,6 +1,6 @@
 # Roadmap de suriaX
 
-> Estado global: **V.0.1.0 (Pre-Alpha)**
+> Estado global: **V.0.1.4 (Pre-Alpha)**
 > interprete funcional, RBMM incompleto y llamadas a c++(pybind11) para memoria
 
 ---

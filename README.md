@@ -34,7 +34,7 @@ suriaX is a programming language whit the following goals:
 
 **First version of the web documentation built**!
 
-the project is currently on **V.0.1.2 (Pre-Alpha Preview)**,
+the project is currently on **V.0.1.4 (Pre-Alpha Preview)**,
 
 [**x**] language syntax & EBNF grammar
 

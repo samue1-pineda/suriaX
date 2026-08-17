@@ -42,6 +42,7 @@ El pipeline, de principio a fin:
    grammar
    type_system
    libsrx
+   repo/hooks
 
 .. toctree::
    :maxdepth: 2

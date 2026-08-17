@@ -155,6 +155,10 @@ Y también hooks, con lo que un tipo de librería se comporta como uno nativo:
 Desde fuera, ``print(x)`` y ``len(x)`` funcionan sin que nadie escriba el
 nombre del hook.
 
+Los nueve hooks del vocabulario, los métodos propios (*dunders*) y los
+contratos (*traits*) tienen su capítulo con el glosario completo:
+:doc:`repo/hooks`.
+
 .. _rutas:
 
 Dónde se buscan

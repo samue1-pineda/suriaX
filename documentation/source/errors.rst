@@ -11,6 +11,8 @@ columna.
    ==========  ==================  ==========================================
    Prefijo     Fase                Momento
    ==========  ==================  ==========================================
+   ``EXT``     Extensiones (HTIMS) Antes del léxico, al leer ``extends.srcx``
+                                   y las declaraciones del proyecto.
    ``LEX``     Lexer               Al formar los tokens.
    ``PAR``     Parser              Al construir el árbol.
    ``AST``     AST-tipado          Al resolver los tipos.

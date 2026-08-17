@@ -33,11 +33,50 @@ Qué contiene un ``.phir``
                          conversiones.
    ``items``             El programa validado, en orden.
    ``libraries``         Las unidades importadas, por alias y archivo.
+   ``types``             **Pool de tipos**: cada tipo distinto una sola vez;
+                         los nodos lo referencian por índice.
    ====================  =====================================================
 
 Cada expresión viaja con **su tipo ya resuelto** y cada nodo con **su línea y
 columna**. Un backend nunca tiene que inferir un tipo ni adivinar una
 posición: si el HIR no lo trae, no existe.
+
+.. _pool-de-tipos:
+
+El pool de tipos (esquema 2)
+-----------------------------
+
+Que cada expresión lleve su tipo no significa que cada expresión lleve una
+*copia* de él. En un programa de 47 000 tokens el mismo ``int`` aparecía
+21 065 veces sobre **43 formas distintas** — un 20 % del archivo dedicado a
+repetir cuarenta y tres cosas.
+
+Desde el esquema 2 los tipos viven una sola vez en ``Module.types`` y los
+nodos guardan un índice (``type_id``); el ``0`` significa "sin tipo anotado".
+Resolverlo es un acceso a lista, así que el lector no paga nada: se midió, y
+el tiempo de lectura no cambió. Lo que sí cambió es el archivo (un 10 % más
+pequeño) y el tiempo de emisión (un 16 % menos, porque el emisor construye
+veinte mil submensajes menos).
+
+La tabla de símbolos **no** participa del pool a propósito: es el 4 % de los
+bytes y la parte que una persona lee cuando inspecciona un ``.phir``.
+
+El pool no se ve al leer el HIR: ``--hir-pretty`` lo resuelve y escribe
+``Punto ptr mutable``, no ``#7``.
+
+.. _reproducible:
+
+El mismo programa, los mismos bytes
+------------------------------------
+
+Un ``.phir`` es **reproducible**: compilar dos veces el mismo fuente produce
+artefactos idénticos, en cualquier máquina. No siempre fue así — las entradas
+de un ``map`` de protobuf se escriben en un orden que la especificación no
+fija, y el orden real lo decidía la tabla *hash* del proceso.
+
+Importa más de lo que parece: sin esa garantía no se pueden comparar
+artefactos, ni cachear un build por su *hash*, ni demostrar que un cambio del
+compilador no alteró la salida.
 
 .. _una-unidad-un-phir:
 
@@ -111,12 +150,25 @@ estático conservador no ve.
 Ver el HIR
 -----------
 
-En texto, junto al binario:
+Dos vistas, para dos preguntas distintas. Para leer el **programa**:
+
+.. code-block:: console
+
+   $ python V0/main.py programa.srcx --hir-pretty
+   $ cat dumps/programa.srcx.phir.pretty
+
+Para depurar el **formato** (qué tag lleva qué), el árbol crudo del protobuf:
 
 .. code-block:: console
 
    $ python V0/main.py programa.srcx --emit-hir --hir-text
    $ cat dumps/programa.srcx.phir.txt
+
+Y sobre un ``.phir`` que ya existe, sin recompilar:
+
+.. code-block:: console
+
+   $ python runtime/interpreter/main.py dumps/programa.srcx.phir --pretty
 
 O directamente por pantalla, sin escribir archivos:
 
@@ -128,22 +180,24 @@ Un fragmento del resultado:
 
 .. code-block:: text
 
-   schema_version: 1
+   schema_version: 2
    source_file: "programa.srcx"
+   types { }                     # 0 = "sin tipo"
+   types { kind: INT }           # 1
    items {
      ln: 3
      col: 1
      function {
        name: "suma"
-       params { type { kind: INT } name: "a" }
-       params { type { kind: INT } name: "b" }
-       return_type { kind: INT }
+       params { name: "a" type_id: 1 }
+       params { name: "b" type_id: 1 }
+       return_type_id: 1
        body {
          statements {
            ln: 4
            return_stmt {
              value {
-               restype { kind: INT }
+               type_id: 1
                binary { op: "+" ... }
              }
            }
@@ -151,6 +205,19 @@ Un fragmento del resultado:
        }
      }
    }
+
+Ese es el *formato*. Para leer el **programa** —una línea por sentencia, con
+los tipos ya resueltos a su nombre— está ``--hir-pretty``:
+
+.. code-block:: text
+
+   unit programa.srcx   schema 2 · 1 items · 1 símbolos · 1 tipos
+
+   types
+     #1   int
+
+   fn suma(int a, int b) -> int                                    @3:1
+     return (a:int + b:int):int                                    @4:5
 
 .. _el-phir-como-entrada:
 
