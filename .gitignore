@@ -20,7 +20,7 @@ test.srcx
 
 #documentation
 documentation/build/
-documentation/source/repo/
+
 documentation/web/
 
 .vscode/
