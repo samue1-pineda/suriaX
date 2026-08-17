@@ -29,6 +29,9 @@ jobs:
   build:
     name: Construir el sitio (Sphinx)
     runs-on: ubuntu-latest
+    # Una construcción tarda segundos: si pasa de esto, algo se colgó y es
+    # mejor fallar que dejar el job esperando.
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,16 +46,15 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --upgrade pip -r documentation/requirements.txt
 
+      # No se comprueban enlaces aquí a propósito: la documentación enlaza al
+      # código en github.com, y las peticiones desde un runner chocan con el
+      # límite de tasa. El comprobador se queda dormido esperando y el job se
+      # CANCELA — y una cancelación no la cubre 'continue-on-error'. Para
+      # revisarlos a mano: sphinx-build -b linkcheck documentation/source /tmp/lc
       - name: Build
         run: |
           sphinx-build -b html -W --keep-going \
             documentation/source documentation/build/html
-
-      - name: Check links
-        continue-on-error: true    
-        run: |
-          sphinx-build -b linkcheck \
-            documentation/source documentation/build/linkcheck
 
       - name: Upload artifact
         if: github.event_name != 'pull_request'

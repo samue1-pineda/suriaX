@@ -167,14 +167,18 @@
 
 
 - Runner propio de tests ([test/main.py](test/main.py)): descubre y ejecuta
-  `test_*` en las categorías unit, e2e, negative, snapshot, fuzz [/]
-- Suite de tests por fase (ver [test/tests_to_add.txt](test/tests_to_add.txt))[ / ]
+  `test_*` en las categorías unit, grammar, negative_tests, snapshot, e2e y
+  fuzz [x]
+- Suite de tests por fase: lexer, parser y gramática regla a regla, semántica,
+  HIR, intérprete (incluida la memoria nativa contra la de Python) y target
+  web, más una prueba **diferencial** que ejecuta el mismo programa en el
+  intérprete y en WebAssembly y compara salida y valor de retorno [x]
 
 - Build system **suriniX**[ ]
 
 - Empaquetado del binario `suriaX` (depdencias resueltas para el usuario final) [ ]
 
-- Documentación web [ ]
+- Documentación web: sitio de Sphinx publicado en GitHub Pages [x]
 
 ---
 

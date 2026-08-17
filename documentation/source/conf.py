@@ -23,8 +23,11 @@ import shutil
 import sys
 from pathlib import Path
 
-#: URL base para enlazar al código fuente desde la documentación.
+#: URL base para enlazar al código fuente desde la documentación. GitHub usa
+#: rutas distintas para archivos y directorios, y redirige de una a otra: usar
+#: la correcta desde el principio evita una redirección por enlace.
 GITHUB_BLOB = "https://github.com/samue1-pineda/suriaX/blob/main"
+GITHUB_TREE = "https://github.com/samue1-pineda/suriaX/tree/main"
 
 # -- Información del proyecto ------------------------------------------------
 
@@ -98,6 +101,16 @@ html_theme_options = {
     "source_directory": "documentation/source/",
 }
 
+# -- linkcheck ---------------------------------------------------------------
+
+#: El sitio enlaza al código en github.com; comprobar decenas de esas URLs
+#: choca con el límite de tasa y el comprobador se queda esperando. Los
+#: enlaces internos al repositorio ya los garantiza el reescritor (solo
+#: enlaza lo que existe), así que aquí se revisa lo demás.
+linkcheck_ignore = [r"https://github\.com/samue1-pineda/suriaX/(blob|tree)/.*"]
+linkcheck_timeout = 15
+linkcheck_retries = 1
+
 # -- intersphinx -------------------------------------------------------------
 
 intersphinx_mapping = {
@@ -114,8 +127,9 @@ REPO_DOCS: tuple[tuple[str, str], ...] = (
     ("ROADMAP.md", "repo/ROADMAP.md"),
     ("DESIGN_PRINCIPLES.md", "repo/DESIGN_PRINCIPLES.md"),
     ("CONTRIBUTING.md", "repo/CONTRIBUTING.md"),
-    # Referencia generada por el propio código: la gramática y el vocabulario
-    # de tokens son la fuente de verdad, no una copia editable.
+    # Referencia que produce el propio compilador: la gramática es la fuente de
+    # verdad sintáctica y el vocabulario de tokens su tabla de terminales. Se
+    # publican desde donde viven, sin copia editable en medio.
     ("docs/gramar/grammar.ebnf", "repo/grammar.ebnf"),
     ("docs/gramar/t_types.md", "repo/t_types.md"),
     # Documentos técnicos de un subsistema, con más detalle del que cabe en un
@@ -136,7 +150,7 @@ _DOC_BY_SOURCE = {source: target for source, target in REPO_DOCS}
 _MD_LINK = re.compile(r"\[([^\]]*)\]\((?!https?://|mailto:|#)([^)\s]+)\)")
 
 
-def _rewrite_link(origin_rel: str, target: str) -> str:
+def _rewrite_link(origin_rel: str, target: str) -> str | None:
     """Reescribe un enlace relativo del repositorio.
 
     Un ``.md`` del repositorio enlaza a sus vecinos con rutas relativas
@@ -145,10 +159,22 @@ def _rewrite_link(origin_rel: str, target: str) -> str:
 
     - si el destino es OTRO documento que también se publica, se enlaza a su
       página (los dos viven en ``repo/``, así que basta el nombre);
-    - si no, se enlaza al **fuente en GitHub**, que es donde está de verdad.
+    - si el destino EXISTE en el repositorio, se enlaza al fuente en GitHub
+      (``/blob/`` para un archivo, ``/tree/`` para un directorio: GitHub
+      redirige de uno a otro, y una redirección es un aviso evitable);
+    - si NO existe, se devuelve ``None`` y el enlace se degrada a texto.
 
-    Sin esto, cada enlace a código produce un aviso — y el workflow compila
-    con ``-W``, así que un aviso es un build roto.
+    Ese último caso es el que importa. Un documento puede referenciar algo
+    que se renombró, que nunca llegó a escribirse o que todavía no está
+    commiteado; publicarlo como enlace produce un 404 en el sitio y un fallo
+    en cualquier comprobador. Que el enlace desaparezca solo, sin editar el
+    documento original, mantiene el sitio sano sin pedirle a nadie que
+    recuerde nada.
+
+    La existencia se comprueba **sobre el árbol de trabajo**. En CI eso es
+    exactamente el contenido del repositorio, que es lo que se publica; en
+    local puede haber archivos sin commitear, y entonces el enlace se genera
+    aunque en GitHub todavía no resuelva.
     """
     anchor = ""
     if "#" in target:
@@ -162,7 +188,24 @@ def _rewrite_link(origin_rel: str, target: str) -> str:
     published = _DOC_BY_SOURCE.get(resolved)
     if published is not None:
         return Path(published).name + anchor
-    return f"{GITHUB_BLOB}/{resolved}{anchor}"
+
+    destination = _REPO_ROOT / resolved
+    if destination.is_dir():
+        return f"{GITHUB_TREE}/{resolved}{anchor}"
+    if destination.is_file():
+        return f"{GITHUB_BLOB}/{resolved}{anchor}"
+    return None
+
+
+def _replace_link(source: str, match: "re.Match[str]") -> str:
+    """``[texto](destino)`` -> enlace reescrito, o solo el texto si no resuelve."""
+    label, target = match.group(1), match.group(2)
+    rewritten = _rewrite_link(source, target)
+    if rewritten is None:
+        # el destino no está en el repositorio: se conserva la referencia como
+        # código, que sigue diciendo de qué habla, pero sin enlace roto.
+        return f"`{label}`" if label else f"`{target}`"
+    return f"[{label}]({rewritten})"
 
 
 def _normalize(path: str) -> str:
@@ -196,10 +239,7 @@ def _sync_repo_docs(app, config) -> None:  # noqa: ANN001 - firma de Sphinx
 
         if origin.suffix == ".md":
             text = origin.read_text(encoding="utf-8")
-            text = _MD_LINK.sub(
-                lambda m: f"[{m.group(1)}]({_rewrite_link(source, m.group(2))})",
-                text,
-            )
+            text = _MD_LINK.sub(lambda m: _replace_link(source, m), text)
             destination.write_text(text, encoding="utf-8")
         else:
             shutil.copyfile(origin, destination)

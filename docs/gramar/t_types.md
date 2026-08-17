@@ -1,7 +1,7 @@
 # Tipos y tokens de suriaX
 
 Documento de referencia de los **tipos del lenguaje** y de los **tokens** que el
-lexer produce, con su forma de uso. La fuente de verdad del enum es [`V0/include/t_types.py`](https://github.com/samue1-pineda/suriaX/blob/main/V0/include/t_types.py), la gramática completa está
+lexer produce, con su forma de uso. La fuente de verdad del enum es [`V0/include/t_types.py`](../../V0/include/t_types.py), la gramática completa está
 en [`grammar.ebnf`](grammar.ebnf).
 
 > Convención de este documento: cada construcción se documenta como
@@ -261,7 +261,7 @@ dunder fn __next__(Lista ptr self) -> int? { ... }            // el metodo real
 Los **decoradores** se generalizaron: admiten argumentos (`@impl(iterable)`),
 aplican a `fn`/`struct`/`enum`, y van **antes** de la visibilidad/especificador
 (`@impl(x) public struct ...`). Ver `grammar.ebnf` (`decorator_decl`,
-`trait_body`) y [lib/HOOKS.md](https://github.com/samue1-pineda/suriaX/blob/main/lib/HOOKS.md).
+`trait_body`) y [lib/HOOKS.md](../../lib/HOOKS.md).
 
 ---
 
@@ -452,4 +452,4 @@ tipo implementados (`#test sem`); el resto de sus pasadas (resolución de
 símbolos/scopes, verificación de memoria) está pendiente — ver
 `V0/src/frontend/semantic/ARQUITECTURA.md`.
 
-observe [how_to_run.md](https://github.com/samue1-pineda/suriaX/blob/main/how_to_run.md) para probar.
+observe [how_to_run.md](../../how_to_run.md) para probar.

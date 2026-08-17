@@ -33,7 +33,7 @@ El pipeline, de principio a fin:
    :caption: Empezar
 
    usage
-   examples
+   examples/index
 
 .. toctree::
    :maxdepth: 2
