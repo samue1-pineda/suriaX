@@ -22,7 +22,24 @@ except ImportError:  # pragma: no cover - ejecucion directa
     from t_types import DIRECTIVES, KEYWORDS, TokenType  # type: ignore
 
 #: versión del esquema de esta salida (súbela si cambia la FORMA del JSON).
-LANG_INFO_VERSION = 1
+LANG_INFO_VERSION = 3
+
+
+def _compiler_version() -> str:
+    """Versión del compilador que produjo este JSON.
+
+    La extensión y el LSP hablan con UN compilador concreto, y hasta ahora no
+    tenían forma de saber cuál: si el usuario tiene un checkout viejo, el
+    vocabulario que reciben es el viejo y el único síntoma es que algo no
+    colorea. Publicarla convierte eso en un dato comprobable. Se LEE de
+    ``version.py`` —la misma fuente que CMake y la documentación—, nunca se
+    repite aquí.
+    """
+    try:
+        from version import VERSION
+    except ImportError:  # pragma: no cover - fuera del árbol del repositorio
+        return "desconocida"
+    return VERSION
 
 # Categoría de cada keyword, por su TokenType. Es la ÚNICA pieza que se
 # mantiene a mano al añadir un keyword (junto a 'KEYWORDS' del lexer): un
@@ -43,31 +60,32 @@ _CATEGORY_TOKENS: Dict[str, frozenset] = {
                           TokenType.BREAK, TokenType.CONTINUE}),
     "error_handling": frozenset({TokenType.ERRORTYPE, TokenType.TRY,
                                  TokenType.CATCH, TokenType.THROW}),
-    "memory": frozenset({TokenType.REGION, TokenType.SHRD, TokenType.NA,
-                         TokenType.IN, TokenType.AT, TokenType.MOVE, TokenType.FREE,
-                         TokenType.NEW, TokenType.DELETE, TokenType.POINTER,
-                         TokenType.MAKE}),
+    "memory": frozenset({TokenType.MOVE, TokenType.FREE, TokenType.POINTER}),
     "operator_word": frozenset({TokenType.AND, TokenType.OR, TokenType.NOT,
                                 TokenType.SIZEOF, TokenType.CAST}),
 }
 
-# Operadores y delimitadores SIMBÓLICOS (lexema -> TokenType). Espejo estable
-# del scanner de operadores; se listan aquí para que la extensión no los
-# hard-codee por su cuenta.
-_SYMBOLS: Dict[str, TokenType] = {
-    "=": TokenType.ASSIGN, "+": TokenType.PLUS, "-": TokenType.MINUS,
-    "*": TokenType.MULTIPLY, "/": TokenType.DIVIDE,
-    "==": TokenType.EQUAL, "!=": TokenType.NOT_EQUAL,
-    "<": TokenType.LESS, "<=": TokenType.LESS_EQUAL,
-    ">": TokenType.GREATER, ">=": TokenType.GREATER_EQUAL,
-    "->": TokenType.ARROW,
-    "(": TokenType.L_PAREN, ")": TokenType.R_PAREN,
-    "{": TokenType.L_BRACE, "}": TokenType.R_BRACE,
-    "[": TokenType.L_BRACKET, "]": TokenType.R_BRACKET,
-    ".": TokenType.DOT, ",": TokenType.COMMA, ";": TokenType.SEMICOLON,
-    ":": TokenType.COLON, "@": TokenType.DECORATOR, "#": TokenType.DIRECTIVE,
-    "&": TokenType.ADDRESS, "?": TokenType.NULLABLE,
-}
+# Operadores y delimitadores SIMBÓLICOS (lexema -> TokenType).
+#
+# Se DERIVA del scanner en vez de copiarse: era una lista escrita a mano que
+# decía ser "espejo estable del scanner", y dejó de serlo en cuanto el lexer
+# aprendió '%', '+=' y '++' — la extensión seguía sin conocerlos. Un espejo que
+# hay que recordar actualizar no es un espejo.
+def _construir_symbols() -> Dict[str, TokenType]:
+    try:
+        from src.frontend.lexer.scanners.operators import _DOUBLE, _SINGLE
+    except ImportError:  # pragma: no cover - ejecucion directa
+        return {}
+    tabla: Dict[str, TokenType] = dict(_SINGLE)
+    tabla.update({a + b: token for (a, b), token in _DOUBLE.items()})
+    # '@' y '#' no pasan por el scanner de operadores (cada uno tiene el suyo),
+    # pero son simbolos del lenguaje igual y la extension los necesita.
+    tabla["@"] = TokenType.DECORATOR
+    tabla["#"] = TokenType.DIRECTIVE
+    return tabla
+
+
+_SYMBOLS: Dict[str, TokenType] = _construir_symbols()
 
 
 def _keyword_category(token: TokenType) -> str:
@@ -131,6 +149,7 @@ def build_language_info() -> dict:
 
     return {
         "lang_info_version": LANG_INFO_VERSION,
+        "compiler_version": _compiler_version(),
         "language": "suriaX",
         "extensions": [".srcx", ".libsrx"],
         "keywords": keywords,
@@ -141,7 +160,21 @@ def build_language_info() -> dict:
         "tokens": [{"name": t.name, "value": t.value} for t in TokenType],
         "severities": _severities(),
         "errors": _error_catalog(),
+        "stages": _pipeline_stages(),
     }
+
+
+def _pipeline_stages() -> List[str]:
+    """Fases que ``--emit-stage`` (y ``#test <fase>``) sabe volcar.
+
+    Publicarlas evita que un consumidor -- el visualizador de la extension --
+    tenga que llevar su propia lista: una fase nueva aparece sola.
+    """
+    try:
+        from src.frontend.parser.parser import Parser
+    except ImportError:  # pragma: no cover - ejecucion directa
+        return []
+    return Parser.available_stages()
 
 
 def _severities() -> list:

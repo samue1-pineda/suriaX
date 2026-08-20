@@ -15,21 +15,25 @@ validación de firmas no cambió con la migración a postfijo:
     - ``__free__`` / ``__sizeof__`` / ``__print__`` / ``__len__``: operan
       SOBRE una instancia existente -> su primer parámetro es ``T ptr``; el
       hook pertenece a ``T``.
-    - ``__make__``: PRODUCE la instancia (se dispara con ``make T in r``)
-      -> no hay nada a lo que apuntar todavía, así que se asocia por su
-      TIPO DE RETORNO, que debe ser ``T ptr``.
+    - ``__cast__``: no hay instancia del destino todavía, así que se asocia
+      por el lado NOMINAL de su firma.
+
+    Hubo un tercer caso, ``__make__``, que se asociaba por su tipo de
+    RETORNO porque producía la instancia. Se retiró con el modelo por
+    regiones: su único disparador era ``make T in r``.
 
 Cómo se dispara cada hook (el "consumidor nunca escribe ``__foo__``"):
 
     ============  =====================================  ==================
     Hook          Dispara con                            Quién lo enlaza
     ============  =====================================  ==================
-    ``__free__``   ``free x;``                            ``scope_resolver``
-    ``__make__``   ``make T in r``                        ``scope_resolver``
+    ``__free__``   ``free x;`` y el cierre del ámbito     ``scope_resolver``
     ``__sizeof__`` ``sizeof(T)``                          ``type_resolver``
     ``__print__``  ``print(x)`` / ``x.print()``           ``scope_resolver``
     ``__len__``    ``len(x)`` / ``x.len()``               ``scope_resolver``
     ``__cast__``   ``cast<T>(x)`` (T nominal)             ``type_resolver``
+    ``__min__``    un LITERAL escrito donde se espera T   ``scope_resolver``
+    ``__max__``    un LITERAL escrito donde se espera T   ``scope_resolver``
     ============  =====================================  ==================
 
 ``print``/``len`` NO son keywords (filosofía libsrX: pocos tokens): son
@@ -52,7 +56,6 @@ except ImportError:  # pragma: no cover - ejecucion directa
 
 class HookKind(Enum):
     FREE = auto()      # __free__:   fn __free__(T ptr x) -> void
-    MAKE = auto()      # __make__:   fn __make__(...) -> T ptr
     SIZEOF = auto()    # __sizeof__: fn __sizeof__(T ptr x) -> int
     PRINT = auto()     # __print__:  fn __print__(T ptr x) -> void
     LEN = auto()       # __len__:    fn __len__(T ptr x) -> int
@@ -60,30 +63,36 @@ class HookKind(Enum):
     INDEX = auto()     # __index__:  fn __index__(T ptr x, int i) -> Elem  (v[i])
     INDEX_SET = auto() # __index_set__: fn __index_set__(T ptr mutable x, int i, Elem v) -> void  (v[i] = x)
     EQ = auto()        # __eq__:     fn __eq__(T ptr a, T ptr b) -> bool  (a == b)
+    MIN = auto()       # __min__:    fn __min__(T ptr x) -> int   (cota inferior)
+    MAX = auto()       # __max__:    fn __max__(T ptr x) -> int   (cota superior)
+    EXTENDED = auto()  # hook DECLARADO POR EL PROYECTO (HTIMS): su identidad
+                       # es el NOMBRE, no este miembro. Ver semantic/extensions.py
 
 
 @dataclass(slots=True, frozen=True)
 class HookSpec:
     """Convención de firma de un hook: qué exige y cómo se asocia a su tipo.
 
-    ``owner_from_return``: ``True`` para ``__make__`` (dueño = tipo de
-    retorno ``ptr T``); ``False`` para el resto (dueño = primer parámetro
-    ``ptr T``). ``return_primitive``: nombre del primitivo que el hook debe
-    devolver (``None`` = el retorno es ``ptr T`` y define al dueño).
-    ``exact_params``: número exacto de parámetros exigido (``None`` = libre,
-    solo ``__make__``).
+    ``owner_from_return``: el dueño sale del tipo de RETORNO en vez del
+    primer parámetro. ``return_primitive``: nombre del primitivo que el hook
+    debe devolver (``None`` = el retorno define al dueño). ``exact_params``:
+    número exacto de parámetros exigido (``None`` = libre).
     """
     kind: HookKind
     owner_from_return: bool
     return_primitive: Optional[str]
     exact_params: Optional[int]
+    #: firma EXACTA que prometió una extensión del proyecto (HTIMS). Cuando
+    #: está presente manda sobre las convenciones genéricas de arriba: no se
+    #: comprueba "el retorno debe ser int" sino "la firma debe ser LA que
+    #: declaró physics.py". ``None`` en los hooks del vocabulario fijo.
+    declared: Optional[object] = None
 
 
 # nombre "dunder" SIN guiones (Token.value, ver scanners/ident.py) -> spec.
 # Única fuente de verdad de qué nombres son hooks reconocidos y su firma.
 HOOK_SPECS: dict[str, HookSpec] = {
     "free":   HookSpec(HookKind.FREE,   owner_from_return=False, return_primitive="void", exact_params=1),
-    "make":   HookSpec(HookKind.MAKE,   owner_from_return=True,  return_primitive=None,   exact_params=None),
     "sizeof": HookSpec(HookKind.SIZEOF, owner_from_return=False, return_primitive="int",  exact_params=1),
     "print":  HookSpec(HookKind.PRINT,  owner_from_return=False, return_primitive="void", exact_params=1),
     "len":    HookSpec(HookKind.LEN,    owner_from_return=False, return_primitive="int",  exact_params=1),
@@ -102,6 +111,15 @@ HOOK_SPECS: dict[str, HookSpec] = {
     "index_set": HookSpec(HookKind.INDEX_SET, owner_from_return=False, return_primitive="void", exact_params=3),
     # __eq__: 'a == b'. Dos receptores del MISMO tipo, retorna 'bool'.
     "eq":     HookSpec(HookKind.EQ,     owner_from_return=False, return_primitive="bool",  exact_params=2),
+    # __min__/__max__: el RANGO de un tipo numerico de libreria. Son los
+    # unicos hooks que el compilador lee en COMPILACION (no los ejecuta: lee
+    # el literal de su 'return'), y existen porque sin ellos un
+    # 'const dt.int8 a = 10;' no se puede aceptar sin mentir — el compilador
+    # sabe que int8 mide 1 byte pero no si ese byte va de -128 a 127 o de 0 a
+    # 255, asi que no puede decidir si el 10 cabe. Con ellos la conversion
+    # implicita de un LITERAL es exacta: cabe o es un error que dice el rango.
+    "min":    HookSpec(HookKind.MIN,    owner_from_return=False, return_primitive="int",   exact_params=1),
+    "max":    HookSpec(HookKind.MAX,    owner_from_return=False, return_primitive="int",   exact_params=1),
 }
 
 # compatibilidad con el vocabulario anterior (nombre -> HookKind)
@@ -112,6 +130,14 @@ KNOWN_HOOKS: dict[str, HookKind] = {name: spec.kind for name, spec in HOOK_SPECS
 CALL_HOOKS: dict[str, HookKind] = {
     "print": HookKind.PRINT,
     "len": HookKind.LEN,
+    # 'min(T)' / 'max(T)': el rango de un tipo numerico de libreria. NO son
+    # keywords (no cuestan vocabulario) y su argumento puede nombrar un TIPO
+    # o un VALOR — igual que 'sizeof'. La diferencia con print/len es que
+    # estos no despachan en ejecucion: el rango YA es una constante de
+    # compilacion (por eso '__min__'/'__max__' tienen el cuerpo restringido a
+    # un literal), asi que la llamada se pliega al entero que devuelven.
+    "min": HookKind.MIN,
+    "max": HookKind.MAX,
 }
 
 
@@ -122,7 +148,8 @@ def classify_hook(dunder_name: str) -> Optional[HookKind]:
     return spec.kind if spec is not None else None
 
 
-def validate_hook(fn: ast.FunctionDecl, dunder_name: str) -> Tuple[Optional[str], Optional[str]]:
+def validate_hook(fn: ast.FunctionDecl, dunder_name: str,
+                  spec: Optional[HookSpec] = None) -> Tuple[Optional[str], Optional[str]]:
     """Valida la firma COMPLETA de un hook y devuelve ``(owner, error)``.
 
     - ``(owner, None)``: firma válida; ``owner`` es el nombre del tipo dueño.
@@ -132,7 +159,15 @@ def validate_hook(fn: ast.FunctionDecl, dunder_name: str) -> Tuple[Optional[str]
     Se valida parámetros Y tipo de retorno (antes solo se miraba el lado que
     define al dueño: ``__free__`` sin retorno ``void`` pasaba sin queja).
     """
-    spec = HOOK_SPECS[dunder_name]
+    # El spec puede venir del vocabulario FIJO o del que aporta el proyecto
+    # (HTIMS). Se recibe como parámetro en vez de buscarlo en un diccionario
+    # de módulo porque el vocabulario ya no es el mismo para todos: depende
+    # del proyecto que se esté compilando.
+    if spec is None:
+        spec = HOOK_SPECS[dunder_name]
+
+    if spec.declared is not None:
+        return _validate_declared(fn, spec.declared)
 
     if spec.exact_params is not None and len(fn.params) != spec.exact_params:
         return None, (
@@ -173,6 +208,66 @@ def validate_hook(fn: ast.FunctionDecl, dunder_name: str) -> Tuple[Optional[str]
     return owner, None
 
 
+def _validate_declared(fn: ast.FunctionDecl, firma) -> Tuple[Optional[str], Optional[str]]:
+    """Valida un hook de usuario contra la firma que declaró su extensión.
+
+    Es una comparación EXACTA, tipo a tipo: la extensión prometió una firma y
+    el ``.srcx`` tiene que cumplirla. No hay convención genérica que aplicar
+    —el compilador no sabe qué significa ``__gravity__``— y precisamente por
+    eso la promesa escrita es lo único que se puede hacer cumplir.
+
+    El dueño sale del PRIMER parámetro, como en el resto de hooks de
+    instancia, y además debe coincidir con el ``owner`` declarado: un
+    ``__gravity__`` de ``Body`` no puede implementarse sobre ``Sound``.
+    """
+    from .extensions import format_type
+    from ..parser.typed_ast import resolve_type_expr
+
+    esperados = firma.params
+    if len(fn.params) != len(esperados):
+        return None, (
+            f"'{fn.name}' debe declarar {len(esperados)} parámetro(s) — es lo "
+            f"que promete la extensión '{firma.module}': {firma.describe()}"
+        )
+
+    for i, (param, esperado) in enumerate(zip(fn.params, esperados), start=1):
+        try:
+            real = resolve_type_expr(param.type)
+        except Exception:
+            real = None
+        if real != esperado:
+            visto = format_type(real) if real is not None else "<?>"
+            return None, (
+                f"el parámetro {i} de '{fn.name}' es '{visto}' y la extensión "
+                f"'{firma.module}' lo declaró '{format_type(esperado)}' "
+                f"({firma.describe()})"
+            )
+
+    try:
+        retorno = resolve_type_expr(fn.return_type) if fn.return_type is not None else None
+    except Exception:
+        retorno = None
+    if retorno != firma.returns:
+        visto = format_type(retorno) if retorno is not None else "<?>"
+        return None, (
+            f"'{fn.name}' devuelve '{visto}' y la extensión '{firma.module}' "
+            f"lo declaró '{format_type(firma.returns)}'"
+        )
+
+    owner = _nominal_ptr_target(fn.params[0].type)
+    if owner is None:
+        return None, (
+            f"el primer parámetro de '{fn.name}' debe ser 'T ptr' (T nominal): "
+            "es lo que hace del hook un hook DE un tipo"
+        )
+    if owner != firma.owner:
+        return None, (
+            f"'{fn.name}' se implementa sobre '{owner}' pero la extensión "
+            f"'{firma.module}' lo declaró de '{firma.owner}'"
+        )
+    return owner, None
+
+
 def hook_owner_type_name(fn: ast.FunctionDecl, kind: HookKind) -> Optional[str]:
     """Nombre del tipo nominal dueño del hook, según su convención de firma.
 
@@ -180,8 +275,6 @@ def hook_owner_type_name(fn: ast.FunctionDecl, kind: HookKind) -> Optional[str]:
     de la firma); para el registro real usar :func:`validate_hook`, que
     valida la firma completa.
     """
-    if kind is HookKind.MAKE:
-        return _nominal_ptr_target(fn.return_type)
     if not fn.params:
         return None
     return _nominal_ptr_target(fn.params[0].type)

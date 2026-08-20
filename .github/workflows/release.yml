@@ -1,0 +1,200 @@
+name: Release
+
+# Publica un release DE VERDAD: construye, comprueba que lo construido sirve,
+# redacta las notas desde el historial y sube los artefactos con su checksum.
+#
+# EL DISPARADOR ES 'version.py'. Subir el numero ahi y empujar a main es el
+# unico acto manual del versionado: de ahi salen la etiqueta, el release, la
+# medalla, el titulo de la documentacion, el 'project()' de CMake y
+# 'suriaX --version'. Antes habia que acordarse de etiquetar a mano ademas de
+# tocar el archivo, y ese segundo paso es justo el que se olvida — el sintoma
+# era un README diciendo 0.1.4 mientras la documentacion publicaba 0.2.0.
+#
+# No puede publicar dos veces el mismo numero: si la etiqueta 'vX.Y.Z' ya
+# existe, el workflow termina sin hacer nada. Asi un push a main que toque
+# 'version.py' por cualquier otra razon (un comentario, el docstring) es
+# inofensivo.
+#
+# El empaquetado no se repite aqui: se reutiliza 'build.yml' con
+# 'workflow_call'. Hay una sola definicion de como se construye suriaX.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "version.py"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version a publicar (vacio: la de version.py)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  comprobar:
+    name: Que version toca publicar
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publicar: ${{ steps.v.outputs.publicar }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # las etiquetas: hacen falta para saber si ya existe
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Leer version.py y ver si ya esta publicada
+        id: v
+        run: |
+          v=$(python -c "import version; print(version.VERSION)")
+
+          # El input de 'workflow_dispatch' no elige la version: solo AFIRMA
+          # cual se cree estar publicando, para que esto la contradiga. La
+          # fuente sigue siendo el archivo.
+          esperada="${{ inputs.version }}"
+          if [ -n "$esperada" ] && [ "$esperada" != "$v" ]; then
+            echo "::error::pediste publicar $esperada y version.py dice $v. Sube el numero en version.py (es la fuente unica)."
+            exit 1
+          fi
+
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+            echo "v$v ya esta etiquetada: no hay nada que publicar"
+            echo "publicar=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$v no existe todavia: se publica"
+            echo "publicar=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resumen
+        run: |
+          if [ "${{ steps.v.outputs.publicar }}" = "true" ]; then
+            echo "### Publicando suriaX ${{ steps.v.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### suriaX ${{ steps.v.outputs.version }} ya estaba publicada — sin cambios" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # La suite tiene que pasar ANTES de publicar. Un release verde con pruebas
+  # rojas es peor que no publicar: queda para siempre.
+  pruebas:
+    name: La suite pasa
+    needs: comprobar
+    if: needs.comprobar.outputs.publicar == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Preparar node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          python -m pip install --upgrade pip
+          pip install protobuf pyyaml
+
+      - name: Suite
+        run: python test/main.py
+
+  construir:
+    name: Construir
+    needs: comprobar
+    if: needs.comprobar.outputs.publicar == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.comprobar.outputs.version }}
+
+  publicar:
+    name: Publicar el release
+    needs: [comprobar, pruebas, construir]
+    if: needs.comprobar.outputs.publicar == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write     # crear la etiqueta y el release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # el historial completo: hace falta para las notas
+
+      - name: Recuperar el paquete
+        uses: actions/download-artifact@v4
+        with:
+          name: paquete
+          path: dist
+
+      # Notas redactadas desde el historial real, no una plantilla vacia. La
+      # etiqueta todavia no existe (la crea el paso de publicar), asi que el
+      # rango se cuenta desde la ultima etiqueta hasta HEAD.
+      - name: Redactar las notas
+        id: notas
+        run: |
+          v="${{ needs.comprobar.outputs.version }}"
+          anterior=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          {
+            echo "## suriaX $v"
+            echo
+            if [ -n "$anterior" ]; then
+              echo "Cambios desde \`$anterior\`:"
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' "$anterior..HEAD"
+            else
+              echo "Primer release publicado desde este workflow."
+              echo
+              git log --no-merges --pretty=format:'- %s (%h)' -n 30
+            fi
+            echo
+            echo
+            echo "### Verificacion"
+            echo
+            echo 'Cada artefacto viaja con su `.sha256`:'
+            echo
+            echo '```'
+            cat dist/*.sha256
+            echo '```'
+            echo
+            echo "### Estado"
+            echo
+            echo "Pre-alpha: el frontend (lexer -> semantica -> HIR) y el interprete"
+            echo "tree-walk estan completos; el backend nativo (MIR -> VM/JIT) no."
+            echo "Ver [ROADMAP.md](https://github.com/${GITHUB_REPOSITORY}/blob/v$v/ROADMAP.md)."
+          } > NOTAS.md
+          cat NOTAS.md
+
+      # Crea la etiqueta 'vX.Y.Z' sobre este commit si no existe, y publica.
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.comprobar.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: suriaX ${{ needs.comprobar.outputs.version }}
+          body_path: NOTAS.md
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          draft: false
+          # Pre-alpha declarado: mientras el backend nativo no exista, un
+          # release "estable" prometeria algo que el ROADMAP contradice.
+          prerelease: true

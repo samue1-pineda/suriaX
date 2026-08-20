@@ -1,4 +1,3 @@
-
 name: Docs
 
 on:
@@ -8,12 +7,32 @@ on:
       - "documentation/**"
       - "docs/**"
       - "*.md"
+      # conf.py PUBLICA estos archivos, que viven junto al código que
+      # documentan (REPO_DOCS). Sin nombrarlos aquí, editarlos no reconstruía
+      # el sitio y la página quedaba mostrando la versión vieja sin que nada
+      # avisara — con 'test_docs_al_dia' comprobando, encima, que el texto del
+      # repositorio SÍ estaba al día. Un test de la suite exige que esta lista
+      # cubra todo REPO_DOCS.
+      - "lib/HOOKS.md"
+      - "web/README.md"
+      - "htims/readme.md"
+      - "V0/src/HIR/PROTOBUF_BRIDGE.md"
+      - "runtime/interpreter/ARQUITECTURA.md"
+      # el título del sitio lleva la versión, que sale de aquí
+      - "version.py"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "documentation/**"
       - "docs/**"
       - "*.md"
+      # los mismos REPO_DOCS de arriba
+      - "lib/HOOKS.md"
+      - "web/README.md"
+      - "htims/readme.md"
+      - "V0/src/HIR/PROTOBUF_BRIDGE.md"
+      - "runtime/interpreter/ARQUITECTURA.md"
+      - "version.py"
   workflow_dispatch:
 
 permissions:

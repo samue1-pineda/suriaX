@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
+from typing import Optional, Tuple
 
 
 class TypeKind(Enum):
@@ -45,12 +45,20 @@ class Type:
     Participa de la igualdad: ``ptr mutable T != ptr T`` — la coercion
     segura (mutable -> no-mutable) la decide ``semantic/type_service.py``,
     nunca una comparacion directa.
+
+    ``args`` solo aplica a ``NOMINAL``: son los ARGUMENTOS DE TIPO de un
+    generico (``Vector<int>``). Participan de la igualdad, que es todo el
+    punto: ``Vector<int>`` y ``Vector<str>`` son tipos DISTINTOS y el
+    compilador no los puede confundir. Una tupla (no lista) para que ``Type``
+    siga siendo hashable — se usa como clave en la tabla de conversiones y en
+    el pool de tipos del HIR.
     """
 
     kind: TypeKind
     name: Optional[str] = None
     inner: Optional["Type"] = None
     mut: bool = False
+    args: Tuple["Type", ...] = ()
 
     def __repr__(self) -> str:
         if self.kind is TypeKind.POINTER:
@@ -58,6 +66,8 @@ class Type:
         if self.kind is TypeKind.NULLABLE:
             return f"{self.inner!r}?"
         if self.kind is TypeKind.NOMINAL:
+            if self.args:
+                return f"{self.name}<{', '.join(repr(a) for a in self.args)}>"
             return f"{self.name}"
         if self.kind is TypeKind.ERROR:
             return f"error {self.inner!r}" if self.inner is not None else "error"
@@ -111,8 +121,9 @@ def nullable_of(inner: Type) -> Type:
     return Type(TypeKind.NULLABLE, inner=inner)
 
 
-def nominal(name: str) -> Type:
-    return Type(TypeKind.NOMINAL, name=name)
+def nominal(name: str, args: Tuple[Type, ...] = ()) -> Type:
+    """Tipo nominal, opcionalmente con ARGUMENTOS DE TIPO (``Vector<int>``)."""
+    return Type(TypeKind.NOMINAL, name=name, args=args)
 
 
 def error_of(inner: Optional[Type]) -> Type:

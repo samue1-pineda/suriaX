@@ -14,8 +14,8 @@ análisis lineal conservador deja pasar a propósito (``memory_check``,
 falsos negativos documentados). El intérprete no re-chequea lo ya validado:
 p. ej. la escritura a través de ``ptr`` no-mutable (SEM015) no se re-verifica.
 
-RBMM (arenas por región) NO está aquí: fuera del alcance v1, igual que en
-el HIR. ``region.py`` llegará con esa versión del esquema.
+No hay arenas por región: el modelo se retiró en v0.2.0. Las arenas del
+modelo nuevo son un tipo de librería y se apoyan en estas mismas celdas.
 """
 
 from __future__ import annotations

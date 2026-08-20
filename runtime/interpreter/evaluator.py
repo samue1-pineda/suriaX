@@ -17,20 +17,23 @@ caliente.
 
 from __future__ import annotations
 
+import math
 from typing import Any, List, Optional
 
 from .enviroment.environment import Frame
 from .errors import (
     IndexOutOfRangeError, InvalidCastRuntimeError, InvalidFreeError,
     MissingIntrinsicError, NotCallableError, NotIndexableError,
-    NullDereferenceError, StepLimitError, UnsupportedNodeError,
+    NullDereferenceError, StepLimitError, SuriaXRuntimeError,
+    UnsupportedNodeError,
 )
-from .hook.dispatch import type_key
+from .hook.dispatch import hook_key, ref_key, type_key
 from . import intrinsics
 from .memory.block import Block
-from .memory.pointer import Cell, Pointer
+from .memory.pointer import Cell, CellState, Pointer
 from .values import (
-    EnumNamespace, FunctionValue, Namespace, StructValue, TypeValue,
+    EnumNamespace, EnumValue, FunctionValue, Namespace, StructValue,
+    TypeValue, VariantCtor,
     format_value,
 )
 
@@ -68,12 +71,14 @@ class Thrown(Exception):
 
 # TypeKind del esquema (valores estables del .proto; ver hir.proto)
 _TK_BOOL, _TK_INT, _TK_FLOAT, _TK_CHAR, _TK_STR = 2, 3, 4, 5, 6
+_TK_NOMINAL = 9   # espejo de TypeKind.NOMINAL en el esquema del HIR
 
 
 class Evaluator:
     __slots__ = ("image", "trace", "trace_exec", "max_steps", "steps",
-                 "events", "depth", "_stmt_dispatch", "_expr_dispatch",
-                 "_index_kind", "_index_set_kind", "_eq_kind")
+                 "events", "depth", "unit", "_stmt_dispatch", "_expr_dispatch",
+                 "_index_kind", "_index_set_kind", "_eq_kind", "_len_kind",
+                 "_temporales")
 
     def __init__(self, image, *, trace: bool = False, max_steps: int = 0,
                  trace_exec: bool = False,
@@ -88,12 +93,21 @@ class Evaluator:
         # ademas de -- imprimirse. None = solo consola.
         self.events: Optional[List[str]] = events
         self.depth = 0
+        # temporales de la sentencia en curso: (valor, HookRef). Ver
+        # 'exec_stmt' y '_registrar_temporal'.
+        self._temporales: List[Any] = []
+        # unidad cuyo codigo se esta ejecutando. Hace falta porque los tipos
+        # de las expresiones viajan como INDICE en el pool de SU unidad
+        # (Expr.type_id, esquema v2): resolverlos exige saber de que modulo
+        # salio la expresion. La monta 'call_function' y la restaura al salir.
+        self.unit = image.main
         # valores enteros de los kinds de hook despachados por sintaxis ('v[i]',
         # 'v[i]=x', 'a==b') contra image.hooks — sin cablear el número del enum.
         from V0.src.HIR.stubs import load_hir_pb2
         _hk = load_hir_pb2().HookKind
         self._index_kind = _hk.Value("INDEX")
         self._index_set_kind = _hk.Value("INDEX_SET")
+        self._len_kind = _hk.Value("LEN")
         self._eq_kind = _hk.Value("EQ")
         self._stmt_dispatch = {
             "block": self._stmt_block,
@@ -166,11 +180,14 @@ class Evaluator:
         for param, value in zip(decl.params, args):
             frame.define(param.name, Cell(value, name=param.name))
         result = None
+        previa = self.unit
+        self.unit = unit
         try:
             self._exec_block(decl.body, Frame(parent=frame))
         except _Return as ret:
             result = ret.value
         finally:
+            self.unit = previa
             self.depth -= 1
         if self.trace_exec:
             self.emit(f"[ret ] {decl.name} -> {format_value(result)}")
@@ -180,8 +197,65 @@ class Evaluator:
     # statements
     # ------------------------------------------------------------------ #
     def _exec_block(self, block, frame: Frame) -> None:
-        for stmt in block.statements:
-            self.exec_stmt(stmt, frame)
+        if not block.drops:
+            # camino rapido: la inmensa mayoria de los bloques no destruye
+            # nada, y no deben pagar el 'try' ni la llamada extra.
+            for stmt in block.statements:
+                self.exec_stmt(stmt, frame)
+            return
+        try:
+            for stmt in block.statements:
+                self.exec_stmt(stmt, frame)
+        finally:
+            # 'finally' y no un simple final: el bloque tambien se cierra por
+            # 'return', 'break', 'continue' y 'throw', y en todos esos casos
+            # los valores mueren igual. Un drop que solo corriera en la salida
+            # normal seria una fuga en cuanto hubiera un 'return' temprano.
+            self._drop_scope(block, frame)
+
+    def _drop_scope(self, block, frame: Frame) -> None:
+        """Destruye los valores del bloque que sigan VIVOS.
+
+        La lista de candidatos es estatica (la decidio la Semantica por el
+        TIPO); lo que es dinamico es cuales siguen vivos. Esa pregunta no
+        necesita maquinaria nueva: la celda ya lleva su estado, porque es la
+        misma que hace cumplir el use-after-move y el use-after-free. Asi un
+        'move' dentro de un 'if' sale correcto sin analisis de flujo — si la
+        rama corrio, la celda esta MOVED y aqui no se toca.
+        """
+        for drop in block.drops:
+            cell = self._celda_de_ruta(frame, drop.path)
+            if cell is None:
+                continue
+            bound = self.image.hooks.get(ref_key(drop.hook))
+            if bound is not None:
+                self.call_function(bound[0], bound[1],
+                                   [Pointer(cell, mut=True)])
+            cell.free()
+            if self.trace:
+                self.emit(f"[mem] drop -> celda '{'.'.join(drop.path)}'")
+
+    def _celda_de_ruta(self, frame: Frame, path) -> Optional[Cell]:
+        """La celda al final de ``path``, o ``None`` si algo por el camino ya
+        no esta vivo.
+
+        Comprueba el estado a CADA paso y nunca llama a ``read()``: esto corre
+        dentro de un ``finally``, asi que una excepcion aqui taparia la que
+        venia en curso (un 'throw' del programa, por ejemplo). Los estados no
+        son un error — son la respuesta: si el valor ya se movio o se libero,
+        no hay nada que destruir.
+        """
+        cell = frame.cells.get(path[0])
+        for campo in path[1:]:
+            if cell is None or cell.state is not CellState.LIVE:
+                return None
+            valor = cell.value
+            if not isinstance(valor, StructValue):
+                return None
+            cell = valor.fields.get(campo)
+        if cell is None or cell.state is not CellState.LIVE:
+            return None
+        return cell
 
     def exec_stmt(self, stmt, frame: Frame) -> None:
         self._tick(stmt.ln, stmt.col)
@@ -192,7 +266,33 @@ class Evaluator:
                 f"sentencia '{which}' sin soporte de ejecución",
                 ln=stmt.ln, col=stmt.col,
             )
-        handler(stmt, frame)
+        # TEMPORALES. Un valor que posee recursos y que nadie recibe muere al
+        # terminar la SENTENCIA que lo produjo — 'recibe(R{...})' no le da
+        # dueno a nadie. La marca es el largo de la pila: lo que se apile
+        # durante esta sentencia se suelta al salir de ella, tambien si sale
+        # por una excepcion (un 'throw' del programa no debe filtrar).
+        marca = len(self._temporales)
+        try:
+            handler(stmt, frame)
+        finally:
+            if len(self._temporales) > marca:
+                self._soltar_temporales(marca)
+
+    def _soltar_temporales(self, marca: int) -> None:
+        while len(self._temporales) > marca:
+            valor, hook = self._temporales.pop()
+            bound = self.image.hooks.get(ref_key(hook))
+            if bound is None:
+                continue
+            self.call_function(bound[0], bound[1],
+                               [Pointer(Cell(valor), mut=True)])
+            if self.trace:
+                self.emit("[mem] drop temporal")
+
+    def _registrar_temporal(self, valor, hook_ref) -> None:
+        """Apila un valor sin dueno para destruirlo al cerrar la sentencia."""
+        if hook_ref.owner_type:
+            self._temporales.append((valor, hook_ref))
 
     def _stmt_block(self, stmt, frame: Frame) -> None:
         self._exec_block(stmt.block, Frame(parent=frame))
@@ -235,14 +335,120 @@ class Evaluator:
         node = stmt.match_stmt
         subject = self.eval_expr(node.subject, frame)
         for arm in node.cases:
-            if self.eval_expr(arm.pattern, frame) == subject:
-                self.exec_stmt(arm.body, Frame(parent=frame))
+            propio = Frame(parent=frame)
+            if self._encaja(arm.pattern, subject, frame, propio):
+                self.exec_stmt(arm.body, propio)
                 return
+
+    def _encaja(self, patron, subject, frame: Frame, propio: Frame) -> bool:
+        """¿El patrón de una rama describe a ``subject``?
+
+        Dos clases de patrón. La corriente es una EXPRESIÓN que se evalúa y se
+        compara (``case 0``, ``case Color.ROJO``). La otra DESESTRUCTURA una
+        variante (``case Nodo.Literal(v)``): ahí el patrón no se evalúa —sus
+        argumentos son nombres que se van a LIGAR, no valores que leer—, se
+        compara la variante y, si coincide, el payload entra en el frame de la
+        rama. Que las dos formas se escriban igual es lo que evitó tener que
+        inventar sintaxis de patrones.
+        """
+        ctor = self._constructor_de(patron, frame)
+        if ctor is None:
+            return self.eval_expr(patron, frame) == subject
+        # DEREF IMPLICITO, igual que en '.campo': un arbol recursivo se
+        # escribe con punteros ('Suma(Expr ptr, Expr ptr)'), asi que el sujeto
+        # de un match casi siempre LLEGA como puntero. Exigir un deref
+        # explicito haria imposible escribir el caso que motiva los tipos
+        # suma.
+        if isinstance(subject, Pointer):
+            subject = subject.deref(ln=patron.ln, col=patron.col)
+        if not isinstance(subject, EnumValue) or \
+                subject.variant != ctor.variant or \
+                subject.enum_name != ctor.enum_name:
+            return False
+        for arg, celda in zip(patron.call.args, subject.fields):
+            if arg.WhichOneof("node") == "identifier":
+                # se liga la CELDA, no una copia: mutar el payload dentro de
+                # la rama se ve fuera, igual que con un campo de struct.
+                propio.define(arg.identifier.name, celda)
+        return True
+
+    def _constructor_de(self, patron, frame: Frame):
+        """El :class:`VariantCtor` que nombra un patrón, o ``None``.
+
+        Se resuelve SIN evaluar los argumentos: evaluarlos es justo lo que no
+        se puede hacer, porque todavía no están ligados.
+        """
+        if patron.WhichOneof("node") != "call":
+            return None
+        try:
+            valor = self._eval_callee(patron.call.callee, frame)
+        except SuriaXRuntimeError:
+            return None
+        return valor if isinstance(valor, VariantCtor) else None
 
     def _stmt_return(self, stmt, frame: Frame) -> None:
         node = stmt.return_stmt
-        value = self.eval_expr(node.value, frame) if node.HasField("value") else None
+        if not node.HasField("value"):
+            raise _Return(None)
+        value = self.eval_expr(node.value, frame)
+        # DEVOLVER UN VALOR TRANSFIERE SU PROPIEDAD. Sin esto, el drop del
+        # bloque destruiria lo que el llamador acaba de recibir. Solo aplica a
+        # un nombre LOCAL: una global se devuelve prestada, no entregada.
+        # Vale igual para un campo ('return a.b'): sin esto, el drop del
+        # bloque bajaria a 'a.b' y destruiria lo que el llamador recibio.
+        # 'transfers' lo decidio el frontend: solo es cierto si el valor
+        # POSEE recursos. Devolver un 'int', o un campo de un receptor
+        # PRESTADO, no transfiere nada — y marcarlo invalidaria un valor ajeno.
+        cell = self._ruta_local(node.value, frame) if node.transfers else None
+        if cell is not None and cell.state is CellState.LIVE:
+            # 'move_out' es la API que comparten los dos backends de memoria
+            # (el nativo expone 'state' como solo lectura).
+            cell.move_out(ln=stmt.ln, col=stmt.col)
         raise _Return(value)
+
+    def _ruta_local(self, expr, frame: Frame) -> Optional[Cell]:
+        """La celda de una ruta ESTATICA (``a`` o ``a.b.c``) cuya raiz es un
+        binding de esta llamada, o ``None``.
+
+        Exigir que la raiz sea local no es un detalle: marcar como movida la
+        celda de una global la dejaria inservible para el resto del programa.
+        Una global se presta, no se entrega.
+        """
+        partes = []
+        nodo = expr
+        while True:
+            which = nodo.WhichOneof("node")
+            if which == "identifier":
+                partes.append(nodo.identifier.name)
+                break
+            if which != "member":
+                return None
+            partes.append(nodo.member.member)
+            nodo = nodo.member.obj
+        partes.reverse()
+        cell = self._celda_local(frame, partes[0])
+        for campo in partes[1:]:
+            if cell is None or cell.state is not CellState.LIVE:
+                return None
+            valor = cell.value
+            if not isinstance(valor, StructValue):
+                return None
+            cell = valor.fields.get(campo)
+        return cell
+
+    def _celda_local(self, frame: Frame, name: str):
+        """La celda de ``name`` si vive en ESTA llamada, no en el frame global.
+
+        La distincion importa: marcar una global como movida al devolverla la
+        dejaria inservible para el resto del programa."""
+        globales = self.unit.globals_frame if self.unit is not None else None
+        actual = frame
+        while actual is not None and actual is not globales:
+            cell = actual.cells.get(name)
+            if cell is not None:
+                return cell
+            actual = actual.parent
+        return None
 
     def _stmt_break(self, stmt, frame: Frame) -> None:
         raise _Break()
@@ -258,11 +464,20 @@ class Evaluator:
             if self.trace:
                 self.emit(f"[mem] move '{cell.name}' (celda invalidada)  "
                           f"{stmt.ln}:{stmt.col}")
-        else:
-            # forma compuesta ('move p.x'): sus lecturas sí se verifican;
-            # el tracking fino de campos es del MIR (mismo criterio que
-            # memory_check estático).
-            self.eval_expr(target, frame)
+            return
+        # forma compuesta ('move p.x'): el CAMPO tiene su propia celda, asi
+        # que la transferencia se marca ahi. Sin esto el drop del bloque
+        # bajaria a ese campo y destruiria lo que ya se habia entregado.
+        cell = self._ruta_local(target, frame)
+        if cell is not None:
+            cell.move_out(ln=stmt.ln, col=stmt.col)
+            if self.trace:
+                self.emit(f"[mem] move campo '{cell.name}' (celda invalidada)  "
+                          f"{stmt.ln}:{stmt.col}")
+            return
+        # ruta dinamica ('move a[i].x'): sus lecturas si se verifican; el
+        # rastreo fino queda para el MIR (mismo criterio que memory_check).
+        self.eval_expr(target, frame)
 
     def _stmt_free(self, stmt, frame: Frame) -> None:
         node = stmt.free_stmt
@@ -273,7 +488,7 @@ class Evaluator:
                 ln=stmt.ln, col=stmt.col,
             )
         if node.hook.owner_type:
-            bound = self.image.hooks.get((node.hook.owner_type, node.hook.kind))
+            bound = self.image.hooks.get(ref_key(node.hook))
             if bound is not None:
                 self.call_function(bound[0], bound[1], [value],
                                    ln=stmt.ln, col=stmt.col)
@@ -298,14 +513,61 @@ class Evaluator:
         try:
             self._exec_block(node.try_block, Frame(parent=frame))
         except Thrown as thrown:
-            # el binding del catch vive SOLO en el scope de su bloque
-            catch_frame = Frame(parent=frame)
-            catch_frame.define(node.catch_name,
-                               Cell(thrown.value, name=node.catch_name))
-            if self.trace:
-                self.emit(f"[err] catch '{node.catch_name}' = "
-                          f"{format_value(thrown.value)}  {stmt.ln}:{stmt.col}")
-            self._exec_block(node.catch_block, catch_frame)
+            for rama in node.catches:
+                if not self._atrapa(rama, thrown.value):
+                    continue
+                # el binding de la rama vive SOLO en el scope de su bloque
+                catch_frame = Frame(parent=frame)
+                catch_frame.define(rama.name,
+                                   Cell(thrown.value, name=rama.name))
+                if self.trace:
+                    self.emit(f"[err] catch '{rama.name}' = "
+                              f"{format_value(thrown.value)}  "
+                              f"{stmt.ln}:{stmt.col}")
+                self._exec_block(rama.block, catch_frame)
+                return
+            # ninguna rama sabe manejarlo: sigue propagandose. Es lo que hace
+            # util filtrar por tipo — un 'catch' que no entiende el fallo no
+            # se lo queda.
+            raise
+
+    def _atrapa(self, rama, valor: Any) -> bool:
+        """¿La rama ``catch`` acepta este valor?
+
+        Sin tipo declarado, cualquiera. Con tipo, hay que preguntar en
+        EJECUCION de que es el valor: ``throw`` acepta cualquier cosa, asi que
+        el tipo dinamico del valor lanzado es lo unico que hay para decidir.
+        """
+        if not rama.HasField("type"):
+            return True
+        return self._es_de_tipo(valor, rama.type)
+
+    def _es_de_tipo(self, valor: Any, tipo) -> bool:
+        """¿``valor`` es del tipo ``tipo``? (prueba DINAMICA, solo para catch)
+
+        Es la unica parte del intérprete que pregunta el tipo de un valor: en
+        todo lo demas el frontend ya decidió. Aqui no puede, porque lo que
+        lanzo el ``throw`` se sabe en ejecucion.
+        """
+        kind = tipo.kind
+        if kind == _TK_NOMINAL:
+            nombre = tipo.name.rsplit(".", 1)[-1]
+            if isinstance(valor, StructValue):
+                return valor.type_name.rsplit(".", 1)[-1] == nombre
+            if isinstance(valor, EnumValue):
+                return valor.enum_name.rsplit(".", 1)[-1] == nombre
+            return False
+        if kind == _TK_INT:
+            return isinstance(valor, int) and not isinstance(valor, bool)
+        if kind == _TK_STR:
+            return isinstance(valor, str)
+        if kind == _TK_BOOL:
+            return isinstance(valor, bool)
+        if kind == _TK_FLOAT:
+            return isinstance(valor, float)
+        if kind == _TK_CHAR:
+            return isinstance(valor, str) and len(valor) == 1
+        return False
 
     # ------------------------------------------------------------------ #
     # expresiones
@@ -319,7 +581,15 @@ class Evaluator:
                 f"expresión '{which}' sin soporte de ejecución",
                 ln=expr.ln, col=expr.col,
             )
-        return handler(expr, frame)
+        valor = handler(expr, frame)
+        # un valor recien producido que POSEE recursos y que nadie recibe se
+        # apila para destruirlo al cerrar la sentencia. Quien marco el nodo fue
+        # el frontend; aqui solo se obedece.
+        if which == "call":
+            self._registrar_temporal(valor, expr.call.temp_drop)
+        elif which == "struct_literal":
+            self._registrar_temporal(valor, expr.struct_literal.temp_drop)
+        return valor
 
     def _expr_literal(self, expr, frame: Frame) -> Any:
         lit = expr.literal
@@ -393,6 +663,16 @@ class Evaluator:
             if isinstance(left, int) and not isinstance(left, bool):
                 return left // right
             return left / right
+        if op == "%":
+            # resto CON EL SIGNO DEL DIVIDENDO (como C, no como Python):
+            # '-7 % 3' es -1, no 2. El backend nativo bajará a la instrucción
+            # de resto del hardware, que hace justo esto; si el intérprete
+            # usara el '%' de Python, los dos targets darían números distintos
+            # para el mismo programa.
+            if isinstance(left, int) and not isinstance(left, bool):
+                resto = abs(left) % abs(right)
+                return -resto if left < 0 else resto
+            return math.fmod(left, right)
         if op == "==":
             eq = self._dispatch_eq(left, right, expr)
             return (left == right) if eq is None else eq
@@ -415,7 +695,7 @@ class Evaluator:
         devuelve su resultado; ``None`` si no aplica (se cae a la identidad)."""
         if isinstance(left, StructValue) and isinstance(right, StructValue) \
                 and left.type_name == right.type_name:
-            bound = self.image.hooks.get((left.type_name, self._eq_kind))
+            bound = self.image.hooks.get(hook_key(left.type_name, self._eq_kind))
             if bound is not None:
                 return bool(self.call_function(bound[0], bound[1], [left, right],
                                                ln=expr.ln, col=expr.col))
@@ -442,7 +722,7 @@ class Evaluator:
             # 'v[i] = x' sobre un tipo nominal con hook __index_set__: despacha
             # al hook (el indexado crudo de puntero/bloque sigue por _element_cell).
             if isinstance(base, StructValue):
-                bound = self.image.hooks.get((base.type_name, self._index_set_kind))
+                bound = self.image.hooks.get(hook_key(base.type_name, self._index_set_kind))
                 if bound is not None:
                     self.call_function(bound[0], bound[1], [base, idx, value],
                                        ln=expr.ln, col=expr.col)
@@ -460,12 +740,24 @@ class Evaluator:
         callee = node.callee
         # despacho de hook FIJO ya enlazado (print(x) / x.print() / len(x))
         if node.hook.owner_type:
-            bound = self.image.hooks.get((node.hook.owner_type, node.hook.kind))
+            bound = self.image.hooks.get(ref_key(node.hook))
             if bound is not None:
-                args = [self.eval_expr(a, frame) for a in node.args]
-                # forma 'x.print()': el receptor es el primer argumento
-                if callee.WhichOneof("node") == "member" and not args:
-                    args = [self.eval_expr(callee.member.obj, frame)]
+                # forma 'x.hook(...)': el receptor es el PRIMER argumento y no
+                # viaja en 'node.args'. Se detecta por aridad —al cuerpo le
+                # falta exactamente un parámetro—, así que vale igual para
+                # 'x.print()' (0 argumentos, 1 parámetro) que para un hook del
+                # proyecto 'b.__gravity__(dt)' (1 y 2). Antes solo se cubría el
+                # caso sin argumentos, y el primer argumento acababa ocupando
+                # el sitio del receptor.
+                es_miembro = callee.WhichOneof("node") == "member"
+                falta_receptor = (es_miembro and
+                                  len(node.args) + 1 == len(bound[1].params))
+                args = []
+                if falta_receptor:
+                    # se evalúa ANTES que los argumentos: es el orden en que
+                    # está escrito, y el receptor puede tener efectos.
+                    args.append(self.eval_expr(callee.member.obj, frame))
+                args.extend(self.eval_expr(a, frame) for a in node.args)
                 return self.call_function(bound[0], bound[1], args,
                                           ln=expr.ln, col=expr.col)
             # método de usuario 'x.__metodo__(args)' -> dunder (owner, nombre).
@@ -480,9 +772,33 @@ class Evaluator:
                     args.extend(self.eval_expr(a, frame) for a in node.args)
                     return self.call_function(method[0], method[1], args,
                                               ln=expr.ln, col=expr.col)
+            # 'len(s)' sobre un 'str': NATIVO, no lo declara ninguna libreria.
+            # Llega como una HookRef con dueño 'str' (la marca el frontend),
+            # así que se reconoce por TIPO y no por el nombre de la llamada —
+            # una 'fn len' del usuario nunca pasa por aquí.
+            if node.hook.owner_type == "str" and \
+                    node.hook.kind == self._len_kind:
+                receptor = (callee.member.obj
+                            if callee.WhichOneof("node") == "member"
+                            else node.args[0])
+                return len(self.eval_expr(receptor, frame))
 
         callee_value = self._eval_callee(node.callee, frame)
         args = [self.eval_expr(a, frame) for a in node.args]
+        if isinstance(callee_value, VariantCtor):
+            # 'Nodo.Literal(5)' construye el valor de la variante. El payload
+            # va en celdas, como los campos de un struct: asi participa del
+            # mismo modelo de memoria que todo lo demas.
+            if len(args) != callee_value.arity:
+                raise NotCallableError(
+                    f"'{callee_value.enum_name}.{callee_value.variant}' lleva "
+                    f"{callee_value.arity} valor(es), se pasaron {len(args)}",
+                    ln=expr.ln, col=expr.col,
+                )
+            celdas = [Cell(v, name=f"{callee_value.variant}.{i}")
+                      for i, v in enumerate(args)]
+            return EnumValue(callee_value.enum_name, callee_value.variant,
+                             celdas)
         if isinstance(callee_value, FunctionValue):
             unit = self.image.main if callee_value.unit_alias == "" \
                 else self.image.units[callee_value.unit_alias]
@@ -511,7 +827,7 @@ class Evaluator:
         # (v.gr. un vector de librería). El indexado crudo de puntero/bloque
         # sigue por _element_cell.
         if isinstance(base, StructValue):
-            bound = self.image.hooks.get((base.type_name, self._index_kind))
+            bound = self.image.hooks.get(hook_key(base.type_name, self._index_kind))
             if bound is not None:
                 return self.call_function(bound[0], bound[1], [base, idx],
                                           ln=expr.ln, col=expr.col)
@@ -546,7 +862,7 @@ class Evaluator:
     def _expr_sizeof(self, expr, frame: Frame) -> Any:
         node = expr.sizeof
         if node.hook.owner_type:
-            bound = self.image.hooks.get((node.hook.owner_type, node.hook.kind))
+            bound = self.image.hooks.get(ref_key(node.hook))
             if bound is not None:
                 return self.call_function(bound[0], bound[1], [None],
                                           ln=expr.ln, col=expr.col)
@@ -572,19 +888,49 @@ class Evaluator:
             return chr(value)
         elif kind == _TK_BOOL and isinstance(value, bool):
             return value
-        elif kind == _TK_STR and isinstance(value, str):
-            return value
+        elif kind == _TK_STR and isinstance(value, (str, bool, int, float)):
+            # primitivo -> 'str': la MISMA representacion que interpola un
+            # f-string ('format_value'), y no 'str()' de Python, porque si
+            # divergieran 'cast<str>(true)' y f"{true}" darian dos textos
+            # distintos para el mismo valor.
+            return value if isinstance(value, str) else format_value(value)
 
-        # tabla de conversiones (__cast__): par (origen estático, destino)
-        source_key = type_key(node.value.restype) if node.value.HasField("restype") else None
-        bound = self.image.casts.get((source_key, type_key(node.type)))
+        # tabla de conversiones (__cast__): par (origen estático, destino).
+        # El origen es el tipo de la expresión, que viaja como ÍNDICE en el
+        # pool de su unidad (Expr.type_id); el destino va inline en el nodo.
+        # Hace falta el par completo porque un tipo puede declarar VARIAS
+        # conversiones ('int -> int8' y 'float -> int8'), y el HookRef del
+        # nodo —(dueño, clase, nombre)— no las distingue.
+        destino = type_key(node.type)
+        bound = self.image.casts.get((self._tipo_de(node.value), destino))
         if bound is not None:
+            # un '__cast__' declarado como PROTOTIPO lo resuelve el host. No
+            # sirve el registro por NOMBRE de 'call_function': todos se llaman
+            # '__cast__' y lo que los distingue es el tipo DESTINO, que solo
+            # se conoce aquí (mismo motivo por el que el par viaja en
+            # 'image.casts' y no en el HookRef del nodo).
+            if not bound[1].HasField("body"):
+                nativa = intrinsics.lookup_cast(node.type.name)
+                if nativa is not None:
+                    try:
+                        return nativa(value)
+                    except SuriaXRuntimeError as exc:
+                        exc.ln, exc.col = expr.ln, expr.col
+                        raise
             return self.call_function(bound[0], bound[1], [value],
                                       ln=expr.ln, col=expr.col)
         raise InvalidCastRuntimeError(
             f"sin conversión registrada para este par (valor: "
             f"{format_value(value)})", ln=expr.ln, col=expr.col,
         )
+
+    def _tipo_de(self, expr):
+        """Clave del tipo estático de ``expr``, resuelta contra el pool de la
+        unidad activa. ``0`` = sin tipo anotado (el esquema lo permite), y
+        entonces no hay clave que buscar."""
+        if not expr.type_id:
+            return None
+        return type_key(self.unit.module.types[expr.type_id])
 
     # ------------------------------------------------------------------ #
     # helpers

@@ -98,52 +98,82 @@ las palabras reservadas son lexemas con un significado fijo dentro de suriaX y n
 de las entradas de esta tabla; en caso contrario el lexema se clasifica como
 :ref:`IDENTIFIER <identifier-def>`.
 
+El conjunto ejecutable es ``KEYWORDS`` en ``V0/include/t_types.py``; esta
+tabla lo cubre entero. En la v0.2.0 dejaron de ser palabras reservadas
+``region``, ``shrd``, ``na``, ``in``, ``at``, ``new``, ``delete`` y ``make``:
+pertenecían al modelo por regiones, retirado con él (ver
+:ref:`decision-memoria`). Hoy son identificadores corrientes.
+
 .. table:: Palabras reservadas de control y declaración
     :width: 100%
     :widths: auto
     :align: center
 
-    +---------------------------------+------------+--------------------------------------------------------+
-    | Token                           | Lexema     | Descripción                                            |
-    +=================================+============+========================================================+
-    | :ref:`FUNCTION <function-def>`  | ``fn``     | Declara una función.                                   |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`RETURN <return-def>`      | ``return`` | Devuelve el control y, opcionalmente, un valor.        |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`IF <if-def>`              | ``if``     | Ejecuta condicionalmente un bloque.                    |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`ELSE <else-def>`          | ``else``   | Rama alternativa de un :ref:`if <if-def>`.             |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`WHILE <while-def>`        | ``while``  | Bucle controlado por condición.                        |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`MATCH <match-def>`        | ``match``  | Selección estructural por patrones.                    |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`CASE <case-def>`          | ``case``   | Rama de un :ref:`match <match-def>`.                   |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`BREAK <break-def>`        | ``break``  | Interrumpe el bucle o ``match`` actual.                |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`STRUCT <struct-def>`      | ``struct`` | Declara un tipo compuesto por campos.                  |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`ENUM <enum-def>`          | ``enum``   | Declara un tipo enumerado.                             |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`TYPE <type-def>`          | ``type``   | Define un alias a partir de un                         |
-    |                                 |            | :ref:`struct <struct-def>`.                            |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`CONST <const-def>`        | ``const``  | Declara un binding inmutable.                          |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`MUTABLE <mutable-def>`    | ``mutable``| Marca un binding como mutable.                         |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`SHARED <shared-def>`      | ``shrd``   | Marca un valor como compartido (ver sección            |
-    |                                 |            | :ref:`propiedad y memoria <propiedad y memoria>`).     |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`SIZEOF <sizeof-def>`      | ``sizeof`` | Devuelve el tamaño de un tipo o valor.                 |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`AS <as-def-kw>`           | ``as``     | Conversión o aliasing (ver la directiva                |
-    |                                 |            | :ref:`as <as-def>`).                                   |
-    +---------------------------------+------------+--------------------------------------------------------+
-    | :ref:`TEST <test_fn-def>`       | ``test``   | Función nativa de prueba. NO confundir con             |
-    |                                 |            | la directiva :ref:`#test <test_directive-def>`.        |
-    +---------------------------------+------------+--------------------------------------------------------+
+    ==============  ==========================================================
+    Lexema          Significado
+    ==============  ==========================================================
+    ``fn``          Declara una función (:ref:`FUNCTION <function-def>`).
+    ``return``      Devuelve el control y, opcionalmente, un valor.
+    ``if``          Ejecuta condicionalmente un bloque.
+    ``else``        Rama alternativa de un ``if``.
+    ``while``       Bucle controlado por condición.
+    ``match``       Selección por valor; cada rama es un ``case``.
+    ``case``        Rama de un ``match``.
+    ``break``       Interrumpe el bucle actual.
+    ``continue``    Salta a la siguiente vuelta del bucle.
+    ``struct``      Declara un tipo compuesto por campos.
+    ``enum``        Declara un tipo enumerado.
+    ``type``        Declara un tipo nominal opaco, y es el metatipo.
+    ``const``       Binding inmutable.
+    ``var``         Binding mutable (es el valor por defecto).
+    ``mutable``     Mutabilidad de un puntero, dentro del tipo
+                    (``T ptr mutable``). NO califica variables.
+    ``ptr``         Tipo puntero, **postfijo** (``int ptr``).
+    ``sizeof``      Tamaño de un tipo o valor.
+    ``cast``        Conversión explícita: ``cast<T>(x)``.
+    ``hook``        Declara un hook del conjunto fijo (``hook fn __print__``).
+    ``dunder``      Declara un método especial libre (``dunder fn __x__``).
+    ``test``        Bloque de prueba de primer nivel.
+    ``throw``       Lanza un error.
+    ``try``         Bloque que captura errores.
+    ``catch``       Rama que recibe el error de un ``try``.
+    ``error``       Tipo unión valor-o-error (``error int``).
+    ``public``      Visible para quien importe la librería (por defecto).
+    ``private``     Visible dentro del mismo paquete.
+    ``internal``    Visible solo dentro del mismo archivo.
+    ``free``        Libera una celda a través de su puntero.
+    ``move``        Transfiere la propiedad e invalida el origen.
+    ==============  ==========================================================
+
+.. table:: Palabras reservadas de tipo y literal
+    :width: 100%
+    :widths: auto
+    :align: center
+
+    ==============  ==========================================================
+    Lexema          Significado
+    ==============  ==========================================================
+    ``int``         Entero con signo (:ref:`INT <int-def>`).
+    ``float``       Coma flotante (:ref:`FLOAT <float-def>`).
+    ``bool``        Lógico (:ref:`BOOL <bool-def>`).
+    ``char``        Un code point Unicode (:ref:`CHAR <char-def>`).
+    ``str``         Cadena Unicode (:ref:`STRING <string-def>`).
+    ``void``        Ausencia de valor (:ref:`VOID <void-def>`).
+    ``true``        Literal booleano verdadero.
+    ``false``       Literal booleano falso.
+    ``null``        Valor nulo (ver :ref:`NULLABLE <nullable-def>`).
+    ``and``         Conjunción lógica.
+    ``or``          Disyunción lógica.
+    ``not``         Negación lógica.
+    ==============  ==========================================================
+
+.. note::
+   ``as`` **no** es palabra reservada: solo tiene significado dentro de una
+   directiva (``#import io as es``), y fuera de ahí es un identificador
+   corriente. Tampoco es un operador de conversión — la única conversión es
+   :ref:`cast\<T\>(x) <conversiones>`.
+
+Las secciones siguientes desarrollan las de control y declaración.
 
 .. _function-def:
 
@@ -153,12 +183,12 @@ FUNCTION (``fn``)
 declara una función. el lexer emite el token ``FUNCTION`` al reconocer el lexema ``fn``; la firma completa
 es responsabilidad del :doc:`parser <sintactic_analysis>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
    fn suma(int a, int b) -> int {
-       return a + b
+       return a + b;
    }
 
 .. _return-def:
@@ -168,12 +198,12 @@ RETURN (``return``)
 
 finaliza la ejecución de una :ref:`función <function-def>` y, opcionalmente, devuelve un valor.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 2
 
    fn cuadrado(int x) -> int {
-       return x * x
+       return x * x;
    }
 
 .. _if-def:
@@ -183,12 +213,15 @@ IF (``if``)
 
 ejecuta un bloque solo si la condición se evalúa como :ref:`TRUE <true-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
-   :emphasize-lines: 1
+   :emphasize-lines: 4
 
-   if x > 0 {
-       IO.printf("positivo")
+   #from io #import stdp
+
+   int x = 1;
+   if (x > 0) {
+       stdp.println("positivo");
    }
 
 .. _else-def:
@@ -198,14 +231,17 @@ ELSE (``else``)
 
 rama alternativa asociada a un :ref:`if <if-def>`; se ejecuta cuando la condición es :ref:`FALSE <false-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 3
 
-   if x > 0 {
-       IO.printf("positivo")
+   #from io #import stdp
+
+   int x = 1;
+   if (x > 0) {
+       stdp.println("positivo");
    } else {
-       IO.printf("no positivo")
+       stdp.println("no positivo");
    }
 
 .. _while-def:
@@ -215,12 +251,13 @@ WHILE (``while``)
 
 repite un bloque mientras la condición se mantenga :ref:`TRUE <true-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   while i < 10 {
-       i = i + 1
+   int i = 0;
+   while (i < 10) {
+       i = i + 1;
    }
 
 .. _match-def:
@@ -230,13 +267,16 @@ MATCH (``match``)
 
 selección estructural por patrones. cada rama se introduce con :ref:`case <case-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
-   :emphasize-lines: 1,2,3
+   :emphasize-lines: 4,5,6
 
-   match estado {
-       case 0: IO.printf("cero")
-       case 1: IO.printf("uno")
+   #from io #import stdp
+
+   int estado = 0;
+   match (estado) {
+       case 0 { stdp.println("cero"); }
+       case 1 { stdp.println("uno"); }
    }
 
 .. _case-def:
@@ -246,12 +286,15 @@ CASE (``case``)
 
 introduce una rama dentro de un :ref:`match <match-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 2
 
-   match x {
-       case 1: return true
+   fn es_uno(int x) -> bool {
+       match (x) {
+           case 1 { return true; }
+       }
+       return false;
    }
 
 .. _break-def:
@@ -261,18 +304,14 @@ BREAK (``break``)
 
 interrumpe el bucle o :ref:`match <match-def>` más interno.
 
-.. note::
-   en ``t_types.py`` el valor numérico de ``BREAK`` coincide con el de ``COPY`` (ambos ``60``); esta colisión
-   debe resolverse en la definición del :class:`TokenType` antes de fijar la documentación de
-   :ref:`COPY <copy-def>`.
-
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 3
 
-   while true {
-       if salir {
-           break
+   bool salir = true;
+   while (true) {
+       if (salir) {
+           break;
        }
    }
 
@@ -284,14 +323,14 @@ STRUCT (``struct``)
 declara un tipo compuesto por campos. suele combinarse con :ref:`type <type-def>` para nombrar el tipo
 resultante.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1,2,3,4
 
    struct {
-       str text
-       int len
-   } string;
+       str text;
+       int len;
+   } Cadena;
 
 .. _enum-def:
 
@@ -300,13 +339,13 @@ ENUM (``enum``)
 
 declara un tipo enumerado.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
    enum Color {
        Rojo, Verde, Azul
-   }
+   };
 
 .. _type-def:
 
@@ -315,11 +354,11 @@ TYPE (``type``)
 
 define un tipo construido a partir de un :ref:`struct <struct-def>` u otro tipo existente.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   type Punto = struct { int x int y }
+   const type int8;
 
 .. _const-def:
 
@@ -328,11 +367,11 @@ CONST (``const``)
 
 declara un binding inmutable. es el complemento de :ref:`mutable <mutable-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   const IO = #import IO
+   const es = #import io;
 
 .. _mutable-def:
 
@@ -341,53 +380,41 @@ MUTABLE (``mutable``)
 
 marca un binding como mutable, permitiendo reasignaciones posteriores.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   mutable int contador = 0
-
-.. _shared-def:
-
-SHARED (``shrd``)
-~~~~~~~~~~~~~~~~~~
-
-marca un valor como compartido. se relaciona con el modelo de
-:ref:`propiedad y memoria <propiedad y memoria>` y puede combinarse con :ref:`@owner <owner-def>`
-(p. ej. ``@owner(shrd)``).
-
-.. code-block:: text
-   :linenos:
-   :emphasize-lines: 1
-
-   shrd int recurso = 0
+   int valor = 0;
+   int ptr mutable p = &valor;
 
 .. _sizeof-def:
 
 SIZEOF (``sizeof``)
 ~~~~~~~~~~~~~~~~~~~~~
 
-operador que devuelve el tamaño en memoria de un tipo o de un valor.
+operador que devuelve el tamaño en memoria de un tipo o de un valor. El
+tamaño lo aporta el hook ``__sizeof__`` del tipo: los primitivos no lo
+declaran —su layout es cosa del backend— así que ``sizeof(int)`` es
+``RT011`` al ejecutar.
 
-.. code-block:: text
+Entre los paréntesis va un **tipo** o el **nombre de un valor**; se escriben
+igual y cuál es lo decide la Semántica, que es la única que sabe en qué
+namespace vive ese nombre. Un valor aporta el tamaño de *su* tipo, que es lo
+que hace posible preguntar por un tamaño sin saber ya el tipo — y por tanto
+imprimirlo:
+
+.. code-block:: srcx
    :linenos:
-   :emphasize-lines: 1
+   :emphasize-lines: 5,6
 
-   int n = sizeof(int)
+   #from d_types #import dt_variables as dt
+   #from io #import stdpf
 
-.. _as-def-kw:
+   const dt.int32 n = 0;
+   int del_tipo  = sizeof(dt.int32);   // 4
+   int del_valor = sizeof(n);          // 4, el mismo
 
-AS (``as``)
-~~~~~~~~~~~~
-
-realiza conversión de tipos o aliasing. también aparece en la directiva
-:ref:`#import ... as ... <import-def>`.
-
-.. code-block:: text
-   :linenos:
-   :emphasize-lines: 1
-
-   float f = entero as float
+   stdpf.printf(cast<str>(sizeof(n)));
 
 .. _test_fn-def:
 
@@ -398,12 +425,14 @@ función nativa de prueba. **NO** debe confundirse con la directiva
 :ref:`#test <test_directive-def>`: ``test`` sin ``#`` es una función, mientras que ``#test`` es una
 directiva del compilador (ver :ref:`directivas <directivas>`).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
+   fn suma(int a, int b) -> int { return a + b; }
+
    test "suma basica" {
-       assert(suma(2, 3) == 5)
+       var int r = suma(2, 3);
    }
 
 .. _tipos de datos:
@@ -452,11 +481,11 @@ INT (``int``)
 tipo entero. un literal entero mal formado o fuera de rango produce
 :ref:`LEX005 <LEX005-def>` / :ref:`LEX006 <LEX006-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   int edad = 25
+   int edad = 25;
 
 .. _float-def:
 
@@ -465,11 +494,11 @@ FLOAT (``float``)
 
 número en coma flotante. múltiples puntos decimales generan :ref:`LEX006 <LEX006-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   float pi = 3.1416
+   float pi = 3.1416;
 
 .. _char-def:
 
@@ -479,11 +508,11 @@ CHAR (``char``)
 representa exactamente un :ref:`code point Unicode <unicode-ref>`. un literal vacío o con más de un
 carácter produce :ref:`LEX011 <LEX011-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   char inicial = 'A'
+   char inicial = 'A';
 
 .. _string-def:
 
@@ -493,11 +522,11 @@ STRING (``str``)
 secuencia de code points Unicode almacenada sin pérdida (ver :ref:`tabla unicode <unicode-ref>`). una
 cadena sin cierre produce :ref:`LEX002 <LEX002-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   str saludo = "hola!"
+   str saludo = "hola!";
 
 .. _bool-def:
 
@@ -506,11 +535,11 @@ BOOL (``bool``)
 
 valor lógico cuyos literales son :ref:`true <true-def>` y :ref:`false <false-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   bool activo = true
+   bool activo = true;
 
 .. _void-def:
 
@@ -519,11 +548,13 @@ VOID (``void``)
 
 ausencia de tipo; se usa típicamente como tipo de retorno de funciones sin valor.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
-   :emphasize-lines: 1
+   :emphasize-lines: 3
 
-   fn log(str msg) -> void { IO.printf(msg) }
+   #from io #import stdp
+
+   fn log(str msg) -> void { stdp.println(msg); }
 
 .. _null-def:
 
@@ -532,11 +563,11 @@ NULL (``null``)
 
 valor nulo. se relaciona con el modificador :ref:`NULLABLE <nullable-def>` (``?``).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   int? valor = null
+   int? valor = null;
 
 .. _true-def:
 
@@ -545,11 +576,11 @@ TRUE (``true``)
 
 literal booleano verdadero (ver :ref:`BOOL <bool-def>`).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   bool listo = true
+   bool listo = true;
 
 .. _false-def:
 
@@ -558,11 +589,11 @@ FALSE (``false``)
 
 literal booleano falso (ver :ref:`BOOL <bool-def>`).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   bool listo = false
+   bool listo = false;
 
 .. _operator:
 
@@ -570,8 +601,9 @@ operator
 ---------
 
 los operadores son tokens de uno o dos caracteres reconocidos por el lexer. los operadores de dos
-caracteres (``==``, ``!=``, ``<=``, ``>=``) requieren mirar el siguiente code point antes de decidir el
-token, tal como se describe en la introducción de este capítulo.
+caracteres (``==``, ``!=``, ``<=``, ``>=``, ``->``, ``+=``, ``-=``, ``*=``, ``/=``, ``%=``, ``++``,
+``--``) requieren mirar el siguiente code point antes de decidir el token, y se prueban **antes** que
+los de uno, tal como se describe en la introducción de este capítulo.
 
 operadores aritméticos
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -594,6 +626,17 @@ operadores aritméticos
     +-------------------------------+--------+--------------------------------+
     | :ref:`DIVIDE <divide-def>`    | ``/``  | División.                      |
     +-------------------------------+--------+--------------------------------+
+    | :ref:`MODULO <modulo-def>`    | ``%``  | Resto de la división entera.   |
+    +-------------------------------+--------+--------------------------------+
+    | :ref:`compuestos <compuesto-def>` | ``+=`` | Azúcar de ``x = x op v``.  |
+    |                               | ``-=`` |                                |
+    |                               | ``*=`` |                                |
+    |                               | ``/=`` |                                |
+    |                               | ``%=`` |                                |
+    +-------------------------------+--------+--------------------------------+
+    | :ref:`INCREMENT <compuesto-def>` | ``++`` | Suma 1 (sentencia).         |
+    |                               | ``--`` | Resta 1 (sentencia).           |
+    +-------------------------------+--------+--------------------------------+
 
 .. _assign-def:
 
@@ -602,21 +645,24 @@ ASSIGN (``=``)
 
 asigna un valor a un binding. no debe confundirse con :ref:`EQUAL <equal-def>` (``==``).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   x = 10
+   int x = 0;
+   x = 10;
 
 .. _plus-def:
 
 PLUS (``+``)
 ^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   int total = a + b
+   int a = 1;
+   int b = 2;
+   int total = a + b;
 
 .. _minus-def:
 
@@ -624,23 +670,28 @@ MINUS (``-``)
 ^^^^^^^^^^^^^^
 
 .. note::
-   el lexer debe distinguir ``-`` (``MINUS``) de las secuencias :ref:`T_OWNER <t-owner-def>` (``->``) y de
-   los delimitadores de comentario multilínea (ver :ref:`comentarios <comentarios>`).
+   el lexer debe distinguir ``-`` (``MINUS``) de la secuencia
+   :ref:`ARROW <t-owner-def>` (``->``) y de los delimitadores de comentario
+   multilínea (ver :ref:`comentarios <comentarios>`).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   int dif = a - b
+   int a = 3;
+   int b = 1;
+   int dif = a - b;
 
 .. _multiply-def:
 
 MULTIPLY (``*``)
 ^^^^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   int area = base * altura
+   int base = 3;
+   int altura = 4;
+   int area = base * altura;
 
 .. _divide-def:
 
@@ -651,10 +702,61 @@ DIVIDE (``/``)
    ``/`` requiere mirar el siguiente code point para distinguir la división de los
    :ref:`comentarios <comentarios>` (``//`` y ``/-``).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   float r = a / b
+   float a = 6.0;
+   float b = 3.0;
+   float r = a / b;
+
+.. _modulo-def:
+
+MODULO (``%``)
+^^^^^^^^^^^^^^^
+
+resto de la división entera.
+
+.. code-block:: srcx
+   :linenos:
+
+   int total = 17;
+   int cajas = total / 5;
+   int sueltas = total % 5;
+
+.. important::
+
+   El resto lleva el signo del **dividendo**, como en C y no como en Python:
+   ``-7 % 3`` es ``-1``, no ``2``. El backend nativo baja a la instrucción de
+   resto del hardware, que hace exactamente eso; si el intérprete usara otra
+   convención, el mismo programa daría números distintos según el target.
+
+.. _compuesto-def:
+
+asignación compuesta (``+=``) e incremento (``++``)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+``x op= v`` es **azúcar** de ``x = x op v``, y ``x++`` de ``x = x + 1``. No hay
+un nodo propio en el AST: el parser los expande, así que ni la Semántica, ni el
+HIR, ni el intérprete saben que existen.
+
+.. code-block:: srcx
+   :linenos:
+
+   int n = 10;
+   n += 5;
+   n %= 4;
+   n++;
+
+Dos consecuencias de que sean azúcar, y las dos son deliberadas:
+
+**El incremento es una SENTENCIA, no una expresión.** ``n++`` termina en ``;``
+y su valor se descarta. Como expresión habría que decidir si vale el valor
+viejo o el nuevo —la distinción entre ``i++`` y ``++i``—, y esa distinción es
+una fuente conocida de errores que no compra nada.
+
+**El destino tiene que poder evaluarse dos veces.** La expansión lo nombra dos
+veces, así que ``v[f()] += 1`` llamaría a ``f`` dos veces. Se rechaza con un
+error que dice cómo escribirlo completo, en vez de hacerlo en silencio.
 
 operadores de comparación
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -687,20 +789,24 @@ EQUAL (``==``)
 
 compara igualdad; no confundir con :ref:`ASSIGN <assign-def>` (``=``).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a == b { }
+   int a = 1;
+   int b = 2;
+   if (a == b) { }
 
 .. _not-equal-def:
 
 NOT_EQUAL (``!=``)
 ^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a != b { }
+   int a = 1;
+   int b = 2;
+   if (a != b) { }
 
 .. _less-def:
 
@@ -708,43 +814,51 @@ LESS (``<``)
 ^^^^^^^^^^^^^
 
 .. note::
-   ``<`` debe distinguirse de :ref:`LESS_EQUAL <less-equal-def>` (``<=``) y de
-   :ref:`R_OWNER <r-owner-def>` (``<-``).
+   ``<`` debe distinguirse de :ref:`LESS_EQUAL <less-equal-def>` (``<=``).
+   ``<-`` **no** es un token: sale como ``<`` seguido de ``-``.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a < b { }
+   int a = 1;
+   int b = 2;
+   if (a < b) { }
 
 .. _less-equal-def:
 
 LESS_EQUAL (``<=``)
 ^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a <= b { }
+   int a = 1;
+   int b = 2;
+   if (a <= b) { }
 
 .. _greater-def:
 
 GREATER (``>``)
 ^^^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a > b { }
+   int a = 1;
+   int b = 2;
+   if (a > b) { }
 
 .. _greater-equal-def:
 
 GREATER_EQUAL (``>=``)
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a >= b { }
+   int a = 1;
+   int b = 2;
+   if (a >= b) { }
 
 operadores lógicos
 ~~~~~~~~~~~~~~~~~~~~
@@ -772,30 +886,35 @@ estos operadores son palabras reservadas (no símbolos) y se reconocen igual que
 AND (``and``)
 ^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a > 0 and b > 0 { }
+   int a = 1;
+   int b = 2;
+   if (a > 0 and b > 0) { }
 
 .. _or-def:
 
 OR (``or``)
 ^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if a > 0 or b > 0 { }
+   int a = 1;
+   int b = 2;
+   if (a > 0 or b > 0) { }
 
 .. _not-def:
 
 NOT (``not``)
 ^^^^^^^^^^^^^^
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if not activo { }
+   bool activo = true;
+   if (not activo) { }
 
 .. _propiedad y memoria:
 
@@ -814,42 +933,23 @@ en etapas posteriores del compilador, no en el lexer.
     +--------------------------------+-----------+-------------------------------------------------+
     | Token                          | Lexema    | Descripción                                     |
     +================================+===========+=================================================+
-    | :ref:`OWNER <owner-def>`       | ``@owner``| Anotación de propiedad; combinable, p. ej.      |
-    |                                |           | ``@owner(shrd)``.                               |
-    +--------------------------------+-----------+-------------------------------------------------+
-    | :ref:`POINTER <pointer-def>`   | ``ptr``   | Tipo puntero.                                   |
+    | :ref:`POINTER <pointer-def>`   | ``ptr``   | Tipo puntero, **postfijo** (``int ptr``).       |
     +--------------------------------+-----------+-------------------------------------------------+
     | :ref:`ADDRESS <address-def>`   | ``&``     | Operador de dirección.                          |
     +--------------------------------+-----------+-------------------------------------------------+
     | :ref:`NULLABLE <nullable-def>` | ``?``     | Marca un tipo como nulable (admite              |
     |                                |           | :ref:`null <null-def>`).                        |
     +--------------------------------+-----------+-------------------------------------------------+
-    | :ref:`T_OWNER <t-owner-def>`   | ``->``    | Transferencia de propiedad / tipo de retorno.   |
-    +--------------------------------+-----------+-------------------------------------------------+
-    | :ref:`R_OWNER <r-owner-def>`   | ``<-``    | Recepción de propiedad.                         |
+    | :ref:`ARROW <t-owner-def>`     | ``->``    | Tipo de retorno de una función.                 |
     +--------------------------------+-----------+-------------------------------------------------+
 
 .. note::
-   los lexemas ``COPY``, ``DELETE``, ``FREE``, ``ALLOC`` y ``MAKE`` existen en :class:`TokenType` pero su
-   sintaxis y semántica todavía no están especificadas en el diseño del lenguaje; se documentarán cuando se
-   fijen. la entrada :ref:`COPY <copy-def>` depende además de resolver la colisión de valor con
-   :ref:`BREAK <break-def>`.
-
-.. _owner-def:
-
-OWNER (``@owner``)
-~~~~~~~~~~~~~~~~~~~
-
-anotación de propiedad escrita con ``@``. puede combinarse con otros modificadores, por ejemplo
-``@owner(shrd)`` para propiedad compartida (ver :ref:`SHARED <shared-def>`). no debe confundirse con
-:ref:`DECORATOR <decorator-def>`, que usa el mismo ``@`` pero se coloca encima de la función. una sintaxis
-inválida de ``@`` produce :ref:`LEX012 <LEX012-def>`.
-
-.. code-block:: text
-   :linenos:
-   :emphasize-lines: 1
-
-   @owner(shrd) ptr int recurso
+   La propiedad **no** se escribe con anotaciones: ``@owner`` no existe como
+   token (un ``@nombre`` cualquiera lo lexa :ref:`DECORATOR <decorator-def>`,
+   y el parser solo interpreta los decoradores que conoce), y ``<-`` tampoco
+   —se lexa como :ref:`LESS <less-def>` seguido de :ref:`MINUS <minus-def>`.
+   La transferencia se escribe con ``move`` y la destrucción anticipada con
+   ``free`` (ver :doc:`memory_model`).
 
 .. _pointer-def:
 
@@ -858,11 +958,12 @@ POINTER (``ptr``)
 
 declara un tipo puntero.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   ptr int p = &valor
+   int valor = 42;
+   int ptr mutable p = &valor;
 
 .. _address-def:
 
@@ -871,11 +972,12 @@ ADDRESS (``&``)
 
 obtiene la dirección de un valor.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   ptr int p = &valor
+   int valor = 42;
+   int ptr mutable p = &valor;
 
 .. _nullable-def:
 
@@ -884,38 +986,26 @@ NULLABLE (``?``)
 
 marca un tipo como nulable, permitiendo el valor :ref:`null <null-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   int? opcional = null
+   int? opcional = null;
 
 .. _t-owner-def:
 
-T_OWNER (``->``)
-~~~~~~~~~~~~~~~~~
+ARROW (``->``)
+~~~~~~~~~~~~~~~
 
-indica transferencia de propiedad y también el tipo de retorno de una :ref:`función <function-def>`. el
-lexer debe distinguir ``->`` de :ref:`MINUS <minus-def>` (``-``).
+marca el tipo de retorno de una :ref:`función <function-def>`. el lexer debe
+distinguir ``->`` de :ref:`MINUS <minus-def>` (``-``): decide mirando el
+siguiente code point, como con ``==`` o ``<=``.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
-   fn crear() -> ptr int { }
-
-.. _r-owner-def:
-
-R_OWNER (``<-``)
-~~~~~~~~~~~~~~~~~
-
-indica recepción de propiedad. el lexer debe distinguir ``<-`` de :ref:`LESS <less-def>` (``<``).
-
-.. code-block:: text
-   :linenos:
-   :emphasize-lines: 1
-
-   destino <- origen
+   fn direccion_de(int ptr mutable p) -> int ptr mutable { return p; }
 
 .. _delimitadores:
 
@@ -963,10 +1053,12 @@ L_PAREN (``(``) y R_PAREN (``)``)
 
 agrupan expresiones y delimitan las listas de argumentos de una :ref:`función <function-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   IO.printf("hola")
+   #from io #import stdp
+
+   stdp.println("hola");
 
 .. _l-brace-def:
 
@@ -977,10 +1069,13 @@ L_BRACE (``{``) y R_BRACE (``}``)
 
 delimitan bloques de código y cuerpos de :ref:`struct <struct-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   if x > 0 { return x }
+   fn f(int x) -> int {
+       if (x > 0) { return x; }
+       return 0;
+   }
 
 .. _l-bracket-def:
 
@@ -991,10 +1086,10 @@ L_BRACKET (``[``) y R_BRACKET (``]``)
 
 indexación y literales de colección.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   int x = lista[0]
+   int x = 0;
 
 .. _dot-def:
 
@@ -1003,10 +1098,12 @@ DOT (``.``)
 
 acceso a miembro o método. el lexer lo distingue del punto decimal de un :ref:`FLOAT <float-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   IO.printf("hola")
+   #from io #import stdp
+
+   stdp.println("hola");
 
 .. _comma-def:
 
@@ -1015,10 +1112,10 @@ COMMA (``,``)
 
 separa elementos en listas, argumentos o campos.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   fn suma(int a, int b) -> int { return a + b }
+   fn suma(int a, int b) -> int { return a + b; }
 
 .. _semicolon-def:
 
@@ -1027,22 +1124,32 @@ SEMICOLON (``;``)
 
 terminador / separador de sentencia (p. ej. tras la definición de un :ref:`struct <struct-def>` con nombre).
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   struct { int x } punto;
+   struct { int x; } Punto;
 
 .. _colon-def:
 
 COLON (``:``)
 ~~~~~~~~~~~~~~
 
-asocia un nombre con un tipo o una definición.
+separa el campo de su valor en un literal de struct, y la etiqueta del cuerpo
+en una rama de :ref:`case <case-def>` cuando ese cuerpo no es un bloque.
+Delante de un bloque **sobra**, pero escribirlo se acepta: ``case 1: { ... }``
+es la costumbre de C y rechazarlo solo producía un error que ni siquiera
+mencionaba el ``case``.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   __print__ : fn -> str
+   struct { int x; int y; } Punto;
+
+   var Punto p = Punto{ x: 1, y: 2 };
+
+   match (p.x) {
+       case 1: return;
+   }
 
 .. _especiales:
 
@@ -1083,21 +1190,23 @@ nombre definido por el usuario. se forma con caracteres ``XID_Start`` / ``XID_Co
 (ver :ref:`identificadores <identificadores>` y :ref:`tabla unicode <unicode-ref>`). un identificador mal
 formado produce :ref:`LEX010 <LEX010-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   int contador = 0
+   int contador = 0;
 
 .. _decorator-def:
 
 DECORATOR (``@``)
 ~~~~~~~~~~~~~~~~~~
 
-decorador escrito con ``@`` y colocado encima de la función, de forma análoga a Python. usa el mismo
-carácter que :ref:`OWNER <owner-def>`, pero su posición y sintaxis los diferencian. una sintaxis inválida
-produce :ref:`LEX012 <LEX012-def>`.
+decorador escrito con ``@`` y colocado encima de la declaración, de forma
+análoga a Python. El lexer produce un ``DECORATOR`` para cualquier ``@nombre``;
+qué decoradores tienen significado (``@trait``, ``@impl``, ``@test``) lo decide
+el :doc:`parser <sintactic_analysis>`. una sintaxis inválida produce
+:ref:`LEX012 <LEX012-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
@@ -1109,13 +1218,22 @@ produce :ref:`LEX012 <LEX012-def>`.
 DUNDER (``__foo__``)
 ~~~~~~~~~~~~~~~~~~~~~~
 
-identificador especial rodeado por dobles guiones bajos. en librerías, los métodos dunder pueden invocarse
-sin los ``__`` (ver :ref:`libsrx <libsrx>`).
+identificador rodeado por dobles guiones bajos. El lexer solo lo clasifica;
+quien le da significado es el parser, y hacen falta dos declaraciones
+distintas: ``hook fn`` para el conjunto fijo del lenguaje y ``dunder fn``
+para un método especial libre, despachado por ``(tipo, nombre)``.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   __print__ : fn -> str
+   struct { int cur; int max; } Contador;
+
+   dunder fn __siguiente__(Contador ptr c) -> int { return c.cur; }
+
+Lo que se invoca **sin** escribir el nombre del hook son los del conjunto
+fijo: ``print(x)`` dispara ``__print__`` y ``len(x)`` dispara ``__len__``
+(ver :doc:`repo/hooks`). Un ``dunder`` se llama por su nombre:
+``c.__siguiente__()``.
 
 .. _directive-def:
 
@@ -1126,10 +1244,10 @@ inicia una directiva. el lexer emite el token ``DIRECTIVE`` al encontrar ``#``; 
 identifica en el parser (ver :ref:`directivas <directivas>`). una directiva no reconocida produce
 :ref:`LEX009 <LEX009-def>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
 
-   #import IO as InputOutput
+   #import io as entrada_salida;
 
 .. _error-def:
 
@@ -1150,13 +1268,17 @@ marca el fin del archivo de entrada. es el último token de todo flujo y permite
 
 .. _copy-def:
 
-COPY / DELETE / FREE / ALLOC / MAKE
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+FREE (``free``)
+~~~~~~~~~~~~~~~~
 
-.. warning::
-   estos lexemas existen en :class:`TokenType` pero todavía no tienen sintaxis ni semántica definida en el
-   diseño del lenguaje. se documentarán cuando se especifiquen. ``COPY`` comparte además el valor numérico
-   ``60`` con :ref:`BREAK <break-def>`; esa colisión debe resolverse primero.
+``free`` destruye un valor a través de su puntero antes de que el ámbito lo
+haga, y dispara el hook ``__free__`` del tipo apuntado si existe (ver
+:doc:`memory_model`).
+
+``delete``, ``make``, ``copy`` y ``alloc`` **no** existen: ``delete`` y
+``make`` pertenecían al modelo por regiones y se retiraron con él, ``alloc``
+dejó de ser parte del lenguaje —la reserva la aporta una librería— y ``copy``
+nunca llegó a definirse.
 
 .. _directivas:
 
@@ -1182,48 +1304,48 @@ para inicializar una direciva se indica ``#``,nativamente existen las siguientes
 
 *Todas las librerias deben finalizar con un* : ``#export as ...`` 
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
-   :emphasize-lines: 3,9,15
+   :emphasize-lines: 1
 
-    //forma 1
+   // un miembro concreto del paquete
+   #from io #import stdp
 
-    #import IO
+   fn main() -> int {
+       stdp.println("hola");
+       return 0;
+   }
 
-    IO.printf("hola!")
+Las otras formas de traer el mismo módulo (son **alternativas**: importarlo
+dos veces en el mismo archivo es ``SEM002``):
 
-    //forma 2
+.. code-block:: srcx
+   :class: fragmento
 
-    const IO=#import IO
-
-    IO.printf("hola numero 2!")
-
-    //tambien puedes añadir un alias de la siguiente forma
-
-    #import IO as InputOutput
-    
-    InputOutput.printf("hola numero 3!")
+   #import io                  // el modulo entero, bajo su alias
+   #import io as entrada_salida // con otro nombre local
+   const es = #import io;      // ligado a un nombre con 'const'
 
 * :ref:`export <export-def>`: permite que una libreria o modulo sea exportado y usando globalmente en otros archivos
 
 *export siempre debe tener un alias y esta directiva es obligatoria en archivos:* :ref:`.libsrx <libsrx>`.
 
-.. code-block:: text
+.. code-block:: srcx
    :linenos:
    :emphasize-lines: 12
 
-   //IO.libsrx
+   // cadena.libsrx
+   #from io #import stdp
 
-    struct{
-    str text
-    int len
-    }string;
+   public struct {
+       str text;
+       int len;
+   } Cadena;
 
-   __print__:fn-string//los metodos dunder pueden ser llamados sin __ en librerias
-   __printf__:fn->string
-   __toString__:fn->string
+   public hook fn __print__(Cadena ptr c) -> void { stdp.print(c.text); }
+   public hook fn __len__(Cadena ptr c) -> int { return c.len; }
 
-    #export as IO
+   #export as cadena
 
 si no existe la libreria se arroja un :ref:`LEX003<LEX003-def>`
 

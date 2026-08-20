@@ -1,0 +1,35 @@
+#test lexer
+
+// modelo de memoria: ownership + move-semantics
+//   - cada valor tiene UN dueno; al cerrar su ambito se destruye
+//   - 'move' transfiere la propiedad; el origen queda invalido
+//   - 'free' destruye antes de tiempo
+
+fn promedio(int a, int b) -> int {
+    /- la division entera basta para el ejemplo;
+       este comentario multilinea es ignorado por el lexer -/
+    var int total = a + b;
+    return total / 2;
+}
+
+fn main() -> void {
+    const int x = 10;
+
+    int y=20;
+    int z = promedio(x, 20) ;
+    move y;                            // move-semantics: transfiere 'y'
+    int ptr p = &z;                    // direccion (un prestamo, no posee)
+
+    if (z >= 10 and not false) {
+        str msg = "promedio alto: {z}\n";
+        char grade = 'A';
+        float ratio = 3.14;
+    } else {
+        return;
+    }
+}
+
+// interoperabilidad C++: el cuerpo se captura crudo (RAW_BLOCK), no se tokeniza
+#extern cpp{
+    extern "C" int add(int a, int b) { return a + b; }
+}

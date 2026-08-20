@@ -30,7 +30,8 @@ struct {
 } Vector;
 
 // constructor: vector vacío con capacidad FIJA 'cap' (usa 1 si te pasan 0).
-// 'new' es palabra reservada (init de región); 'make' es la fábrica de librería.
+// 'make' es una funcion normal de la libreria, no sintaxis: suriaX no tiene
+// constructores. 'new' dejo de ser palabra reservada al retirarse las regiones.
 fn make(int cap) -> Vector {
     var int real = cap;
     if (cap < 1) { real = 1; }

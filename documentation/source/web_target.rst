@@ -200,7 +200,7 @@ El target web todavía no ejecuta todo el lenguaje. Lo que no puede se rechaza
    ``WEB002``  ``ptr T``, ``ptr mutable T``                JavaScript no expone direcciones.
    ``WEB003``  ``&x``                                      Produce un puntero.
    ``WEB004``  ``free x;``                                 La memoria la gestiona el runtime de JS.
-   ``WEB005``  ``__free__``, ``__make__``, ``__sizeof__``  Dependen del modelo de memoria nativo.
+   ``WEB005``  ``__free__``, ``__sizeof__``                Dependen del modelo de memoria nativo.
    ``WEB006``  ``move x;``                                 Exige invalidación en tiempo de ejecución.
    ``WEB007``  Librería fuera de la lista permitida        Decisión del target.
    ``WEB008``  ``sizeof(T)``                               Depende del layout nativo.
@@ -245,6 +245,10 @@ JavaScript puro:
 
    $ node web/main.ts programa.phir --run       # WebAssembly
    $ node web/main.ts programa.phir --run-js    # JavaScript
+
+Node ejecuta el ``.ts`` borrando los tipos: nativo desde la **v23**, y en la
+**v22** tras la bandera ``--experimental-strip-types``. Con una versión
+anterior no hay forma de correrlo y la suite se salta estos tests con aviso.
 
 Los dos tienen que dar la misma salida y el mismo valor de retorno, y la
 suite lo comprueba en cada corrida — contra el intérprete además de entre

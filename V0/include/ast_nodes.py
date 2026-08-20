@@ -91,6 +91,10 @@ class NominalTypeExpr(TypeExpr):
     ``semantic/type_service.lookup_type_path``).
     """
     name: str
+    args: List["TypeExpr"] = field(default_factory=list)
+    """ARGUMENTOS DE TIPO de un generico (``Vector<int>``). Vacio en un tipo
+    corriente. Se transportan sin resolver: que es cada uno lo decide la
+    Semantica, igual que con ``name``."""
 
 
 @dataclass(slots=True)
@@ -213,19 +217,22 @@ class Assignment(Expression):
 
 
 @dataclass(slots=True)
-class Placement(Expression):
-    """``expr at region`` -- ubica el resultado de ``expr`` en una region."""
-    expr: Expression
-    region: str
-    restype: Optional[Type] = None
-
-
-@dataclass(slots=True)
 class Call(Expression):
     callee: Expression
     args: List[Expression] = field(default_factory=list)
     restype: Optional[Type] = None
+    valor_constante: Optional[int] = None
+    """La llamada se RESOLVIO a un entero en compilacion (``min(dt.int8)`` ->
+    ``-128``). Solo lo usan ``min``/``max``, cuyo resultado es el rango que el
+    tipo declara con ``__min__``/``__max__`` — un dato que ya se conoce al
+    compilar. El emisor pone un literal en vez de la llamada, asi que ningun
+    consumidor del HIR se entera de que hubo una llamada."""
     hook: Optional[Any] = None
+    temp_drop: Optional[Any] = None
+    """``Symbol`` del ``__free__`` que destruye el resultado de esta expresion
+    al terminar la sentencia, cuando el valor producido NO queda en manos de
+    nadie (un temporal). ``None`` si lo recibe un binding, un ``return`` o una
+    asignacion — en ese caso su nuevo dueno se encarga."""
     """Anotado en sitio por la Semantica (mismo patron que ``restype``):
     ``Symbol`` del hook de tipo al que despacha la llamada cuando el callee
     es un hook invocable por convencion (``print(x)`` -> ``__print__`` del
@@ -251,8 +258,8 @@ class MemberAccess(Expression):
 class StructLiteral(Expression):
     """``T{ campo: expr, ... }`` -- instancia un struct nominal ``T``.
 
-    Unica forma NATIVA de construir un valor de struct (sin RBMM ni
-    ``alloc``): produce el valor; ``&literal_en_una_var`` da el puntero.
+    Unica forma NATIVA de construir un valor de struct (sin ``alloc``):
+    produce el valor; ``&literal_en_una_var`` da el puntero.
     ``field_names`` y ``values`` son listas PARALELAS (mismo indice = mismo
     campo), en el orden escrito. Listas paralelas y no ``[(str, Expr)]``
     para que ``include/ast_walk`` recorra las expresiones (las tuplas serian
@@ -260,17 +267,16 @@ class StructLiteral(Expression):
     type_name: str
     field_names: List[str] = field(default_factory=list)
     values: List[Expression] = field(default_factory=list)
+    type_args: List["TypeExpr"] = field(default_factory=list)
+    """Argumentos de tipo de un generico (``Caja<int>{ ... }``). Vacio para
+    un struct corriente. Van aqui y no en ``type_name`` porque son TIPOS que
+    hay que resolver, no texto: participan de la identidad del resultado."""
     restype: Optional[Type] = None
-
-
-@dataclass(slots=True)
-class MakeExpr(Expression):
-    """``make T in r`` -- construye un valor de tipo T dentro de la region r."""
-    type: TypeExpr
-    region: str
-    restype: Optional[Type] = None
-    hook: Optional[Any] = None
-    """``Symbol`` del ``__make__`` de T si existe (anotado por la Semantica)."""
+    temp_drop: Optional[Any] = None
+    """``Symbol`` del ``__free__`` que destruye el resultado de esta expresion
+    al terminar la sentencia, cuando el valor producido NO queda en manos de
+    nadie (un temporal). ``None`` si lo recibe un binding, un ``return`` o una
+    asignacion — en ese caso su nuevo dueno se encarga."""
 
 
 @dataclass(slots=True)
@@ -296,8 +302,18 @@ class CastExpr(Expression):
 
 @dataclass(slots=True)
 class SizeofExpr(Expression):
+    """``sizeof(X)`` -- el tamano de un TIPO, o el del tipo de un VALOR.
+
+    ``X`` se escribe en posicion de tipo, asi que sintacticamente siempre es
+    un ``TypeExpr``; que ``sizeof(a)`` mida "el tipo de la variable a" lo
+    decide la Semantica, que es la unica que sabe si ese nombre esta en el
+    namespace de tipos o en el de valores."""
     type: TypeExpr
     restype: Optional[Type] = None
+    medido: Optional[Type] = None
+    """El tipo que realmente se mide, ya resuelto y CANONICALIZADO. Distinto
+    de ``restype`` (que es el ``int`` que produce la expresion) y de ``type``
+    (que es lo ESCRITO: 'a' cuando se midio el tipo de la variable 'a')."""
     hook: Optional[Any] = None
     """``Symbol`` del ``__sizeof__`` de T si existe (anotado por la Semantica)."""
 
@@ -307,8 +323,33 @@ class SizeofExpr(Expression):
 # ============================================================================
 
 @dataclass(slots=True)
+class Drop:
+    """Una destruccion que el compilador insertara al cerrar un bloque.
+
+    NO es un nodo de sintaxis: nadie la escribe. Es una ANOTACION que la
+    Semantica cuelga del bloque —el punto de destruccion es la llave que
+    cierra, y el modelo de memoria dice que ahi muere el valor— y que viaja al
+    HIR para que el interprete y el backend nativo ejecuten exactamente lo
+    mismo, sin volver a decidirlo cada uno.
+
+    Por eso no hereda de ``ASTNode``: no tiene posicion propia ni hijos que
+    recorrer (``ast_walk`` la salta por nombre de campo).
+    """
+    path: List[str] = field(default_factory=list)
+    """Ruta del valor a destruir: ``["b"]`` para un local, ``["c", "b"]`` para
+    el campo de un local. Se aplana AQUI —y no se resuelve en ejecucion—
+    porque saber que campos poseen recursos es una pregunta sobre el TIPO, y
+    esa la contesta el compilador."""
+    hook: Optional[Any] = None
+    """``Symbol`` del ``__free__`` que destruye lo que hay al final de ``path``."""
+
+
+@dataclass(slots=True)
 class Block(Statement):
     statements: List[Statement] = field(default_factory=list)
+    drops: List[Drop] = field(default_factory=list)
+    """Destrucciones al cerrar el bloque, en orden INVERSO al de declaracion
+    (lo ultimo que nace es lo primero que muere). Las anota la Semantica."""
 
 
 @dataclass(slots=True)
@@ -359,6 +400,10 @@ class TypeDecl(Statement):
     (``int8`` es un valor de tipo ``type``), no el tipo que declara."""
     visibility: Optional[str] = None
     """Reserva de visibilidad de nivel superior (ver ``FunctionDecl.visibility``)."""
+    type_params: List[str] = field(default_factory=list)
+    """PARAMETROS DE TIPO del generico: ``const type Caja<T>;`` -> ``["T"]``.
+    Van con el NOMBRE, al final, que es donde el lenguaje pone siempre lo que
+    identifica una declaracion. Vacio en un tipo corriente."""
 
 
 @dataclass(slots=True)
@@ -378,70 +423,6 @@ class ImportBinding(Statement):
     """Reserva de visibilidad de nivel superior (ver ``FunctionDecl.visibility``).
     El ``#import``/``#from`` en si es una directiva (sin visibilidad); lo que
     puede llevarla es el BINDING que le da nombre local."""
-
-
-@dataclass(slots=True)
-class RegionStmt(Statement):
-    """Forma con BLOQUE de una region: ``[mods] region NAME block``.
-
-    Los tres modificadores son componibles y de orden libre
-    (``shrd mutable na region r { ... }`` es valido). El parser transporta los
-    flags; la ejecucion REAL del modelo RBMM la hace el runtime de forma
-    AGNOSTICA DEL TARGET (el interprete llama a la implementacion C++ via
-    pybind11; no se simula ni se difiere al MIR). Ver ``NewStmt`` para la
-    forma sin bloque (handle) y ``DeleteStmt``/``InRegionStmt``/``MoveRegionStmt``
-    para las operaciones imperativas."""
-    name: str
-    body: Block
-    shared: bool = False
-    """``shrd region r``: COMPARTIBLE (su memoria puede compartirse entre
-    otras regiones / sobrevivir a su bloque)."""
-    mutable: bool = False
-    """``mutable region r``: la region puede MUTAR y dividirse (split)."""
-    na: bool = False
-    """``na region r`` ("no auto"): NO se auto-libera al cerrar el bloque; hay
-    que liberarla con ``delete(region r)`` (fuera) o ``delete()`` (dentro)."""
-
-
-@dataclass(slots=True)
-class NewStmt(Statement):
-    """``new( [mods] region NAME ) ;`` -- inicializa una region como HANDLE
-    (sin bloque, modelo hibrido). Su vida es manual: se libera con
-    ``delete(region NAME)``. Mismos modificadores componibles que
-    ``RegionStmt`` (``new(shrd region x);``). El runtime la crea llamando a
-    RBMM (C++/pybind11), agnostico del target."""
-    name: str
-    shared: bool = False
-    mutable: bool = False
-    na: bool = False
-
-
-@dataclass(slots=True)
-class DeleteStmt(Statement):
-    """``delete( region NAME ) ;`` (forma externa) o ``delete() ;`` (forma
-    interna, dentro del bloque de una ``na region``: libera la region actual).
-
-    ``name`` es ``None`` para la forma interna sin argumento (se resuelve a la
-    region que encierra el ``delete()`` en la Semantica)."""
-    name: Optional[str] = None
-
-
-@dataclass(slots=True)
-class InRegionStmt(Statement):
-    """``in region NAME ":" statement`` o ``in region NAME block`` -- ejecuta
-    operaciones EN el contexto de la region ``NAME`` ("en la region x haz ...").
-    Forma corta con ``:`` para una sola sentencia, forma con ``{ }`` para
-    varias (espeja ``case``)."""
-    region: str
-    body: Statement
-
-
-@dataclass(slots=True)
-class MoveRegionStmt(Statement):
-    """``move region SRC "->" region DST ;`` -- move-semantics de regiones: NO
-    copia, transfiere el contenido/propiedad de la region ``SRC`` a ``DST``."""
-    src: str
-    dst: str
 
 
 @dataclass(slots=True)
@@ -474,6 +455,14 @@ class MatchStmt(Statement):
 @dataclass(slots=True)
 class ReturnStmt(Statement):
     value: Optional[Expression] = None
+    transfers: bool = False
+    """El valor devuelto POSEE recursos y se entrega al llamador, asi que el
+    ambito que lo tenia deja de ser su dueno y no debe destruirlo.
+
+    Lo decide la Semantica y no el runtime porque "posee recursos" es una
+    pregunta sobre el TIPO. Que sea condicional importa: devolver un 'int'
+    —o el campo entero de un receptor PRESTADO— no transfiere nada, y
+    marcarlo invalidaria un valor ajeno."""
 
 
 @dataclass(slots=True)
@@ -502,15 +491,34 @@ class ThrowStmt(Statement):
 
 
 @dataclass(slots=True)
-class TryStmt(Statement):
-    """``try block catch "(" IDENTIFIER ")" block``.
+class CatchClause(ASTNode):
+    """Una rama ``catch``: a que valores atrapa y que hace con ellos.
 
-    Ejecuta ``try_block``; si algo lanzado (``throw``) se propaga por el,
-    liga el valor a ``catch_name`` y ejecuta ``catch_block``. El binding del
-    catch vive solo en el scope de ``catch_block``."""
+    Con TIPO (``catch (Fallo e)``) atrapa solo los valores de ese tipo y liga
+    ``e`` ya tipado; sin el (``catch (e)``) atrapa cualquiera y ``e`` es de
+    tipo desconocido. La diferencia importa porque un valor capturado sin
+    tipo hay que convertirlo a mano antes de poder usarlo para algo.
+    """
+    name: str
+    block: Block
+    type: Optional[TypeExpr] = None
+    restype: Optional[Type] = None
+    """``type`` ya resuelto (anotado por ``parser/typed_ast.py``); ``None`` en
+    una rama sin tipo."""
+
+
+@dataclass(slots=True)
+class TryStmt(Statement):
+    """``try block { catch "(" [type] IDENTIFIER ")" block }``.
+
+    Ejecuta ``try_block``; si algo lanzado (``throw``) se propaga por el, se
+    prueban las ramas EN ORDEN y gana la primera cuyo tipo encaje. Si ninguna
+    encaja, el valor sigue propagandose — que es lo que hace util filtrar por
+    tipo: una rama que no sabe manejar un fallo no se lo queda.
+
+    El binding de cada rama vive solo en el scope de SU bloque."""
     try_block: Block
-    catch_name: str
-    catch_block: Block
+    catches: List[CatchClause] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -588,12 +596,31 @@ class StructDecl(Declaration):
     name: str
     visibility: Optional[str] = None
     """Reserva de visibilidad (ver ``FunctionDecl.visibility``)."""
+    type_params: List[str] = field(default_factory=list)
+    """PARAMETROS DE TIPO del generico: ``... Vector<T>;`` -> ``["T"]``. Van
+    con el NOMBRE, al final, que es donde el lenguaje pone siempre lo que
+    identifica una declaracion. Vacio en un tipo corriente."""
+
 
 
 @dataclass(slots=True)
 class EnumItem(ASTNode):
+    """Una variante de un ``enum``.
+
+    Dos formas, excluyentes entre si:
+
+    * ``ROJO`` / ``ROJO = 5`` -- variante UNIDAD, un entero (estilo C).
+    * ``Literal(int)`` -- variante con PAYLOAD: lleva valores propios, y
+      entonces el enum es un tipo SUMA ("es una de estas formas") en vez de
+      un conjunto de enteros con nombre.
+    """
     name: str
     value: Optional[Expression] = None
+    payload: List["TypeExpr"] = field(default_factory=list)
+    """Tipos que lleva la variante, en el orden escrito. Vacio en una variante
+    unidad."""
+    payload_restypes: List[Type] = field(default_factory=list)
+    """``payload`` ya resuelto (anotado por ``parser/typed_ast.py``)."""
 
 
 @dataclass(slots=True)
@@ -602,6 +629,20 @@ class EnumDecl(Declaration):
     items: List[EnumItem] = field(default_factory=list)
     visibility: Optional[str] = None
     """Reserva de visibilidad (ver ``FunctionDecl.visibility``)."""
+
+    @property
+    def es_suma(self) -> bool:
+        """¿Alguna variante lleva payload?
+
+        Es lo que separa las dos clases de enum, y la separacion es TOTAL: un
+        enum de solo variantes unidad son enteros con nombre (estilo C, se
+        asignan a ``int`` y se comparan con ``==``); en cuanto UNA variante
+        lleva payload el enum pasa a ser un tipo suma y sus valores dejan de
+        ser enteros — incluidas las variantes unidad, que valen solo su
+        discriminante. Mezclar las dos lecturas dentro del mismo tipo seria lo
+        confuso; elegir por enum no lo es.
+        """
+        return any(item.payload for item in self.items)
 
 
 @dataclass(slots=True)
@@ -732,13 +773,12 @@ __all__ = [
     "PrimitiveTypeExpr", "NominalTypeExpr", "PointerTypeExpr", "NullableTypeExpr",
     "ErrorTypeExpr", "SelfTypeExpr",
     "Literal", "InterpolatedString", "Identifier", "UnaryOp", "AddrOf",
-    "BinaryOp", "Assignment", "Placement",
-    "Call", "Index", "MemberAccess", "StructLiteral", "MakeExpr", "CastExpr", "SizeofExpr",
-    "Block", "VarDecl", "ImportBinding", "RegionStmt",
-    "NewStmt", "DeleteStmt", "InRegionStmt", "MoveRegionStmt",
+    "BinaryOp", "Assignment",
+    "Call", "Index", "MemberAccess", "StructLiteral", "CastExpr", "SizeofExpr",
+    "Block", "Drop", "VarDecl", "ImportBinding",
     "IfStmt", "WhileStmt", "CaseArm",
     "MatchStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "MoveStmt",
-    "ThrowStmt", "TryStmt", "FreeStmt", "ExprStmt",
+    "ThrowStmt", "TryStmt", "CatchClause", "FreeStmt", "ExprStmt",
     "Parameter", "FunctionDecl", "Field", "StructDecl", "EnumItem", "EnumDecl",
     "DecoratorDecl", "TraitMethod", "TraitDecl", "TestDecl",
     "ImportDirective", "ExportDirective", "FromDirective", "ExternBlock",

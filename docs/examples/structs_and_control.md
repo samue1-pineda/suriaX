@@ -96,19 +96,17 @@ fn clasificar(Punto ptr p) -> Cuadrante {
 };
 
 fn main() -> void {
-    region r {
-        Punto ptr mutable p = make Punto in r;
-        p.x = 3;
-        p.y = 0;
+    Punto ptr mutable p = crear_punto();
+    p.x = 3;
+    p.y = 0;
 
-        Cuadrante c = clasificar(p);
-        match (c) {
-            case Origen {IO.printf("origen\n");};
-            case Eje {IO.printf("sobre un eje\n");};
-            case Interior{ IO.printf("interior\n");};
-        };
+    Cuadrante c = clasificar(p);
+    match (c) {
+        case Origen {IO.printf("origen\n");};
+        case Eje {IO.printf("sobre un eje\n");};
+        case Interior{ IO.printf("interior\n");};
     };
-};
+};   // 'p' sale de ámbito: se destruye aquí
 ```
 
 ## Notas

@@ -3,8 +3,8 @@
 Cubre exactamente la cadena de precedencia de ``docs/gramar/grammar.ebnf``
 (seccion 3), de menor a mayor:
 
-    assignment(=) < or < and < equality(==,!=) < comparison(<,<=,>,>=)
-        < term(+,-) < factor(*,/)
+    assignment(=, +=, -=, *=, /=, %=) < or < and < equality(==,!=)
+        < comparison(<,<=,>,>=) < term(+,-) < factor(*,/,%)
 
 ``unary`` (``not``/``-``/``&``), ``placement`` (``at``) y ``postfix``
 (``.``/``()``/``[]``) NO son parte de esta tabla: se resuelven de forma
@@ -40,6 +40,14 @@ class Assoc(Enum):
 # 10) para poder insertar niveles nuevos sin renumerar los existentes.
 BINDING_POWER: Dict[TokenType, Tuple[int, Assoc]] = {
     TokenType.ASSIGN: (10, Assoc.RIGHT),
+    # asignacion COMPUESTA: mismo nivel y misma asociatividad que '='. Es
+    # azucar ('n += 2' -> 'n = n + 2'), asi que se desazucara en 'build_led'
+    # y no llega al AST.
+    TokenType.PLUS_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.MINUS_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.STAR_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.SLASH_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.PERCENT_ASSIGN: (10, Assoc.RIGHT),
 
     TokenType.OR: (20, Assoc.LEFT),
 
@@ -58,6 +66,7 @@ BINDING_POWER: Dict[TokenType, Tuple[int, Assoc]] = {
 
     TokenType.MULTIPLY: (70, Assoc.LEFT),
     TokenType.DIVIDE: (70, Assoc.LEFT),
+    TokenType.MODULO: (70, Assoc.LEFT),
 }
 
 

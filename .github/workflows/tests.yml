@@ -1,0 +1,173 @@
+name: Suite de pruebas
+
+# Responde UNA pregunta: ¿pasan las pruebas del proyecto?
+#
+# Está separado de 'ci.yml' a propósito. Aquel comprueba que el repositorio
+# cumple lo que promete en una máquina limpia (dependencias, regeneración,
+# reproducibilidad); este comprueba el COMPORTAMIENTO. Mezclarlos haría que
+# quien mira la medalla en rojo no supiera cuál de las dos cosas falló.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pruebas:
+    name: Ejecutar la suite
+    runs-on: ubuntu-latest
+    # La suite entera tarda ~2 minutos. Si pasa de esto es que algo se colgó,
+    # y es mejor fallar que dejar el job esperando media hora.
+    timeout-minutes: 20
+    outputs:
+      pasados: ${{ steps.suite.outputs.pasados }}
+      fallidos: ${{ steps.suite.outputs.fallidos }}
+      total: ${{ steps.suite.outputs.total }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # node ejecuta la suite del backend web (TypeScript, en test/web/). Sin
+      # él esos tests se saltan con aviso en vez de fallar, pero aquí SÍ lo
+      # queremos: es parte de lo que hay que probar.
+      - name: Preparar node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          python -m pip install --upgrade pip
+          pip install protobuf pyyaml
+
+      # '--json' escribe el recuento y la lista de fallos. Se re-parsea la
+      # salida de consola NUNCA: está pensada para una persona y cambia cuando
+      # se mejora un mensaje.
+      - name: Ejecutar la suite
+        id: suite
+        run: |
+          set +e
+          python test/main.py --json resumen.json
+          codigo=$?
+          set -e
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          d = json.load(open("resumen.json", encoding="utf-8"))
+          print(f"pasados={d['passed']}")
+          print(f"fallidos={d['failed']}")
+          print(f"total={d['total']}")
+          print(f"modulos={d['modules']}")
+          PY
+          exit $codigo
+
+      # El informe va al RESUMEN DEL JOB (lo que se ve en la pestaña Actions y
+      # en el PR), no solo al log: un log de 700 líneas no es un informe.
+      # 'always()' porque el interesante es justo el caso en que la suite falló.
+      - name: Informe
+        if: always()
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          try:
+              d = json.load(open("resumen.json", encoding="utf-8"))
+          except OSError:
+              print("## Suite de pruebas\n\nLa suite no llegó a terminar: "
+                    "no hay resumen que informar. Ver el log del paso anterior.")
+              raise SystemExit(0)
+          estado = "todo verde" if not d["failed"] else f"{d['failed']} fallo(s)"
+          print(f"## Suite de pruebas — {estado}\n")
+          print(f"**{d['passed']} de {d['total']}** pruebas pasadas "
+                f"en {d['modules']} módulos.\n")
+          if d["failures"]:
+              print("### Qué no pasó\n")
+              print("| Categoría | Módulo | Prueba | Error |")
+              print("|---|---|---|---|")
+              for f in d["failures"]:
+                  err = f["error"].replace("|", "\\|")
+                  print(f"| `{f['category']}` | `{f['module']}` | `{f['test']}` | {err} |")
+              print("\nLa traza completa de cada uno está en el log del job.")
+          PY
+
+      - name: Guardar el resumen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resumen-pruebas
+          path: resumen.json
+
+  medallas:
+    name: Actualizar las medallas
+    needs: pruebas
+    # Solo en main y aunque la suite falle: una medalla que solo se actualiza
+    # cuando todo va bien miente por omisión — se quedaría en verde para
+    # siempre el día que algo se rompa.
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # UN solo job escribe la rama 'badges', y por eso escribe TODAS las
+      # medallas. Dos workflows haciendo force-push a la misma rama huérfana
+      # se borrarían los archivos el uno al otro.
+      - name: Construir los JSON de las medallas
+        run: |
+          python - <<'PY'
+          import json, os
+
+          import version
+
+          pasados = int("${{ needs.pruebas.outputs.pasados }}" or 0)
+          total = int("${{ needs.pruebas.outputs.total }}" or 0)
+          fallidos = int("${{ needs.pruebas.outputs.fallidos }}" or 0)
+          if total == 0:
+              mensaje, color = "sin datos", "lightgrey"
+          else:
+              mensaje = f"{pasados}/{total} pasan"
+              color = "red" if fallidos else "brightgreen"
+
+          os.makedirs("badges", exist_ok=True)
+
+          def escribir(nombre, etiqueta, texto, color):
+              with open(f"badges/{nombre}.json", "w", encoding="utf-8") as fh:
+                  json.dump({"schemaVersion": 1, "label": etiqueta,
+                             "message": texto, "color": color}, fh)
+
+          escribir("tests", "pruebas", mensaje, color)
+          # La versión sale de 'version.py', su fuente única: la medalla no
+          # puede desviarse de lo que publica la documentación porque las dos
+          # leen el mismo archivo.
+          escribir("version", "version", f"v{version.VERSION}", "blue")
+          print("medallas:", os.listdir("badges"))
+          PY
+
+      # Rama HUÉRFANA 'badges', reescrita cada vez. Ni ensucia el historial de
+      # 'main' con un commit por corrida, ni puede disparar los workflows que
+      # escuchan a 'main' (que sería un bucle).
+      - name: Publicar en la rama 'badges'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q publicar
+          cd publicar
+          cp ../badges/*.json .
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q --orphan badges
+          git add *.json
+          git commit -q -m "medalla: ${{ needs.pruebas.outputs.pasados }}/${{ needs.pruebas.outputs.total }}"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges

@@ -5,6 +5,15 @@
   <img src="./assets/suri_banner_.png" alt="Banner" />
   </picture>
   
+  [![CI](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml/badge.svg)](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml)
+  [![Pruebas](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/tests.json)](https://github.com/samue1-pineda/suriaX/actions/workflows/tests.yml)
+  [![Versión](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/version.json)](version.py)
+  [![Release](https://img.shields.io/github/v/release/samue1-pineda/suriaX?include_prereleases&label=release)](https://github.com/samue1-pineda/suriaX/releases/latest)
+  [![Licencia: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+  [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14168/badge)](https://www.bestpractices.dev/projects/14168)
+  [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/samue1-pineda/suriaX/badge)](https://scorecard.dev/viewer/uri=github.com/samue1-pineda/suriaX)
+
   [English] | [pagina web] | [getting started] | [errores actuales] | [Documentacion] 
   
 </div>
@@ -35,7 +44,10 @@ suriaX es un lenguaje de programacion con los siguientes objetivos:
 
 [iriscX] y [myrscX] pasan a 2do plano hasta nuevas versiones
 
-el proyecto se encuentra en **V.0.1.4 (Pre-Alpha Preview)**
+el proyecto es una **Pre-Alpha Preview**. El numero exacto es la medalla
+*Version* de arriba: sale de [`version.py`](version.py), la fuente unica que
+leen todos los consumidores (CMake, el sitio de documentacion,
+`suriaX --version` y el release), asi que no puede contradecir a lo publicado.
 
 [**X**] definicion de la sintaxis del lenguaje y gramatica mediante EBNF
 

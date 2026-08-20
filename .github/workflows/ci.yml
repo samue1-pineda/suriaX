@@ -1,0 +1,255 @@
+name: CI
+
+# ¿Por qué existe este workflow si ya hay uno que corre las pruebas?
+#
+# Porque responde una pregunta que la suite NO puede responder: la suite corre
+# en la máquina de quien la escribió, con sus dependencias ya instaladas, su
+# versión de Python y sus artefactos ya generados. Este workflow comprueba lo
+# que solo se rompe en una máquina limpia — y son promesas concretas que el
+# proyecto hace por escrito:
+#
+#   1. "El frontend no depende de nada externo, solo la stdlib de Python."
+#      (README, how_to_run.md, ARCHITECTURE.md). Es fácil romperla sin notarlo:
+#      basta un 'import yaml' en el sitio equivocado, y en local funciona
+#      porque yaml está instalado.
+#   2. "Los stubs de protobuf se generan, no se commitean" (PROTOBUF_BRIDGE).
+#      'V0/src/HIR/gen/' está en .gitignore: si el .proto queda mal, en local
+#      nadie se entera porque el stub viejo sigue ahí.
+#   3. "El .phir es reproducible." Localmente eso se prueba entre CORRIDAS;
+#      aquí se prueba entre MÁQUINAS y versiones de Python, que es la promesa
+#      de verdad (una caché de build por hash depende de ella).
+#   4. "Python 3.10+". Se afirma en la documentación y solo se desarrolla en
+#      una versión.
+#
+# Ninguna de las cuatro la puede contestar 'tests.yml', y las cuatro rompen
+# silenciosamente.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sin-dependencias:
+    name: El frontend funciona sin dependencias externas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # A PROPÓSITO no se instala nada: ni protobuf, ni pyyaml, ni protoc.
+      # Ese es el experimento.
+      - name: Compilar sin instalar nada
+        run: |
+          python V0/main.py b.srcx
+          python V0/main.py test/manual/lexer/sample.srcx
+
+      - name: Ningún módulo del frontend importa una dependencia externa
+        run: |
+          python - <<'PY'
+          import sys
+
+          # Se bloquean ANTES de importar el compilador: si algún módulo del
+          # frontend las importa al cargarse, esto revienta con un mensaje
+          # que dice cuál y por qué.
+          #
+          # 'find_spec', no 'find_module': el segundo se eliminó del sistema de
+          # importación en Python 3.12 y ya no lo llama nadie, así que un
+          # bloqueo escrito con él no bloquea NADA y el job pasa en vacío —
+          # exactamente el fallo silencioso que este workflow existe para
+          # cazar. Se comprueba primero que el bloqueo funciona.
+          class Bloqueo:
+              def find_spec(self, name, path=None, target=None):
+                  if name.split(".")[0] in ("google", "yaml", "protobuf"):
+                      raise ImportError(
+                          f"el frontend importó '{name}': tiene que funcionar "
+                          "solo con la stdlib (ver README y how_to_run.md)")
+                  return None
+
+          sys.meta_path.insert(0, Bloqueo())
+
+          # El bloqueo se prueba a sí mismo: si esto NO levanta, el resto de
+          # la comprobación no demuestra nada.
+          try:
+              import yaml  # noqa: F401
+          except ImportError:
+              pass
+          else:
+              raise SystemExit("el bloqueo de dependencias no funciona: "
+                               "esta comprobación no estaría probando nada")
+
+          sys.path[:0] = [".", "V0"]
+
+          from src.frontend.lexer.lexer import Lexer
+          from src.frontend.parser.parser import Parser
+          from src.frontend.parser.typed_ast import resolve_types
+          from src.frontend.semantic import analyze
+
+          fuente = open("b.srcx", encoding="utf-8").read()
+          lx = Lexer(fuente, file="b.srcx")
+          tokens = lx.tokenize()
+          parser = Parser(tokens)
+          programa = parser.parse()
+          resolve_types(programa)
+          _tabla, errores = analyze(programa, source_path="b.srcx")
+          assert not lx.errors and not parser.ctx.errors and not errores, \
+              "el ejercicio del repositorio no compila"
+          print("frontend completo sin una sola dependencia externa: ok")
+          PY
+
+      - name: El compilador dice qué le falta, en vez de reventar
+        run: |
+          # Sin protobuf, pedir el HIR tiene que ser un error CLARO (código 3,
+          # dependencia faltante), no un traceback.
+          set +e
+          salida=$(python V0/main.py b.srcx --emit-hir 2>&1)
+          codigo=$?
+          set -e
+          echo "$salida"
+          test $codigo -eq 3 || { echo "se esperaba exit 3 (dependencia), salió $codigo"; exit 1; }
+          if echo "$salida" | grep -qi "traceback"; then
+            echo "reventó en vez de diagnosticar"
+            exit 1
+          fi
+          echo "diagnóstico de dependencia correcto"
+
+  version-minima:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # La documentación promete 3.10+; se comprueban el mínimo y el actual.
+        # Sin la matriz, "3.10+" es una afirmación que nadie verifica.
+        python: ["3.10", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: "pip"
+
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          python -m pip install --upgrade pip
+          pip install protobuf pyyaml
+
+      - name: Los stubs se REGENERAN desde el .proto
+        run: |
+          # 'V0/src/HIR/gen/' está en .gitignore: aquí no existe. Que el
+          # compilador arranque demuestra que protoc puede generarlo desde
+          # cero, que es la promesa de PROTOBUF_BRIDGE.md.
+          test ! -f V0/src/HIR/gen/hir_pb2.py || { echo "el stub venía commiteado"; exit 1; }
+          python V0/main.py b.srcx --emit-hir
+          test -f V0/src/HIR/gen/hir_pb2.py
+
+      - name: El ejercicio del repositorio compila y corre
+        run: python V0/main.py b.srcx --run
+
+      - name: Huella del .phir
+        id: huella
+        run: |
+          # Ruta EXPLICITA: buscar el .phir con 'find' dependia de donde lo
+          # dejara la configuracion, y una segunda copia vieja habria dado una
+          # huella equivocada sin que nada avisara.
+          mkdir -p huella
+          python V0/main.py b.srcx --emit-hir huella/b.srcx.phir >/dev/null
+          test -f huella/b.srcx.phir || { echo "no se emitio el .phir"; exit 1; }
+          sha=$(sha256sum huella/b.srcx.phir | cut -d" " -f1)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "huella en Python ${{ matrix.python }}: $sha"
+
+      - name: Guardar la huella
+        uses: actions/upload-artifact@v4
+        with:
+          name: huella-py${{ matrix.python }}
+          path: huella/b.srcx.phir
+          if-no-files-found: error
+
+  reproducible:
+    name: El .phir es idéntico entre versiones de Python
+    needs: version-minima
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Recuperar las huellas
+        uses: actions/download-artifact@v4
+        with:
+          path: huellas
+
+      # Localmente se comprueba que dos corridas dan los mismos bytes. La
+      # promesa de verdad es más fuerte: el MISMO programa da el MISMO
+      # artefacto en cualquier máquina. Eso es lo que sostiene una caché de
+      # build por hash y los golden compartidos entre backends.
+      - name: Comparar
+        run: |
+          mapfile -t archivos < <(find huellas -name "b.srcx.phir" | sort)
+          test "${#archivos[@]}" -ge 2 || { echo "hacen falta 2 huellas"; exit 1; }
+          primera=$(sha256sum "${archivos[0]}" | cut -d' ' -f1)
+          for a in "${archivos[@]}"; do
+            actual=$(sha256sum "$a" | cut -d' ' -f1)
+            echo "  $actual  $a"
+            test "$actual" = "$primera" || {
+              echo "el .phir NO es reproducible entre versiones de Python"; exit 1; }
+          done
+          echo "mismo programa, mismos bytes: $primera"
+
+  contrato-del-lsp:
+    name: La especificación publicada es válida
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # '--emit-lang-info' es el contrato con la extensión y el LSP: keywords,
+      # símbolos, hooks, códigos de error. Si deja de ser JSON válido o pierde
+      # una clave, se rompe una herramienta que vive fuera de este repo y
+      # ninguna prueba de aquí lo notaría.
+      - name: El JSON del lenguaje es válido y completo
+        run: |
+          python V0/main.py --emit-lang-info > lang.json
+          python - <<'PY'
+          import json
+          import sys
+          d = json.load(open("lang.json", encoding="utf-8"))
+          faltan = [k for k in ("lang_info_version", "compiler_version",
+                                "keywords", "symbols",
+                                "hooks", "tokens", "errors", "directives",
+                                "severities", "stages") if k not in d]
+          assert not faltan, f"la especificación perdió claves: {faltan}"
+          assert d["keywords"] and d["symbols"] and d["errors"], \
+              "la especificación viene vacía"
+
+          # La versión que publica el contrato tiene que ser la de version.py,
+          # no una copia que alguien escribió aparte.
+          sys.path.insert(0, ".")
+          from version import VERSION
+          assert d["compiler_version"] == VERSION, (
+              f"lang-info dice {d['compiler_version']} y version.py dice {VERSION}")
+
+          print(f"lang_info v{d['lang_info_version']} de suriaX {VERSION}: "
+                f"{len(d['keywords'])} keywords, {len(d['symbols'])} símbolos, "
+                f"{len(d['errors'])} códigos de error")
+          PY

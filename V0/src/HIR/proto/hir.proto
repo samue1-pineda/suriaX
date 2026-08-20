@@ -1,5 +1,5 @@
 // =========================================================================
-// hir.proto — esquema del HIR de suriaX (v1, Fase 5)
+// hir.proto — esquema del HIR de suriaX (v2, Fase 5)
 //
 // El HIR es la frontera entre el frontend Python y sus DOS consumidores:
 // el backend C++ (MIR -> LLVM IR) y el intérprete tree-walk (ver
@@ -11,11 +11,19 @@
 //
 // exactamente las dos salidas que 'semantic.analyze()' produce hoy.
 //
-// ALCANCE DE v1 (schema_version == 1):
-//  - SIN RBMM: 'region'/'shrd', 'make T in r' y 'x at r' NO viajan. El
-//    emisor Python los RECHAZA fail-fast (HIR005) en lugar de degradarlos
-//    en silencio. Sus tags quedan 'reserved' para reintroducirlos en una
-//    versión futura sin romper el esquema.
+// QUE CAMBIO EN v2 (schema_version == 2). Un POOL de tipos en el Module y
+// nodos que lo referencian por indice ('Expr.type_id' y hermanos) en vez de
+// re-serializar el mismo 'Type' una y otra vez. Es un cambio INCOMPATIBLE
+// -- los tags de los campos inline quedan 'reserved' y el lector rechaza un
+// .phir v1 con un mensaje que dice como regenerarlo -- y esta medido, no
+// supuesto: ver docs/plan_hir_v2.md.
+//
+// ALCANCE, que no cambió entre v1 y v2:
+//  - SIN REGIONES: 'region'/'shrd', 'make T in r' y 'x at r' nunca viajaron
+//    y se RETIRARON del lenguaje en v0.2.0 (ver
+//    documentation/source/memory_decision.rst). Sus tags quedan 'reserved':
+//    nada de lo que un lector conoce cambió de significado, y reintroducirlas
+//    algún día no rompería el esquema.
 //  - move-semantics SÍ viaja: 'MoveStmt' y 'Symbol.moved_at' — el
 //    intérprete hace cumplir use-after-move EN RUNTIME (los caminos que el
 //    análisis estático conservador no ve), igual que hará el MIR.
@@ -40,6 +48,27 @@
 //    O(1). Cero dependencia del layout de memoria de Python.
 //  - 'schema_version' explícito: el lector RECHAZA versiones que no conoce
 //    en vez de mal-interpretarlas (fail-fast).
+//
+// HOOKS DE USUARIO (HTIMS, htims/). El vocabulario de hooks dejó de ser un
+// conjunto cerrado del compilador: un proyecto puede DECLARAR los suyos
+// ('extends.srcx' + calls_dir). Un enum no puede representar un nombre que
+// nadie conoce en tiempo de compilación del esquema, así que:
+//
+//   - 'HookKind.EXTENDED' marca "el nombre manda", y 'hook_name' lo lleva;
+//   - la clave de despacho pasa de (owner, kind) a (owner, kind, name), con
+//     name == "" en TODO hook del vocabulario fijo.
+//
+// Y nada más: el HIR gana la IDENTIDAD del hook (sin ella no hay despacho
+// posible) y no el estado del proyecto que lo declara. El nombre del
+// proyecto, el manifiesto y la lista de extensiones son configuración, no
+// IR — mantenerlos fuera es lo que evita que el '.phir' derive de artefacto
+// ejecutable a archivo de estado.
+//
+// Es un cambio ADITIVO -- campos nuevos, ningún tag reasignado -- así que
+// 'schema_version' sigue en 1: un '.phir' emitido antes se lee igual (los
+// campos ausentes valen "" / 0) y un lector viejo salta lo que no conoce en
+// vez de malinterpretarlo. Por eso el backend web no necesita saber nada de
+// esto: su decodificador ya descarta los tags desconocidos.
 // =========================================================================
 
 syntax = "proto3";
@@ -64,6 +93,28 @@ message Module {
   // consumidor (module linker del intérprete / lector C++) resuelve 'phir'
   // RELATIVO al directorio de este archivo y liga las unidades.
   repeated LibraryRef libraries = 5;
+
+  // POOL DE TIPOS (v2). Un programa mediano emite decenas de miles de 'Type'
+  // sobre unas pocas decenas DISTINTAS (medido en dev/bench_hir.py: 21 065
+  // mensajes de 43 tipos distintos, 490x de repeticion, el 20% del
+  // artefacto). Aqui viaja cada tipo UNA vez y los nodos lo referencian por
+  // indice.
+  //
+  // El indice 0 es el tipo VACIO: 'type_id = 0' significa "sin tipo
+  // anotado", que es exactamente el default de proto3 -- asi la ausencia no
+  // necesita un campo de presencia y un nodo sin tipo no ocupa ningun byte.
+  //
+  // La SymbolTable NO participa: sus 'Type' son inline. Es el 4% de los
+  // bytes y la parte que una persona lee al depurar; plegarla habria
+  // costado legibilidad sin ganancia medible.
+  repeated Type types = 6;
+
+  // NOTA de alcance (HTIMS): el nombre del proyecto y la lista de
+  // extensiones NO viajan aquí. Describen el PROYECTO, no esta unidad, y no
+  // hacen falta ni para ejecutar ni para bajar a MIR; viven en la
+  // configuración cargada y se consultan con '--emit-extensions'. Lo único
+  // que el HIR necesita de un hook de usuario es su IDENTIDAD ('hook_name'),
+  // sin la cual el despacho es imposible.
 }
 
 message LibraryRef {
@@ -99,6 +150,11 @@ message Type {
   // del tipo; la única coerción segura es SOLTAR mutabilidad
   // (ptr mutable T -> ptr T), nunca ganarla. Espejo de types_ast.Type.mut.
   bool mut = 4;      // solo POINTER
+  // ARGUMENTOS DE TIPO de un generico ('Vector<int>'), solo NOMINAL.
+  // Participan de la identidad del tipo: 'Vector<int>' y 'Vector<str>' son
+  // tipos distintos, y el consumidor no los puede confundir. Espejo de
+  // types_ast.Type.args.
+  repeated Type args = 5;
 }
 
 // ---------------------------------------------------------------------- //
@@ -118,15 +174,15 @@ enum SymbolKind {
   HOOK = 10;
   TYPE = 11;    // tipo nominal OPACO declarado con 'type' (ast_nodes.TypeDecl)
 
-  reserved 9;   // REGION: retirado de v1 junto con RBMM
+  reserved 9;   // REGION: retirado con el modelo por regiones (v0.2.0)
   reserved "REGION";
 }
 
 enum HookKind {
   HOOK_UNSPECIFIED = 0;
   FREE = 1;    // __free__:   fn __free__(T ptr x) -> void
-  MAKE = 2;    // __make__:   fn __make__(...) -> T ptr (sin disparador en v1:
-               // 'make T in r' es RBMM; el hook igual viaja si está declarado)
+  reserved 2;  // MAKE: '__make__' existía solo para 'make T in r'; retirado en
+  reserved "MAKE";  // v0.2.0 con el modelo por regiones (nunca tuvo disparador)
   SIZEOF = 3;  // __sizeof__: fn __sizeof__(T ptr x) -> int
   PRINT = 4;   // __print__:  fn __print__(T ptr x) -> void
   LEN = 5;     // __len__:    fn __len__(T ptr x) -> int
@@ -138,6 +194,17 @@ enum HookKind {
                // -> void — se dispara con 'v[i] = x' (dueño: primer parámetro)
   EQ = 9;      // __eq__: fn __eq__(T ptr a, T ptr b) -> bool — se dispara con
                // 'a == b' entre nominales (dueño: primer parámetro)
+  MIN = 10;    // __min__: fn __min__(T ptr x) -> int — cota INFERIOR del tipo
+  MAX = 11;    // __max__: fn __max__(T ptr x) -> int — cota SUPERIOR. Los dos
+               // los lee el COMPILADOR (el literal de su 'return') para decidir
+               // si un literal cabe en un tipo numérico de librería; viajan al
+               // HIR como cualquier otro hook, no los dispara ninguna sintaxis
+
+  // hook DECLARADO POR EL USUARIO (HTIMS). No tiene número propio porque su
+  // identidad es el NOMBRE ('hook_name'), no un valor del enum: el
+  // compilador no puede enumerar lo que aún no existe. El hueco hasta 100
+  // queda libre para futuros hooks del vocabulario fijo.
+  EXTENDED = 100;
 }
 
 message Symbol {
@@ -154,8 +221,11 @@ message Symbol {
   map<string, Symbol> members = 10;
   HookKind hook_kind = 11;                    // solo kind == HOOK
   string hook_owner = 12;                     // idem
+  // nombre del hook cuando 'hook_kind == EXTENDED' ("__gravity__"); "" en
+  // todo hook del vocabulario fijo, cuyo nombre ya lo dice el enum.
+  string hook_name = 14;
 
-  reserved 7, 13;  // region / shared: RBMM, fuera de v1
+  reserved 7, 13;  // region / shared: del modelo por regiones, retirado
   reserved "region", "shared";
 }
 
@@ -163,6 +233,12 @@ message HookEntry {
   string owner_type = 1;  // nombre nominal dueño ("Punto")
   HookKind kind = 2;
   Symbol symbol = 3;
+  // "" salvo con kind == EXTENDED: junto a (owner_type, kind) forma la clave
+  // de despacho completa.
+  string hook_name = 4;
+  // extensión que lo declaró ("physics"); solo procedencia, para que un
+  // diagnóstico pueda decir de dónde salió el vocabulario.
+  string extension = 5;
 }
 
 message SymbolTable {
@@ -186,6 +262,9 @@ message SymbolTable {
 message HookRef {
   string owner_type = 1;
   HookKind kind = 2;
+  // "" salvo con kind == EXTENDED. La terna (owner_type, kind, hook_name) es
+  // la clave EXACTA con la que el lector indexó 'SymbolTable.hooks'.
+  string hook_name = 3;
   // suficiente para lookup O(1) en SymbolTable.hooks; NO se re-serializa
   // el Symbol completo (evita duplicarlo N veces).
 }
@@ -197,10 +276,18 @@ message HookRef {
 message Expr {
   uint32 ln = 1;
   uint32 col = 2;
-  // tipo resuelto por AST-tipado/Semántica. Ausente (kind UNSPECIFIED) =
-  // aún no inferible en esta versión del frontend; los targets lo tratan
-  // como desconocido, nunca lo adivinan.
-  Type restype = 3;
+  // tipo resuelto por AST-tipado/Semántica, como INDICE en 'Module.types'
+  // (v2). 0 = sin tipo anotado: aún no inferible en esta versión del
+  // frontend; los targets lo tratan como desconocido, nunca lo adivinan.
+  //
+  // Es el campo que justifica el pool él solo: hay uno por expresión y son
+  // el 93% de los 'Type' del artefacto. Ningún consumidor lo leía inline
+  // (el intérprete no lo usa; el web lo resuelve al decodificar), así que
+  // plegarlo no movió trabajo a nadie.
+  uint32 type_id = 4;
+
+  reserved 3;   // 'Type restype' inline: v1
+  reserved "restype";
 
   oneof node {
     Literal literal = 10;
@@ -260,6 +347,12 @@ message Call {
   Expr callee = 1;
   repeated Expr args = 2;
   HookRef hook = 3;  // __print__/__len__ enlazado por la Semántica, si aplica
+  // TEMPORAL: si esta expresion produce un valor que POSEE recursos y nadie
+  // se queda con el (no lo recibe un binding, una asignacion ni un 'return'),
+  // aqui viaja el '__free__' que lo destruye al terminar la sentencia. Vacio
+  // en el caso normal. Quien decide es el frontend: saber si un tipo posee es
+  // una pregunta sobre el TIPO.
+  HookRef temp_drop = 4;
 }
 
 message Index        { Expr obj = 1; Expr index = 2; }
@@ -278,6 +371,12 @@ message StructLiteral {
   string type_name = 1;
   repeated string field_names = 2;
   repeated Expr values = 3;
+  // TEMPORAL: si esta expresion produce un valor que POSEE recursos y nadie
+  // se queda con el (no lo recibe un binding, una asignacion ni un 'return'),
+  // aqui viaja el '__free__' que lo destruye al terminar la sentencia. Vacio
+  // en el caso normal. Quien decide es el frontend: saber si un tipo posee es
+  // una pregunta sobre el TIPO.
+  HookRef temp_drop = 4;
 }
 
 // ---------------------------------------------------------------------- //
@@ -306,17 +405,41 @@ message Stmt {
     TryStmt try_stmt = 25;
   }
 
-  reserved 12;  // RegionStmt: RBMM, fuera de v1
+  reserved 12;  // RegionStmt: del modelo por regiones, retirado
   reserved "region";
 }
 
-message Block { repeated Stmt statements = 1; }
+// Destruccion que el compilador INSERTA al cerrar un bloque. Nadie la
+// escribe: la decide la Semantica (que sabe que tipos poseen recursos) y
+// viaja aqui para que el interprete y el backend nativo ejecuten lo MISMO,
+// sin volver a decidirlo cada uno.
+//
+// La lista es ESTATICA pero el drop no es incondicional: el consumidor
+// destruye solo lo que siga vivo. Saber si un valor fue movido o liberado en
+// una rama es estado de EJECUCION —la celda ya lo lleva—, no algo que el
+// frontend pueda resolver sin un analisis de flujo completo.
+message Drop {
+  // ruta APLANADA por el frontend: ["b"] es un local, ["c","b"] el campo de un
+  // local. Se aplana al compilar porque "que campos poseen recursos" es una
+  // pregunta sobre el TIPO, y el consumidor no tiene por que rehacerla.
+  repeated string path = 1;
+  HookRef hook = 2;   // '__free__' de lo que hay al final de la ruta
+}
+
+message Block {
+  repeated Stmt statements = 1;
+  // en orden INVERSO al de declaracion: lo ultimo que nace muere primero.
+  repeated Drop drops = 2;
+}
 
 message VarDecl {
   string qualifier = 1;  // 'const' | 'var' | "" ("" equivale a 'var')
-  Type type = 2;
   string name = 3;
   Expr value = 4;        // ausente si no hay inicializador
+  uint32 type_id = 5;    // indice en 'Module.types' (v2)
+
+  reserved 2;
+  reserved "type";
 }
 
 // '[qualifier] "type" IDENTIFIER [ "=" expr ];' — tipo nominal OPACO
@@ -342,7 +465,12 @@ message WhileStmt { Expr condition = 1; Block body = 2; }
 message CaseArm { Expr pattern = 1; Stmt body = 2; }
 message MatchStmt { Expr subject = 1; repeated CaseArm cases = 2; }
 
-message ReturnStmt { Expr value = 1; }  // ausente = 'return;'
+message ReturnStmt {
+  Expr value = 1;      // ausente = 'return;'
+  // el valor devuelto POSEE recursos: su propiedad pasa al llamador y el
+  // ambito que lo tenia no debe destruirlo. Lo decide el frontend.
+  bool transfers = 2;
+}
 message BreakStmt {}
 message ContinueStmt {}
 
@@ -353,10 +481,25 @@ message MoveStmt { Expr target = 1; }
 
 // manejo de errores por EXCEPCIONES:
 message ThrowStmt { Expr value = 1; }  // inicia la propagación
+// Una rama 'catch'. 'type' presente = la rama SOLO atrapa valores de ese
+// tipo; ausente = atrapa cualquiera. El consumidor prueba las ramas EN ORDEN
+// y se queda con la primera que encaja; si ninguna encaja, el valor sigue
+// propagándose.
+message CatchClause {
+  string name = 1;         // nombre ligado al valor capturado (scope de la rama)
+  Block block = 2;
+  Type type = 3;           // filtro; ausente = atrapa todo
+}
+
 message TryStmt {                      // intercepta la propagación
   Block try_block = 1;
-  string catch_name = 2;   // nombre ligado al valor capturado (scope del catch)
-  Block catch_block = 3;
+  repeated CatchClause catches = 4;
+  // v2 tenía una sola rama sin tipo, inline. Al pasar a N ramas filtradas sus
+  // tags quedan 'reserved': un lector viejo NO puede leer un try multi-rama
+  // como si fuera de una, que es justo la degradación silenciosa que el
+  // esquema evita.
+  reserved 2, 3;
+  reserved "catch_name", "catch_block";
 }
 
 // REGLA DE PUNTEROS: 'free x;' exige que x sea 'ptr T' (SEM014 ya lo
@@ -404,22 +547,47 @@ message TestDecl {
   Block body = 2;
 }
 
-message Parameter { Type type = 1; string name = 2; }
+message Parameter {
+  string name = 2;
+  uint32 type_id = 3;    // indice en 'Module.types' (v2)
+
+  reserved 1;
+  reserved "type";
+}
 
 message FunctionDecl {
   string name = 1;
   repeated Parameter params = 2;
-  Type return_type = 3;
+  uint32 return_type_id = 7;   // indice en 'Module.types' (v2)
   Block body = 4;         // ausente = PROTOTIPO (la implementación la aporta
                           // el backend / #extern)
   string dunder = 5;      // nombre sin guiones si es hook/dunder ("" = normal)
   string decorator = 6;   // "@decorador" aplicado, si lo hay ("" = ninguno)
+
+  reserved 3;             // 'Type return_type' inline: v1
+  reserved "return_type";
 }
 
-message Field { Type type = 1; string name = 2; }
+message Field {
+  string name = 2;
+  uint32 type_id = 3;    // indice en 'Module.types' (v2)
+
+  reserved 1;
+  reserved "type";
+}
 message StructDecl { string name = 1; repeated Field fields = 2; }
 
-message EnumItem { string name = 1; Expr value = 2; }
+// Una variante de enum. Dos formas EXCLUYENTES:
+//   - variante UNIDAD: 'value' es su entero (explicito o auto-numerado).
+//   - variante con PAYLOAD: 'payload' lleva los tipos que transporta, y
+//     entonces el enum es un tipo SUMA — sus valores dejan de ser enteros.
+// El consumidor distingue por 'payload' vacio o no; sin ese campo no podria
+// saber si 'Literal' es un entero o un constructor que hay que invocar.
+message EnumItem {
+  string name = 1;
+  Expr value = 2;
+  repeated uint32 payload_type_ids = 3;  // indices en Module.types
+}
 message EnumDecl { string name = 1; repeated EnumItem items = 2; }
 
 message ExternBlock {

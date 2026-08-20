@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 source_file: "<normalizado>"
 symbols {
   types {
@@ -113,23 +113,12 @@ items {
   struct_decl {
     name: "Nodo"
     fields {
-      type {
-        kind: INT
-      }
       name: "x"
+      type_id: 1
     }
     fields {
-      type {
-        kind: NULLABLE
-        inner {
-          kind: POINTER
-          inner {
-            kind: NOMINAL
-            name: "Nodo"
-          }
-        }
-      }
       name: "sig"
+      type_id: 2
     }
   }
 }
@@ -139,20 +128,8 @@ items {
   function {
     name: "crea"
     params {
-      type {
-        kind: INT
-      }
       name: "v"
-    }
-    return_type {
-      kind: NULLABLE
-      inner {
-        kind: POINTER
-        inner {
-          kind: NOMINAL
-          name: "Nodo"
-        }
-      }
+      type_id: 1
     }
     body {
       statements {
@@ -160,18 +137,11 @@ items {
         col: 5
         var_decl {
           qualifier: "var"
-          type {
-            kind: NOMINAL
-            name: "Nodo"
-          }
           name: "n"
           value {
             ln: 4
             col: 18
-            restype {
-              kind: NOMINAL
-              name: "Nodo"
-            }
+            type_id: 3
             struct_literal {
               type_name: "Nodo"
               field_names: "x"
@@ -179,9 +149,7 @@ items {
               values {
                 ln: 4
                 col: 27
-                restype {
-                  kind: INT
-                }
+                type_id: 1
                 identifier {
                   name: "v"
                 }
@@ -195,6 +163,7 @@ items {
               }
             }
           }
+          type_id: 3
         }
       }
       statements {
@@ -204,22 +173,12 @@ items {
           value {
             ln: 5
             col: 12
-            restype {
-              kind: POINTER
-              inner {
-                kind: NOMINAL
-                name: "Nodo"
-              }
-              mut: true
-            }
+            type_id: 4
             addr_of {
               operand {
                 ln: 5
                 col: 13
-                restype {
-                  kind: NOMINAL
-                  name: "Nodo"
-                }
+                type_id: 3
                 identifier {
                   name: "n"
                 }
@@ -230,6 +189,7 @@ items {
         }
       }
     }
+    return_type_id: 2
   }
 }
 items {
@@ -238,23 +198,8 @@ items {
   function {
     name: "suma"
     params {
-      type {
-        kind: NULLABLE
-        inner {
-          kind: POINTER
-          inner {
-            kind: NOMINAL
-            name: "Nodo"
-          }
-        }
-      }
       name: "n"
-    }
-    return_type {
-      kind: ERROR
-      inner {
-        kind: INT
-      }
+      type_id: 2
     }
     body {
       statements {
@@ -264,24 +209,13 @@ items {
           condition {
             ln: 9
             col: 9
-            restype {
-              kind: BOOL
-            }
+            type_id: 6
             binary {
               op: "=="
               left {
                 ln: 9
                 col: 9
-                restype {
-                  kind: NULLABLE
-                  inner {
-                    kind: POINTER
-                    inner {
-                      kind: NOMINAL
-                      name: "Nodo"
-                    }
-                  }
-                }
+                type_id: 2
                 identifier {
                   name: "n"
                 }
@@ -303,9 +237,7 @@ items {
                 value {
                   ln: 9
                   col: 28
-                  restype {
-                    kind: INT
-                  }
+                  type_id: 1
                   literal {
                     kind: "int"
                     int_value: 0
@@ -323,9 +255,7 @@ items {
           value {
             ln: 10
             col: 12
-            restype {
-              kind: INT
-            }
+            type_id: 1
             member {
               obj {
                 ln: 10
@@ -340,6 +270,7 @@ items {
         }
       }
     }
+    return_type_id: 5
   }
 }
 items {
@@ -347,39 +278,17 @@ items {
   col: 1
   function {
     name: "main"
-    return_type {
-      kind: INT
-    }
     body {
       statements {
         ln: 14
         col: 5
         var_decl {
           qualifier: "var"
-          type {
-            kind: NULLABLE
-            inner {
-              kind: POINTER
-              inner {
-                kind: NOMINAL
-                name: "Nodo"
-              }
-            }
-          }
           name: "cabeza"
           value {
             ln: 14
             col: 28
-            restype {
-              kind: NULLABLE
-              inner {
-                kind: POINTER
-                inner {
-                  kind: NOMINAL
-                  name: "Nodo"
-                }
-              }
-            }
+            type_id: 2
             call {
               callee {
                 ln: 14
@@ -391,9 +300,7 @@ items {
               args {
                 ln: 14
                 col: 33
-                restype {
-                  kind: INT
-                }
+                type_id: 1
                 literal {
                   kind: "int"
                   int_value: 7
@@ -401,6 +308,7 @@ items {
               }
             }
           }
+          type_id: 2
         }
       }
       statements {
@@ -413,19 +321,11 @@ items {
               col: 9
               var_decl {
                 qualifier: "var"
-                type {
-                  kind: INT
-                }
                 name: "t"
                 value {
                   ln: 16
                   col: 21
-                  restype {
-                    kind: ERROR
-                    inner {
-                      kind: INT
-                    }
-                  }
+                  type_id: 5
                   call {
                     callee {
                       ln: 16
@@ -437,26 +337,20 @@ items {
                     args {
                       ln: 16
                       col: 26
-                      restype {
-                        kind: NULLABLE
-                        inner {
-                          kind: POINTER
-                          inner {
-                            kind: NOMINAL
-                            name: "Nodo"
-                          }
-                        }
-                      }
+                      type_id: 2
                       identifier {
                         name: "cabeza"
                       }
                     }
                   }
                 }
+                type_id: 1
               }
             }
           }
-          catch_name: "e"
+          catches {
+            name: "e"
+          }
         }
       }
       statements {
@@ -466,9 +360,7 @@ items {
           value {
             ln: 18
             col: 12
-            restype {
-              kind: INT
-            }
+            type_id: 1
             literal {
               kind: "int"
               int_value: 0
@@ -477,5 +369,42 @@ items {
         }
       }
     }
+    return_type_id: 1
   }
+}
+types {
+}
+types {
+  kind: INT
+}
+types {
+  kind: NULLABLE
+  inner {
+    kind: POINTER
+    inner {
+      kind: NOMINAL
+      name: "Nodo"
+    }
+  }
+}
+types {
+  kind: NOMINAL
+  name: "Nodo"
+}
+types {
+  kind: POINTER
+  inner {
+    kind: NOMINAL
+    name: "Nodo"
+  }
+  mut: true
+}
+types {
+  kind: ERROR
+  inner {
+    kind: INT
+  }
+}
+types {
+  kind: BOOL
 }

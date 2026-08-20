@@ -17,9 +17,9 @@ partes y una gramática sin estado engaña:
    valida y viaja en el HIR.
 
 ``[HIR-]``
-   El parser la reconoce y la semántica la valida, pero **no cruza al HIR
-   v1**: el emisor la rechaza con ``HIR005`` (hoy, todo RBMM). Se conserva en
-   la gramática porque el lenguaje la define y volverá.
+   El parser la reconoce y la semántica la valida, pero **no cruza al HIR**:
+   el emisor la rechaza con ``HIR005`` en su posición. Se conserva en la
+   gramática porque el lenguaje la define.
 
 ``[TBD]``
    Sintaxis diseñada, aún no implementada.

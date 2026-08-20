@@ -15,7 +15,9 @@ una pieza no toca a las demás.
 | Módulo | Responsabilidad |
 |---|---|
 | [`compilerconfig.py`](compilerconfig.py) | **Orquestador**: re-exporta la API pública; `python -m config.compilerconfig` = reporte de dependencias. |
-| [`dependencies.py`](dependencies.py) | Plataforma (win32/linux/macos/web), verificación de dependencias (LLVM-22, protobuf, pybind11, pyyaml), detección de toolchain. |
+| [`dependencies.py`](dependencies.py) | Plataforma (win32/linux/macos/web), verificación de dependencias (protobuf, pybind11, pyyaml), detección de toolchain. LLVM ya no se detecta: el target nativo es la VM/JIT y no pasa por él. |
+| [`errors.py`](errors.py) | Diagnósticos del formato de compilación (familia `CFG0xx`), con el mismo contrato que el resto del compilador. |
+| [`validate.py`](validate.py) | Validación del `.suriaX_config.yaml`. El esquema se **deriva** de `default_config()`: dos listas de claves acabarían divergiendo. |
 | [`yaml_config.py`](yaml_config.py) | Esquema/generación/carga del `.suriaX_config.yaml`. **Toda ruta relativa se resuelve contra la raíz del proyecto** (el directorio del yaml), nunca contra el CWD. |
 | [`logs.py`](logs.py) | Generador de logs → `./log`: **`<fuente>.log`, uno por archivo compilado** (legible, sobrescrito en cada corrida, con los errores de las `.libsrx` que importe) + `notes.jsonl` (NOTAS con recomendación) y `errors.jsonl` (estructurados globales, por el objetivo WIP de suriaX). Un flush por compilación. |
 | [`dumps.py`](dumps.py) | Volcados → `./dumps`: AST-tipado a `.ast.json` y tokens a `.tokens.txt` (flags `--emit-ast-json` / `--emit-tokens` de `V0/main.py`). |

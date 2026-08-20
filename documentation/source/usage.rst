@@ -35,7 +35,8 @@ falta para la fase que los usa.
      - target web (WebAssembly)
      - gestor de paquetes del sistema
    * - LLVM 22
-     - backend nativo
+     - nada del pipeline actual (``--check`` lo reporta, pero el target
+       nativo es la VM/JIT y no pasa por LLVM)
      - ``llvm-config --version``
 
 Para comprobar qué hay disponible en la máquina actual:
@@ -102,8 +103,11 @@ Y ejecútalo:
 .. code-block:: console
 
    $ python V0/main.py hola.srcx --run
-   frontend OK: 15 tokens, 2 items, 2 simbolos globales, 0 hooks, 0 casts
-   HIR (312 bytes) generado en: dumps/hola.srcx.phir
+   frontend OK: 23 tokens, 2 items, 2 simbolos globales, 0 hooks, 0 casts
+   HIR (306 bytes) generado en: dumps/hola.srcx.phir
+     unidad 'IO.stdpf': 349 bytes -> dumps/IO.stdpf.phir
+     unidad 'IO.stdp': 956 bytes -> dumps/IO.stdp.phir
+     unidad 'IO': 145 bytes -> dumps/IO.phir
    hola, suriaX
 
 ``--run`` emite el HIR y se lo entrega al intérprete **en el mismo proceso**.
@@ -218,7 +222,9 @@ Integración con editores
        guardar.
    * - ``--emit-lang-info``
      - La especificación del lenguaje en JSON: palabras clave por categoría,
-       tokens, directivas, hooks y códigos de error.
+       tokens, directivas, hooks y códigos de error. Trae también
+       ``compiler_version``, para que el cliente sepa contra qué compilador
+       está hablando y no atribuya a un error suyo un vocabulario viejo.
    * - ``--emit-extensions``
      - Las extensiones del proyecto en JSON (HTIMS): el nombre del proyecto,
        cada hook declarado con su firma y su posición, y las líneas
@@ -234,6 +240,7 @@ Entorno
    ==================  ==========================================================
    Opción              Efecto
    ==================  ==========================================================
+   ``--version``       Imprime ``suriaX <versión>`` y termina.
    ``--check``         Verifica las dependencias y muestra qué falta.
    ``--init-config``   Genera un ``.suriaX_config.yaml`` por defecto.
    ==================  ==========================================================

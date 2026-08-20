@@ -12,17 +12,18 @@
           "kind": "NOMINAL",
           "name": "Nodo",
           "inner": null,
-          "mut": false
+          "mut": false,
+          "args": []
         },
         "mutable": false,
-        "region": null,
-        "shared": false,
-        "region_mutable": false,
-        "region_na": false,
         "visibility": null,
         "moved_at": null,
         "hook_kind": null,
         "hook_owner": null,
+        "hook_name": null,
+        "hook_module": null,
+        "const_value": null,
+        "type_params": [],
         "param_types": null,
         "members": {
           "x": {
@@ -36,17 +37,18 @@
               "kind": "INT",
               "name": null,
               "inner": null,
-              "mut": false
+              "mut": false,
+              "args": []
             },
             "mutable": true,
-            "region": null,
-            "shared": false,
-            "region_mutable": false,
-            "region_na": false,
             "visibility": null,
             "moved_at": null,
             "hook_kind": null,
             "hook_owner": null,
+            "hook_name": null,
+            "hook_module": null,
+            "const_value": null,
+            "type_params": [],
             "param_types": null,
             "members": null
           },
@@ -69,21 +71,24 @@
                   "kind": "NOMINAL",
                   "name": "Nodo",
                   "inner": null,
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 },
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "mut": false
+              "mut": false,
+              "args": []
             },
             "mutable": true,
-            "region": null,
-            "shared": false,
-            "region_mutable": false,
-            "region_na": false,
             "visibility": null,
             "moved_at": null,
             "hook_kind": null,
             "hook_owner": null,
+            "hook_name": null,
+            "hook_module": null,
+            "const_value": null,
+            "type_params": [],
             "param_types": null,
             "members": null
           }
@@ -110,28 +115,32 @@
               "kind": "NOMINAL",
               "name": "Nodo",
               "inner": null,
-              "mut": false
+              "mut": false,
+              "args": []
             },
-            "mut": false
+            "mut": false,
+            "args": []
           },
-          "mut": false
+          "mut": false,
+          "args": []
         },
         "mutable": false,
-        "region": null,
-        "shared": false,
-        "region_mutable": false,
-        "region_na": false,
         "visibility": null,
         "moved_at": null,
         "hook_kind": null,
         "hook_owner": null,
+        "hook_name": null,
+        "hook_module": null,
+        "const_value": null,
+        "type_params": [],
         "param_types": [
           {
             "__node__": "Type",
             "kind": "INT",
             "name": null,
             "inner": null,
-            "mut": false
+            "mut": false,
+            "args": []
           }
         ],
         "members": null
@@ -151,19 +160,21 @@
             "kind": "INT",
             "name": null,
             "inner": null,
-            "mut": false
+            "mut": false,
+            "args": []
           },
-          "mut": false
+          "mut": false,
+          "args": []
         },
         "mutable": false,
-        "region": null,
-        "shared": false,
-        "region_mutable": false,
-        "region_na": false,
         "visibility": null,
         "moved_at": null,
         "hook_kind": null,
         "hook_owner": null,
+        "hook_name": null,
+        "hook_module": null,
+        "const_value": null,
+        "type_params": [],
         "param_types": [
           {
             "__node__": "Type",
@@ -178,11 +189,14 @@
                 "kind": "NOMINAL",
                 "name": "Nodo",
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "mut": false
+              "mut": false,
+              "args": []
             },
-            "mut": false
+            "mut": false,
+            "args": []
           }
         ],
         "members": null
@@ -198,17 +212,18 @@
           "kind": "INT",
           "name": null,
           "inner": null,
-          "mut": false
+          "mut": false,
+          "args": []
         },
         "mutable": false,
-        "region": null,
-        "shared": false,
-        "region_mutable": false,
-        "region_na": false,
         "visibility": null,
         "moved_at": null,
         "hook_kind": null,
         "hook_owner": null,
+        "hook_name": null,
+        "hook_module": null,
+        "const_value": null,
+        "type_params": [],
         "param_types": [],
         "members": null
       }

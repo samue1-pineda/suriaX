@@ -39,7 +39,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument("phir", help="archivo .phir emitido por el frontend (--emit-hir)")
     parser.add_argument(
         "--text", action="store_true",
-        help="imprime además el Module completo en formato de texto protobuf",
+        help="imprime además el Module completo en formato de texto protobuf "
+             "(el árbol crudo: para depurar el FORMATO)",
+    )
+    parser.add_argument(
+        "--pretty", action="store_true",
+        help="imprime el HIR en su vista LEGIBLE: una línea por sentencia, "
+             "expresiones con su tipo resuelto y la posición del fuente al "
+             "margen. Es la forma de leer un .phir que ya existe",
     )
     parser.add_argument(
         "--exec", action="store_true", dest="execute",
@@ -100,6 +107,12 @@ def main(argv: list[str]) -> int:
     if module.libraries:
         refs = ", ".join(f"{r.alias} ({r.phir})" for r in module.libraries)
         print(f"  unidades referenciadas: {refs}")
+
+    if args.pretty:
+        import sys as _sys
+        from V0.src.HIR.pretty import write_pretty
+        print("\n--- HIR (vista legible) ---")
+        write_pretty(module, _sys.stdout)
 
     if args.text:
         from V0.src.HIR.emmit_IR import module_to_text

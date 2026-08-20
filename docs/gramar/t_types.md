@@ -84,7 +84,7 @@ enum Color { Rojo, Verde, Azul };
 
 `type` declara un **tipo nominal opaco**: un tipo con nombre y **sin
 representación escrita en suriaX** (no tiene campos como un `struct`). Su
-layout lo aportan el backend o sus hooks (`__sizeof__`, `__make__`...).
+layout lo aportan el backend o sus hooks (`__sizeof__`, `__min__`, `__max__`...).
 
 ```
 type definition:   [const | var] type <Name> [ = <expr> ];   // const type int8;
@@ -133,7 +133,7 @@ de tipos (`const Opaco x;`) y en el de valores con tipo `type`
 
 ## 3. Modificadores de tipo (memoria)
 
-Modelo de memoria: **region-based + move-semantics**.
+Modelo de memoria: **ownership + move-semantics** (ver secc. 7).
 
 `ptr` es un sufijo **POSTFIJO** (el tipo va primero): `char ptr` es "puntero
 a char" — el `char *text` de C se escribe `char ptr text`. La forma prefija
@@ -288,54 +288,35 @@ continue definition:   continue;
 
 ---
 
-## 7. Memoria: regiones y move-semantics
+## 7. Memoria: ownership y move-semantics
 
-Modelo **híbrido** (bloque + handle). Los tres modificadores de región son
-componibles y de **orden libre** (`shrd mutable na region x` es válido):
-
-```
-region definition:    <mods> region <name> { <block> };  // <mods> = { shrd | mutable | na }
-new definition:       new(<mods> region <name>);         // handle (sin bloque)
-delete (externa):     delete(region <name>);             // libera una región nombrada
-delete (interna):     delete();                          // dentro de una 'na region': la actual
-in region:            in region <name>: <stmt>;          // opera EN la región (o { ... })
-move region:          move region <a> -> region <b>;     // move-semantics de regiones (no copia)
-make ... in:          make <type> in <region>            // make int in scratch
-at definition:        <expr> at <region>                 // z = promedio(...) at scratch
-move definition:      move <expr>;                       // transfiere la propiedad de un valor
-free definition:      free <expr>;
-```
-
-Ejemplo:
+Cada valor con recursos tiene **un dueño**; la destrucción ocurre al cerrar el
+ámbito que lo posee, invocando el `__free__` de su tipo. Eso no tiene
+sintaxis: la llave que cierra ES el punto de destrucción. Solo dos sentencias
+escriben algo:
 
 ```
-region scratch { int ptr y = make int in scratch; };   // se auto-libera al cerrar
-
-new(shrd na region pool);          // handle compartible, NO auto-liberado
-in region pool: delete(region pool);   // vida manual: se libera explícitamente
+move definition:      move <expr>;    // transfiere la propiedad; invalida el origen
+free definition:      free <expr>;    // destruye ANTES del cierre del ámbito
 ```
 
-| Token    | Lexema   | Uso                                        |
-|----------|----------|--------------------------------------------|
-| `REGION` | `region` | Declara una región de memoria.             |
-| `SHRD`   | `shrd`   | Modificador: región COMPARTIBLE entre regiones. |
-| `MUTABLE`| `mutable`| Modificador: la región puede MUTAR y dividirse (además de calificar punteros). |
-| `NA`     | `na`     | Modificador "no auto": la región NO se auto-libera (usar `delete`). |
-| `IN`     | `in`     | Operación imperativa sobre una región (`in region r: ...`). |
-| `AT`     | `at`     | Ubica un valor en una región (`x at r`).   |
-| `MOVE`   | `move`   | Transferencia de propiedad (de un valor o de una región). |
-| `MAKE`   | `make`   | Construye un valor (en una región).        |
-| `FREE`   | `free`   | Liberación explícita puntual.              |
-| `NEW`    | `new`    | Inicializa una región como handle (`new(region r);`). |
-| `DELETE` | `delete` | Libera una región (`delete(region r)` / `delete()`). |
+| Token  | Lexema | Uso                                              |
+|--------|--------|--------------------------------------------------|
+| `MOVE` | `move` | Transferencia de propiedad de un valor.          |
+| `FREE` | `free` | Destrucción anticipada (exige un puntero).       |
 
-> La ejecución REAL del modelo RBMM es del **runtime**, agnóstica del target
-> (el intérprete llama a C++ vía pybind11), **no** se difiere al MIR. El
-> frontend transporta modificadores y valida existencia de regiones.
+> **Retirados en v0.2.0 con el modelo por regiones**: `REGION` (`region`),
+> `SHRD` (`shrd`), `NA` (`na`), `IN` (`in`), `AT` (`at`), `NEW` (`new`),
+> `DELETE` (`delete`) y `MAKE` (`make`) — 8 de las 50 palabras reservadas que
+> tenía el lenguaje, el 16 %. `MUTABLE` sigue, pero solo calificando punteros
+> (`ptr mutable T`). Los valores 40-42, 44-45, 47-48 y 57-58 de `TokenType`
+> quedan retirados y **no se reutilizan**: un volcado de tokens viejo mostraría
+> un nombre distinto para el mismo número y no habría cómo notarlo. El
+> razonamiento del retiro está en
+> [memory_decision.rst](../../documentation/source/memory_decision.rst).
 
-> `alloc` dejó de ser keyword del lenguaje: la reserva "cruda" la aporta una
-> librería (p. ej. una `fn alloc(...)` publicada por un `.libsrx`). El valor
-> 47 de `TokenType` queda retirado y no se reutiliza.
+> `alloc` tampoco es keyword: la reserva "cruda" la aporta una librería
+> (p. ej. una `fn alloc(...)` publicada por un `.libsrx`).
 
 ### Conversión explícita: `cast`
 
@@ -437,7 +418,7 @@ extern definition:    #extern cpp{ <c++ crudo> };         // RAW_BLOCK, no se to
 |---------|--------------------------------------------------------------|
 | `EOF`   | Marca el fin del flujo de tokens. Siempre el último.         |
 | `ERROR` | Token sintético emitido ante un error léxico (recuperación). |
-| `DUNDER`| `__foo__` (empieza y termina en `__`, ≥1 caracter dentro). El lexer reconoce la FORMA para cualquier nombre, sin validar una lista cerrada; qué nombres son *hooks* de tipo reconocidos (`__free__`/`__make__`/`__sizeof__`/`__print__`/`__len__`) lo decide la fase Semántica (`semantic/hooks.py`), que valida la firma completa y enlaza el despacho (`free x;`→`__free__`, `make T in r`→`__make__`, `sizeof(T)`→`__sizeof__`, `print(x)`/`x.print()`→`__print__`, `len(x)`/`x.len()`→`__len__`). Un `__foo__` no reconocido se trata como una función normal, sin error. |
+| `DUNDER`| `__foo__` (empieza y termina en `__`, ≥1 caracter dentro). El lexer reconoce la FORMA para cualquier nombre, sin validar una lista cerrada; qué nombres son *hooks* de tipo reconocidos lo decide la fase Semántica (`semantic/hooks.py`), que valida la firma completa y enlaza el despacho: `free x;` y el cierre del ámbito→`__free__`, `sizeof(T)`→`__sizeof__`, `print(x)`/`x.print()`→`__print__`, `len(x)`/`x.len()`→`__len__`, `cast<T>(x)`→`__cast__`, `v[i]`→`__index__`, `v[i] = x`→`__index_set__`, `a == b`→`__eq__`. `__min__`/`__max__` no los dispara ninguna sintaxis: los LEE el compilador para decidir si un literal cabe en un tipo numérico de librería. Un `__foo__` no reconocido se trata como una función normal, sin error. |
 
 ---
 

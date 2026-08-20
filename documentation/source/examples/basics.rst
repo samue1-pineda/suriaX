@@ -7,7 +7,7 @@ llamar funciones.
 .. _ej-hola:
 
 Hola, mundo
-============
+-----------
 
 .. code-block:: srcx
 
@@ -24,7 +24,7 @@ valor que devuelve ``main`` es el código de salida.
 .. _ej-variables:
 
 Variables y aritmética
-=======================
+----------------------
 
 .. code-block:: srcx
 

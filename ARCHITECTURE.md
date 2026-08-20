@@ -35,9 +35,8 @@ end
 subgraph Cpp_backend [backend C++]
 HIR_cpp --> MIR[MIR · registros, CFG]
 MIR --> lowering
-lowering --> LLVM_IR[LLVM IR]
-LLVM_IR --> nativo[.o / .exe]
-MIR --> VM_JIT[VM bytecode / JIT]
+lowering --> VM_JIT[VM bytecode / JIT]
+VM_JIT --> nativo[.o / .exe]
 end
 
 subgraph Web_target [target web · TypeScript]
@@ -59,6 +58,21 @@ pybind11 -.-> interpreter
 memory_logic -.-> MIR
 end
 ```
+
+## El entrypoint: `cli/` y `driver/`
+
+El compilador se invoca hoy por línea de comandos y mañana por suriniX
+(`suri run --args`), así que **pedir** y **compilar** están separados:
+
+| Paquete | Responsabilidad |
+|---------|-----------------|
+| [`V0/cli/`](V0/cli/) | Qué se pide (`argparse`), cómo se muestra (hechos a stdout, diagnósticos a stderr) y con qué código termina el proceso. |
+| [`V0/driver/`](V0/driver/) | El compilador **como librería**: compila y ejecuta sin terminal. `compile_source()` devuelve un `CompileResult` (métricas, artefactos, diagnósticos, tiempos) y no imprime nada; lo que quiera contar sale por un `Reporter` que pasa el llamador. |
+
+`V0/main.py` solo prepara `sys.path` y cede el control. La frontera existe
+para que suriniX reutilice el pipeline entero en vez de invocar al proceso o
+reimplementarlo, y para que ejecutar sea una decisión del llamador: el driver
+deja el `.phir` y dice si el target lo pide, pero no lo lanza.
 
 ## Frontend (Python)
 
@@ -116,19 +130,26 @@ La frontera hacia **todos** los backends es un HIR serializado en protobuf:
 - permite que cada consumidor reconstruya el contexto que necesita sin
   reimplementar el frontend.
 
-**Alcance v1**: RBMM (`region`, `new`/`delete`, `in region`, `x at r`) **no
-viaja** — se rechaza con `HIR005` y sus tags quedan `reserved`. Move-semantics
-sí viaja (`MoveStmt`, `Symbol.moved_at`).
+**Alcance v1**: las construcciones de región (`region`, `new`/`delete`,
+`in region`, `x at r`) nunca viajaron — se rechazaban con `HIR005` y sus tags
+quedaron `reserved`. Retiradas del lenguaje en v0.2.0, los tags siguen
+reservados. Move-semantics sí viaja (`MoveStmt`, `Symbol.moved_at`).
 
 ## Backend C++ (en construcción)
+
+> El target nativo es la **VM de bytecode con JIT**, no LLVM. La generación
+> de LLVM IR está fuera del plan actual: el MIR ya es un IR de registros con
+> CFG, y meter LLVM en medio añadía una dependencia enorme y un segundo
+> modelo de máquina antes de tener el primero funcionando. `compilerconfig`
+> sigue detectando `llvm-config` y lo reporta en `--check`, pero nada de la
+> compilación depende de ello.
 
 | Fase | Entrada → Salida | Responsabilidad |
 |------|------------------|-----------------|
 | **Lector HIR** | `.phir` → estructuras C++ | Valida `schema_version` y reconstruye el árbol y la tabla de símbolos. |
 | **MIR lowering** | HIR → **MIR** | IR de **registros** con control de flujo explícito (CFG) y las verificaciones del modelo de memoria (lifetimes de región, move). |
-| **VM / JIT** | MIR → bytecode | Ejecución sin LLVM. |
-| **LLVM IR** | MIR → LLVM IR | Genera LLVM IR (LLVM-22) y de ahí el objeto del target. |
-| **Targets** | LLVM IR → artefacto | Según `compilerconfig`: `IS_WIN32` → `.exe`, `IS_LINUX` → `.o`. |
+| **VM / JIT** | MIR → bytecode | **Target nativo estándar.** Ejecuta el bytecode y compila en caliente las rutas calientes. |
+| **Targets** | bytecode → artefacto | Según `compilerconfig`: `IS_WIN32` → `.exe`, `IS_LINUX` → `.o`. |
 | **Linker** | objeto(s) → ejecutable | Etapa final; `compilerconfig` aporta rutas y flags. |
 
 ## Target web (WebAssembly)
@@ -150,7 +171,7 @@ en [`web/`](web/), en TypeScript y sin dependencias. Ver
 
 Son **dos máquinas objetivo distintas**:
 
-- el **MIR** es de C++ y apunta a una máquina de **registros** (VM/JIT, LLVM):
+- el **MIR** es de C++ y apunta a una máquina de **registros** (la VM/JIT):
   IR de registros con grafo de control de flujo;
 - el **WIR** es de WebAssembly, que es una máquina de **pila** con control de
   flujo **estructurado** (`block`/`loop`/`if` anidados, sin saltos
@@ -169,7 +190,7 @@ El **runtime** es independiente del target y lo comparten los backends:
 - **`runtime/logic_mem/`** — administrador de memoria lógica en **C++ puro**
   (`include/mem_core.hpp`): celdas con máquina de estados `LIVE/MOVED/FREED`,
   handles monotónicos y **códigos de estado** en vez de excepciones (no acopla
-  el ABI). Es lo que enlazarán la VM y el backend LLVM directamente.
+  el ABI). Es lo que enlazará la VM/JIT directamente.
 - **`runtime/logic_mem/cxx_entry.cpp`** — adaptador **pybind11** (módulo
   `memory_c`): convierte objetos de Python ↔ `Value` y guarda lo no primitivo
   en un *extern store* propio, para que el core siga siendo agnóstico.
@@ -180,8 +201,9 @@ El **runtime** es independiente del target y lo comparten los backends:
   puro, seleccionable con `SURIAX_NATIVE_MEM`).
 
 Punteros, `&` y move-semantics funcionan de punta a punta por este runtime.
-Las **regiones (RBMM)** se construirán encima de estas primitivas — después de
-validar que los punteros son reales y manejables, no antes.
+El **drop automático** y las **arenas** se construirán encima de estas
+primitivas — después de validar que los punteros son reales y manejables, no
+antes.
 
 El build del lado nativo es **único**: un `CMakeLists.txt` en la raíz y la
 lógica reutilizable en [`CMake/`](CMake/), que descubre los módulos de
@@ -199,8 +221,9 @@ target web lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
 
 `config/compilerconfig.py` es transversal a la compilación:
 
-- detecta plataforma y dependencias (LLVM-22 vía `llvm-config`, protobuf,
-  pybind11, pyyaml);
+- detecta plataforma y dependencias (protobuf, pybind11, pyyaml, y LLVM vía
+  `llvm-config` — que hoy solo se reporta: **no** está en la ruta de
+  generación de código, ver el backend C++);
 - lee/genera el formato de compilación `.suriaX_config.yaml`;
 - expone los flags (`IS_WEB`, `IS_WIN32`, `IS_LINUX`) que el backend consulta
   para elegir el target y orquestar el linker.

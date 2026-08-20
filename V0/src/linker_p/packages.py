@@ -84,8 +84,14 @@ def load_package(pkg_name: str, dir_path: str, parent_path: str, config,
             name=sub.alias, kind=SymbolKind.IMPORT, ln=ln, col=col,
             members=sub.all_members(),
         )
+        # el vocabulario despachado por el COMPILADOR sube al padre: quien
+        # importa el paquete lo hereda sin nombrar el submodulo. Las tres
+        # tablas viajan juntas — un '__cast__' que se quedara abajo haria que
+        # 'cast<dt.int8>(x)' fuera SEM016 en el consumidor aunque la libreria
+        # lo declare.
         package.hooks.update(sub.hooks)
         package.dunders.update(sub.dunders)
+        package.casts.update(sub.casts)
 
     return package
 

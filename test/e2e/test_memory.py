@@ -10,13 +10,14 @@ Dos mitades, ambas contrato:
    propósito.
 
 2. **Lo que NO existe todavía** (``test_limite_*``): indexación, aritmética
-   de punteros, ``sizeof`` sin hook, RBMM y reserva dinámica. Se prueban
+   de punteros, ``sizeof`` sin hook y reserva dinámica. Se prueban
    como límites CONOCIDOS: cada uno debe fallar con un diagnóstico claro y
    nunca con un traceback. El día que se implemente uno, su test falla y
    señala exactamente qué mover — es un recordatorio ejecutable, no una
    afirmación de que la carencia sea deseable.
 
-RBMM (``region``/arenas) queda fuera del v1: no viaja en el HIR.
+Las regiones se retiraron del lenguaje en v0.2.0; el modelo es ahora
+ownership + drop + arenas de librería (``documentation/source/memory_model.rst``).
 """
 
 from __future__ import annotations
@@ -158,10 +159,13 @@ def test_sizeof_con_hook_si_funciona():
          extra=B + "hook fn __sizeof__(B ptr b) -> int { return 8; };\n")
 
 
-def test_limite_region_no_viaja_en_el_hir():
-    """RBMM fuera del v1: 'region' parsea pero se rechaza al emitir (HIR005)."""
+def test_limite_region_ya_no_es_del_lenguaje():
+    """Las regiones se retiraron en v0.2.0: 'region' dejo de ser palabra
+    reservada, asi que 'region r { }' ni siquiera parsea. Antes parseaba y se
+    rechazaba al emitir (HIR005); ahora el rechazo llega antes y mas barato."""
     _code, err = _fails("fn main() -> int { region r { var int x = 1; }; return 0; };")
-    assert "HIR005" in err, err
+    assert "HIR005" not in err, "el HIR ya no deberia ser quien lo rechaza"
+    assert "PAR" in err, err
 
 
 def test_limite_no_hay_reserva_dinamica():

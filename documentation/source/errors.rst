@@ -11,6 +11,7 @@ columna.
    ==========  ====================  =============================================================================
    Prefijo     Fase                    Momento
    ==========  ====================  =============================================================================
+   ``CFG``     Configuración          Lo primero de todo, al leer ``.suriaX_config.yaml``.
    ``EXT``     Extensiones (HTIMS)    Antes del léxico, al leer ``extends.srcx`` y las declaraciones del proyecto.
    ``LEX``     Lexer                  Al formar los tokens.
    ``PAR``     Parser                 Al construir el árbol.
@@ -27,6 +28,114 @@ lo devuelve junto. Para obtenerlos en JSON, con rango y severidad:
 .. code-block:: console
 
    $ python V0/main.py programa.srcx --emit-diagnostics
+
+.. _cfg-errores:
+
+CFG — configuración
+--------------------
+
+Se leen antes que nada, porque el resto del pipeline resuelve rutas contra la
+configuración: seguir con unos ajustes que ya se rechazaron sería compilar
+contra algo que el usuario no escribió. Un ``.suriaX_config.yaml`` inválido
+termina con el código de salida ``5``.
+
+Antes, un archivo mal escrito se descartaba **en silencio** y el síntoma
+aparecía mucho después, en otro sitio —"no se encontró la librería X"— sin
+ninguna pista de que la configuración nunca llegó a aplicarse.
+
+.. _CFG001-def:
+.. _CFG002-def:
+.. _CFG003-def:
+.. _CFG004-def:
+.. _CFG005-def:
+.. _CFG006-def:
+.. _CFG007-def:
+
+.. table::
+   :widths: auto
+
+   ==========  ==============================  ====================================================
+   Código      Clase                           Cuándo
+   ==========  ==============================  ====================================================
+   ``CFG001``  ConfigError                     El archivo existe pero no se pudo leer (I/O, no UTF-8).
+   ``CFG002``  ConfigError                     YAML malformado; el mensaje trae la línea del parser.
+   ``CFG003``  ConfigError                     La raíz del documento no es un mapa ``clave: valor``.
+   ``CFG004``  ConfigError                     Clave desconocida. Sugiere la más parecida, que es
+                                               lo que arregla un typo (``libsrx_path`` →
+                                               ``libsrx_paths``).
+   ``CFG005``  ConfigError                     El valor no es del tipo que la clave espera.
+   ``CFG006``  ConfigError                     El valor no está entre los admitidos (``target``,
+                                               ``optimization``, ``platform``...).
+   ``CFG007``  ConfigError                     Hay un yaml pero falta ``pyyaml`` para leerlo. Es
+                                               una **advertencia**, no un error: el frontend corre
+                                               con la librería estándar, pero la configuración no
+                                               se está aplicando y hay que saberlo.
+   ==========  ==============================  ====================================================
+
+El esquema no se escribe a mano: se **deriva** del que genera
+``--init-config``, así que una clave nueva del formato queda validada sola.
+
+.. _ext-errores:
+
+EXT — extensiones del proyecto (HTIMS)
+---------------------------------------
+
+Se leen justo después de la configuración y antes del léxico: un proyecto
+puede DECLARAR hooks propios (``extends.srcx`` + los ``.py`` que nombra), y
+ese vocabulario tiene que existir antes de que la Semántica valide nada que
+lo use. Ver :doc:`repo/htims`.
+
+Toda la familia es **crítica**: un manifiesto malformado o un directorio que
+no existe es un proyecto mal configurado, no una advertencia que se pueda
+arrastrar.
+
+.. _EXT001-def:
+.. _EXT002-def:
+.. _EXT003-def:
+.. _EXT004-def:
+.. _EXT005-def:
+.. _EXT006-def:
+.. _EXT007-def:
+.. _EXT010-def:
+.. _EXT011-def:
+.. _EXT012-def:
+.. _EXT020-def:
+.. _EXT021-def:
+.. _EXT022-def:
+.. _EXT023-def:
+.. _EXT024-def:
+.. _EXT025-def:
+.. _EXT026-def:
+.. _EXT027-def:
+
+.. table::
+   :widths: auto
+
+   ==========  ==============================  ====================================================
+   Código      Nombre                          Cuándo
+   ==========  ==============================  ====================================================
+   ``EXT001``  ExtensionError                  El manifiesto existe pero no se pudo leer (I/O, no UTF-8).
+   ``EXT002``  ExtensionError                  Línea malformada: no es ``clave: valor`` ni comentario.
+   ``EXT003``  ExtensionError                  Un directorio declarado no existe.
+   ``EXT004``  ExtensionError                  Clave desconocida en el manifiesto.
+   ``EXT005``  ExtensionError                  Clave duplicada.
+   ``EXT006``  ExtensionError                  Valor vacío.
+   ``EXT007``  ExtensionError                  Falta una clave obligatoria.
+   ``EXT010``  ExtensionError                  El ``.py`` declarado no existe o no se puede leer.
+   ``EXT011``  ExtensionError                  El ``.py`` no es Python válido (``SyntaxError``).
+   ``EXT012``  ExtensionError                  El nombre de proyecto se declara dos veces con
+                                               valores distintos.
+   ``EXT020``  ExtensionError                  El nombre del hook no tiene la forma ``__x__``.
+   ``EXT021``  ExtensionError                  Falta ``owner``, o no es un identificador válido.
+   ``EXT022``  ExtensionError                  Falta ``returns``.
+   ``EXT023``  ExtensionError                  ``params`` no es una lista de cadenas.
+   ``EXT024``  ExtensionError                  El par (dueño, nombre) se declara dos veces.
+   ``EXT025``  ExtensionError                  Argumento no literal: el escaneo **no ejecuta**
+                                               el código de la extensión, así que solo admite
+                                               literales.
+   ``EXT026``  ExtensionError                  Argumento desconocido en el decorador.
+   ``EXT027``  ExtensionError                  Colisión con el vocabulario fijo del compilador.
+   ==========  ==============================  ====================================================
 
 .. _lex-errores:
 
@@ -97,7 +206,6 @@ PAR — análisis sintáctico
 .. _PAR019-def:
 .. _PAR020-def:
 .. _PAR021-def:
-.. _PAR022-def:
 .. _PAR023-def:
 .. _PAR024-def:
 .. _PAR025-def:
@@ -131,7 +239,6 @@ PAR — análisis sintáctico
    ``PAR019``  InvalidDecoratorTargetError       Un decorador sobre algo que no lo admite.
    ``PAR020``  UnknownDirectiveError             Una directiva que el compilador no conoce.
    ``PAR021``  InvalidMemoryQualifierError       Un cualificador de memoria mal usado.
-   ``PAR022``  InvalidRegionDeclarationError     Una declaración de región mal formada.
    ``PAR023``  MissingTypeAnnotationError        Falta la anotación de tipo obligatoria.
    ``PAR024``  InvalidExternBlockError           Un ``#extern`` mal formado.
    ``PAR025``  ExpressionTooDeepError            Anidamiento por encima del límite.
@@ -182,6 +289,7 @@ AST — tipos
 SEM — semántica
 ----------------
 
+.. _SEM000-def:
 .. _SEM001-def:
 .. _SEM002-def:
 .. _SEM003-def:
@@ -193,7 +301,6 @@ SEM — semántica
 .. _SEM009-def:
 .. _SEM010-def:
 .. _SEM011-def:
-.. _SEM012-def:
 .. _SEM013-def:
 .. _SEM014-def:
 .. _SEM015-def:
@@ -201,9 +308,15 @@ SEM — semántica
 .. _SEM017-def:
 .. _SEM018-def:
 .. _SEM019-def:
-.. _SEM020-def:
 .. _SEM021-def:
 .. _SEM022-def:
+.. _SEM023-def:
+.. _SEM024-def:
+.. _SEM025-def:
+.. _SEM026-def:
+.. _SEM027-def:
+.. _SEM028-def:
+.. _SEM029-def:
 
 
 .. table::
@@ -212,6 +325,7 @@ SEM — semántica
    ==========  ==============================  ====================================================
    Código      Nombre                          Cuándo
    ==========  ==============================  ====================================================
+   ``SEM000``  MissingHandlerError             Un nodo del AST sin handler: fallo del compilador.
    ``SEM001``  UndefinedSymbolError            Un nombre que no está declarado.
    ``SEM002``  DuplicateSymbolError            Dos declaraciones del mismo nombre en un ámbito.
    ``SEM003``  ImmutableAssignmentError        Asignación a un binding ``const``.
@@ -223,7 +337,6 @@ SEM — semántica
    ``SEM009``  LibraryNotFoundError            No se encontró la librería importada.
    ``SEM010``  InvalidLibraryError             El archivo no es una unidad válida.
    ``SEM011``  UnknownLibraryMemberError       El miembro no existe en esa librería.
-   ``SEM012``  UndefinedRegionError            Una región que no está declarada.
    ``SEM013``  InvalidAddressOfError           ``&`` sobre algo que no es un *lvalue*.
    ``SEM014``  InvalidFreeTargetError          ``free`` sobre algo que no es un puntero.
    ``SEM015``  ReadOnlyPointerWriteError       Escritura a través de un ``ptr`` no mutable.
@@ -231,9 +344,15 @@ SEM — semántica
    ``SEM017``  ExpressionTooDeepError          Anidamiento por encima del límite.
    ``SEM018``  UnknownHookError                Un ``__x__`` marcado como hook que no es del conjunto.
    ``SEM019``  VisibilityViolationError        Acceso a algo fuera de su visibilidad.
-   ``SEM020``  InvalidDeleteError              ``delete`` mal formado o sobre algo inválido.
    ``SEM021``  TraitNotSatisfiedError          El tipo no cumple el contrato del trait.
    ``SEM022``  InvalidDunderSignatureError     Un método dunder con firma inválida.
+   ``SEM023``  UseAfterFreeError               Uso de un valor destruido con ``free``.
+   ``SEM024``  DoubleFreeError                 ``free`` sobre un valor ya destruido.
+   ``SEM025``  InvalidValueTypeError           ``void`` como tipo de un valor (solo vale como retorno).
+   ``SEM026``  InfiniteSizeTypeError           Un ``struct`` que se contiene a sí mismo por valor.
+   ``SEM027``  TypeArityError                  Un genérico usado con un número de argumentos que no es el suyo.
+   ``SEM028``  IncompleteStructLiteralError    Un literal de struct que deja campos sin valor.
+   ``SEM029``  UnsupportedPayloadError         Una variante de ``enum`` que lleva un valor con destructor.
    ==========  ==============================  ====================================================
 
 .. _hir-errores:

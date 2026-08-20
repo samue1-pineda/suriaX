@@ -203,3 +203,135 @@ def test_throw_no_capturado_desde_una_funcion_anidada():
         W + "fn boom() -> error int { throw 1; };\n"
             "fn main() -> int { boom(); return 0; };")
     assert code == 70, f"exit={code}"
+
+
+# --------------------------------------------------------------------------- #
+# el valor capturado, USADO
+# --------------------------------------------------------------------------- #
+# 'throw' acepta cualquier valor, así que el tipo del binding de un 'catch'
+# es DESCONOCIDO, no un tipo concreto. Tratarlo como concreto lo dejaba
+# inservible: se podía interpolar y leer sus campos, pero no ligarlo, ni
+# pasarlo, ni operar con él, ni convertirlo — es decir, no se podía manejar
+# el error, solo enseñarlo.
+
+def test_el_valor_capturado_se_liga_a_un_tipo():
+    _run("""
+    try { throw 42; } catch (e) { var int n = e; __write__(f"{n}\\n"); };
+    return 0;""", "42\n")
+
+
+def test_el_valor_capturado_opera():
+    _run("""
+    try { throw 21; } catch (e) { var int n = e; __write__(f"{n * 2}\\n"); };
+    return 0;""", "42\n")
+
+
+def test_el_valor_capturado_se_pasa_a_una_funcion():
+    _run("""
+    try { throw 5; } catch (e) { doble(e); };
+    return 0;""", "10\n",
+         extra='fn doble(int n) -> void { __write__(f"{n * 2}\\n"); };\n')
+
+
+def test_el_valor_capturado_se_convierte():
+    _run("""
+    try { throw 7; } catch (e) { var int n = cast<int>(e); __write__(f"{n}\\n"); };
+    return 0;""", "7\n")
+
+
+def test_un_error_con_estructura_se_maneja_por_sus_campos():
+    """El caso real: un tipo de error propio, lanzado desde una función que
+    declara ``error T`` y manejado por el llamador."""
+    _run("""
+    try {
+        __write__(f"{dividir(10, 2)}\\n");
+        __write__(f"{dividir(1, 0)}\\n");
+    } catch (e) {
+        __write__(f"fallo {e.codigo}: {e.msg}\\n");
+    };
+    return 0;""", "5\nfallo 1: division por cero\n",
+         extra="struct { int codigo; str msg; } Fallo;\n"
+               "fn dividir(int a, int b) -> error int {\n"
+               '    if (b == 0) { throw Fallo{ codigo: 1, msg: "division por cero" }; };\n'
+               "    return a / b;\n};\n")
+
+
+# --------------------------------------------------------------------------- #
+# catch TIPADO: filtrar por lo que se lanzó
+# --------------------------------------------------------------------------- #
+# ``catch (e)`` atrapa todo y liga un valor de tipo desconocido: para hacer
+# algo con él hay que convertirlo a mano, y para distinguir dos fallos hay que
+# inspeccionarlos dentro de la misma rama. Con el tipo escrito, cada rama
+# atrapa lo suyo y liga la variable ya tipada; lo que ninguna rama entiende
+# sigue propagándose, que es lo que hace útil filtrar.
+
+DOS = ("struct { int codigo; } Fallo;\n"
+       "struct { str recurso; } NoEncontrado;\n")
+
+
+def test_cada_rama_atrapa_su_tipo():
+    _run("""
+    try { throw Fallo{ codigo: 7 }; }
+    catch (Fallo f)        { __write__(f"fallo {f.codigo}\\n"); }
+    catch (NoEncontrado n) { __write__("NO\\n"); };
+    return 0;""", "fallo 7\n", extra=DOS)
+
+
+def test_gana_la_rama_que_encaja_no_la_primera():
+    _run("""
+    try { throw NoEncontrado{ recurso: "x" }; }
+    catch (Fallo f)        { __write__("NO\\n"); }
+    catch (NoEncontrado n) { __write__(f"falta {n.recurso}\\n"); };
+    return 0;""", "falta x\n", extra=DOS)
+
+
+def test_el_binding_tipado_se_usa_sin_convertir():
+    _run("""
+    try { throw 42; } catch (int n) { __write__(f"{n * 2}\\n"); };
+    return 0;""", "84\n")
+
+
+def test_los_primitivos_tambien_filtran():
+    _run("""
+    try { throw "texto"; }
+    catch (int n) { __write__("NO\\n"); }
+    catch (str s) { __write__(f"cadena {s}\\n"); };
+    return 0;""", "cadena texto\n")
+
+
+def test_una_rama_sin_tipo_atrapa_lo_que_quede():
+    _run("""
+    try { throw 1.5; }
+    catch (int n) { __write__("NO\\n"); }
+    catch (e)     { __write__(f"otro {e}\\n"); };
+    return 0;""", "otro 1.5\n")
+
+
+def test_lo_que_ninguna_rama_entiende_sigue_propagando():
+    """Es la mitad que hace útil el filtro: un ``catch`` que no sabe manejar
+    el fallo no se lo queda."""
+    _run("""
+    try {
+        try { throw NoEncontrado{ recurso: "cfg" }; }
+        catch (Fallo f) { __write__("NO\\n"); };
+    } catch (NoEncontrado n) {
+        __write__(f"propago {n.recurso}\\n");
+    };
+    return 0;""", "propago cfg\n", extra=DOS)
+
+
+def test_un_throw_que_nadie_atrapa_sigue_abortando():
+    code, _out, _err = run_program(
+        W + "struct { int c; } A;\nstruct { int c; } B;\n"
+            "fn main() -> int { try { throw B{ c: 1 }; } "
+            "catch (A a) { }; return 0; };")
+    assert code == 70, f"exit={code}"
+
+
+def test_un_enum_suma_tambien_se_filtra():
+    _run("""
+    try { throw Estado.Roto(3); }
+    catch (Estado e) { __write__("es un Estado\\n"); }
+    catch (e)        { __write__("NO\\n"); };
+    return 0;""", "es un Estado\n",
+         extra="enum Estado { Ok, Roto(int) };\n")

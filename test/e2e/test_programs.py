@@ -415,3 +415,35 @@ fn main() -> int {
 };
 """
     assert_output(src, "102 105 103")
+
+
+def test_emit_hir_con_ruta_explicita_crea_su_carpeta():
+    """``--emit-hir <ruta>`` escribe aunque el destino no exista todavía.
+
+    Regresión: el volcado con ruta EXPLÍCITA no creaba su directorio (solo lo
+    hacía el implícito, ``<dumps_dir>/...``). Como ``dumps/`` no se versiona,
+    un clon recién hecho no lo tiene, y compilar así un programa que importa
+    una librería reventaba con un ``FileNotFoundError`` sin diagnóstico: el
+    emisor de unidades escribe cada ``.libsrx`` en ``<dumps_dir>/<alias>.phir``,
+    una ruta explícita, dentro de una carpeta que nadie había creado.
+    """
+    import subprocess
+    import tempfile
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    fuente = 'fn __write__(str s) -> void;\nfn main() -> int { return 0; };\n'
+    with tempfile.TemporaryDirectory(prefix="suriax-tests-") as tmp:
+        path = os.path.join(tmp, "t.srcx")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(fuente)
+        # dos niveles que NO existen: si se creara solo el último seguiría roto
+        destino = os.path.join(tmp, "sin", "crear", "t.phir")
+        proc = subprocess.run(
+            [sys.executable, os.path.join(repo, "V0", "main.py"),
+             path, "--emit-hir", destino],
+            capture_output=True, text=True, cwd=tmp, timeout=120,
+        )
+        if "protobuf" in (proc.stdout + proc.stderr).lower() and proc.returncode != 0:
+            return                      # sin protobuf no hay HIR que emitir
+        assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+        assert os.path.isfile(destino), (
+            f"no se escribió el .phir en la ruta pedida:\n{proc.stdout}\n{proc.stderr}")

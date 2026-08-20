@@ -71,9 +71,10 @@ def test_addr_of_es_nodo_propio():
 def test_try_catch():
     stmt = _body('fn f() -> void { try { var int a = 1; } catch (e) { var int b = 2; }; };')[0]
     assert isinstance(stmt, ast.TryStmt)
-    assert stmt.catch_name == "e"
+    assert len(stmt.catches) == 1
+    assert stmt.catches[0].name == "e"
     assert len(stmt.try_block.statements) == 1
-    assert len(stmt.catch_block.statements) == 1
+    assert len(stmt.catches[0].block.statements) == 1
 
 
 def test_throw():

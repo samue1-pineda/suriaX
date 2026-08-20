@@ -6,7 +6,7 @@ Cómo un tipo propio se comporta como uno nativo, y cómo viaja un fallo.
 .. _ej-hooks:
 
 Un tipo con hooks
-==================
+-----------------
 
 .. code-block:: srcx
 
@@ -37,7 +37,7 @@ aparece nunca en el código del consumidor.
 .. _ej-errores:
 
 Errores
-========
+-------
 
 .. code-block:: srcx
 

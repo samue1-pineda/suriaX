@@ -1,4 +1,13 @@
-"""Pasada 2 — Enlace de tipos nominales.
+"""Enlace de tipos nominales — colaborador de la resolución de scopes.
+
+Fue la **pasada 2** del frontend: un recorrido plano y propio de todo el
+árbol. Dejó de serlo porque validar un tipo exige saber QUÉ SCOPE se está
+mirando, y un recorrido sin scopes no puede: un ``type`` declarado dentro de
+una función no lo veía nadie y su primer uso salía como ``AST005``.
+
+Ahora es un colaborador al que ``scope_resolver`` llama en el punto exacto en
+que cada anotación entra en juego. La lógica es la MISMA —no se duplicó nada,
+se movió el *cuándo*—, y el frontend hace un recorrido menos.
 
 Cada tipo NOMINAL escrito en el fuente (``Punto p;``, ``ptr Punto``,
 ``fn f() -> Nodo?``, ``sizeof(Punto)``, ``make Punto in r``) debe apuntar a
@@ -12,12 +21,17 @@ por una librería importada. Ese camino lo recorre
 diagnóstico correspondiente. Un tipo cuya raíz es un import que no cargó NO
 produce error aquí (ya se reportó en el ``#import``).
 
-Un solo recorrido O(n) del árbol (``include/ast_walk.py``): se visitan las
-posiciones donde ``typed_ast.py`` dejó un ``Type`` resuelto y se valida cada
-nombre nominal alcanzable (desenvolviendo ``ptr``/``?``). Los nombres ya
-validados se cachean por pasada (``seen``) — en un programa con cientos de
-usos de ``Punto`` la búsqueda en scope se paga una vez; los usos NO válidos
-no se cachean para reportar cada ocurrencia con su posición real.
+Se valida cada nombre nominal alcanzable desde un ``Type`` que dejó
+``typed_ast.py`` (desenvolviendo ``ptr``/``?``/``error``). Los nombres ya
+validados se cachean (``seen``) — en un programa con cientos de usos de
+``Punto`` la búsqueda en scope se paga una vez; los usos NO válidos no se
+cachean, para reportar cada ocurrencia con su posición real.
+
+**La caché es por SCOPE, no por programa.** Cuando era una pasada plana un
+nombre resolvía siempre a lo mismo, así que cachearlo de por vida era
+correcto. Con scopes deja de serlo: un tipo local puede sombrear a uno
+global, y recordar el primero daría el tipo equivocado dentro del bloque. Por
+eso ``invalidate()`` la vacía al abrir y cerrar un scope que declara tipos.
 
 Aquí también se enlaza el hook ``__sizeof__`` (tabla de mapeo de
 ``ARQUITECTURA.md`` secc. 8: ``SizeofExpr`` es responsabilidad de esta
@@ -27,17 +41,15 @@ en ``SizeofExpr.hook`` para el HIR.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional
+from typing import Dict, Optional
 
 try:
     from include import ast_nodes as ast
-    from include.ast_walk import dispatch_walk
-    from include.types_ast import Type, TypeKind
+    from include.types_ast import Type, TypeKind, nullable_of, pointer_of
     from error_handler import ASTError, SemanticError
 except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
-    from include.ast_walk import dispatch_walk  # type: ignore
-    from types_ast import Type, TypeKind  # type: ignore
+    from types_ast import Type, TypeKind, nullable_of, pointer_of  # type: ignore
     import ASTError  # type: ignore
     import SemanticError  # type: ignore
 
@@ -46,35 +58,27 @@ from .context import SemanticContext
 from .hooks import HookKind
 from .symbol_table import Symbol
 
+try:
+    from src.frontend.parser.typed_ast import resolve_type_expr
+except ImportError:  # pragma: no cover - ejecucion directa
+    from frontend.parser.typed_ast import resolve_type_expr  # type: ignore
 
-def run(program: ast.Program, ctx: SemanticContext) -> None:
-    resolver = _TypeResolver(ctx)
-    dispatch_walk(program, resolver.handlers)
+
+def _core_nominal(t: Optional[Type]) -> Optional[str]:
+    """Nombre del nucleo NOMINAL de ``t``, atravesando ``ptr``/``?``."""
+    while t is not None and t.kind in (TypeKind.POINTER, TypeKind.NULLABLE):
+        t = t.inner
+    return t.name if t is not None and t.kind is TypeKind.NOMINAL else None
 
 
-def _canonical_name(symbol: Symbol, written: str) -> str:
-    """Nombre CANONICO del tipo que declara ``symbol``.
+class TypeBinder:
+    """Valida y canonicaliza los tipos nominales que escribe el usuario.
 
-    El usuario escribe ``dt.int8``; la libreria registro sus hooks (y su
-    tipo de retorno) bajo el nombre con el que DECLARO el tipo (``int8``).
-
-    Para un struct/enum ``Symbol.type`` ES su nominal, de ahi sale el nombre.
-    Pero un alias ``const type int8`` tiene ``Symbol.type`` = metatipo
-    (``TypeKind.META``), no un nominal — antes eso caia al nombre ESCRITO
-    (``dt.int8``) y rompia el despacho de ``sizeof``/``cast`` cross-modulo
-    (el hook esta bajo ``int8``, no ``dt.int8``). ``Symbol.name`` YA es el
-    nombre declarado (bare) en ambos casos, asi que es la fuente correcta del
-    canonico; ``written`` solo queda como red de seguridad si el simbolo no lo
-    trae.
+    Lo usa ``scope_resolver`` contra el scope ACTUAL; cada método se llama en
+    el punto donde su anotación empieza a importar.
     """
-    t = symbol.type
-    if t is not None and t.kind is TypeKind.NOMINAL:
-        return t.name
-    return symbol.name or written
 
-
-class _TypeResolver:
-    __slots__ = ("ctx", "seen", "handlers")
+    __slots__ = ("ctx", "seen")
 
     def __init__(self, ctx: SemanticContext) -> None:
         self.ctx = ctx
@@ -83,40 +87,141 @@ class _TypeResolver:
         # nombre cualificado ('dt.int8') necesitan el nombre CANONICO del
         # tipo ('int8') para buscar sus hooks.
         self.seen: Dict[str, Symbol] = {}
-        self.handlers: Dict[type, Callable] = {
-            ast.Parameter: self._check_restype,
-            ast.VarDecl: self._check_restype,
-            ast.Field: self._check_restype,
-            ast.FunctionDecl: self._check_return,
-            ast.MakeExpr: self._check_restype,
-            ast.SizeofExpr: self._check_sizeof,
-            ast.CastExpr: self._check_cast,
-        }
 
-    def _check_restype(self, node) -> None:
+    def invalidate(self) -> None:
+        """Olvida lo cacheado: se entra o se sale de un scope con tipos propios.
+
+        Sin esto un tipo local sobreviviria a su bloque y sombrearia al global
+        en el resto del archivo — el error mas silencioso posible, porque el
+        programa compilaria con el tipo equivocado.
+        """
+        self.seen.clear()
+
+    def bind(self, node) -> None:
+        """Canonicaliza el ``restype`` de una declaracion o expresion.
+
+        Es el punto por el que pasan las TRES posiciones de valor —variable,
+        parametro y campo de struct—, asi que la regla de que ``void`` no es
+        el tipo de ningun valor se comprueba aqui una vez y no puede quedar
+        una posicion sin cubrir. ``bind_return`` es otro metodo justamente
+        porque ahi ``void`` SI es valido.
+        """
         node.restype = self._check_type(node.restype, node.ln, node.col)
+        if node.restype is not None and node.restype.kind is TypeKind.VOID:
+            self.ctx.error(SemanticError.InvalidValueTypeError(
+                "'void' significa \"no hay valor\": no puede ser el tipo de "
+                f"'{getattr(node, 'name', '?')}'. Solo es valido como tipo de "
+                "retorno",
+                line=node.ln, column=node.col,
+            ))
 
-    def _check_return(self, node: ast.FunctionDecl) -> None:
+    def bind_return(self, node: ast.FunctionDecl) -> None:
         node.return_restype = self._check_type(
             node.return_restype, node.ln, node.col)
 
-    def _check_sizeof(self, node: ast.SizeofExpr) -> None:
+    def bind_sizeof(self, node: ast.SizeofExpr) -> None:
+        """``sizeof(X)``: resuelve QUE se mide y enlaza su ``__sizeof__``.
+
+        ``X`` puede nombrar un TIPO (``sizeof(int8)``) o un VALOR
+        (``sizeof(a)``, el tamaño del tipo de ``a``). Se prueba primero el
+        namespace de tipos: un nombre que es tipo no deja de serlo porque
+        exista una variable homónima. Sin la segunda vía no había forma de
+        preguntar el tamaño de algo sin saber ya su tipo — y por tanto ninguna
+        de imprimirlo.
+
+        El resultado va a ``node.medido`` (el tipo REAL medido, canonicalizado);
+        ``node.type`` sigue siendo lo escrito.
+        """
         # el Type interno ('sizeof(Punto)' -> Punto) no queda en restype
         # (restype de sizeof es 'int'); se valida desde el TypeExpr sintactico.
         inner = node.type
         while isinstance(inner, (ast.PointerTypeExpr, ast.NullableTypeExpr)):
             inner = inner.inner
-        if isinstance(inner, ast.NominalTypeExpr):
-            symbol = self._check_nominal(inner.name, node.ln, node.col)
-            if symbol is not None:
-                # el hook lo registro la libreria bajo el nombre CANONICO del
-                # tipo ('int8'), no bajo el cualificado con el que se escribe
-                # aqui ('dt.int8').
-                node.hook = self.ctx.table.lookup_hook(
-                    _canonical_name(symbol, inner.name), HookKind.SIZEOF,
-                )
+        if not isinstance(inner, ast.NominalTypeExpr):
+            node.medido = resolve_type_expr(node.type)
+            return
 
-    def _check_cast(self, node: ast.CastExpr) -> None:
+        result = type_service.lookup_type_path(inner.name, self.ctx.scope)
+        if result.status is type_service.TypeLookup.OK:
+            medido = resolve_type_expr(node.type)
+            canonical = type_service.canonical_name(result.symbol, inner.name)
+            node.medido = self._recanonicalizar(medido, canonical)
+            node.hook = self.ctx.table.lookup_hook(canonical, HookKind.SIZEOF)
+            return
+        if result.status is type_service.TypeLookup.OPAQUE:
+            return  # libreria que no cargo: ya se reporto en el '#import'
+
+        valor = self.ctx.scope.resolve_value(inner.name)
+        if valor is None or valor.type is None:
+            # ni tipo ni valor: el error de TIPO es el util, porque es la
+            # posicion en la que se escribio.
+            self._check_nominal(inner.name, node.ln, node.col)
+            return
+        # el tipo del simbolo viene de la TABLA, donde se guardo tal como se
+        # escribio ('dt.int32'); el hook esta registrado bajo el canonico.
+        node.medido = type_service.canonical(
+            self._envolver(valor.type, node.type), self.ctx.scope)
+        nucleo = _core_nominal(node.medido)
+        if nucleo is not None:
+            node.hook = self.ctx.table.lookup_hook(nucleo, HookKind.SIZEOF)
+
+    @staticmethod
+    def _recanonicalizar(t: Optional[Type], canonical: str) -> Optional[Type]:
+        """Reescribe el NUCLEO nominal de ``t`` con su nombre canonico,
+        conservando los envoltorios (``T ptr``, ``T?``) tal como se escribieron."""
+        if t is None:
+            return None
+        if t.kind is TypeKind.NOMINAL:
+            return Type(TypeKind.NOMINAL, name=canonical, args=t.args)
+        if t.inner is None:
+            return t
+        return Type(t.kind, name=t.name, mut=t.mut,
+                    inner=TypeBinder._recanonicalizar(t.inner, canonical))
+
+    @staticmethod
+    def _envolver(t: Type, escrito: ast.TypeExpr) -> Type:
+        """Aplica a ``t`` los sufijos que se escribieron sobre el nombre.
+
+        ``sizeof(a ptr)`` mide un puntero al tipo de ``a``. Los sufijos se
+        recogen de fuera hacia dentro, asi que se aplican al reves."""
+        sufijos = []
+        cur = escrito
+        while isinstance(cur, (ast.PointerTypeExpr, ast.NullableTypeExpr)):
+            sufijos.append(cur)
+            cur = cur.inner
+        for suf in reversed(sufijos):
+            t = (pointer_of(t, mut=suf.mutable)
+                 if isinstance(suf, ast.PointerTypeExpr) else nullable_of(t))
+        return t
+
+    def bind_struct_literal(self, node: ast.StructLiteral,
+                            symbol: Symbol) -> None:
+        """``T{...}`` / ``Caja<int>{...}``: canonicaliza el nominal que produce
+        el literal y valida sus ARGUMENTOS de tipo.
+
+        El símbolo lo resolvió el llamador (necesita distinguir "no existe" de
+        "no es un struct" con sus propios mensajes); aquí se aplica lo que le
+        falta y que una anotación sí recibe: los argumentos son tipos y se
+        validan/canonicalizan como tales, y la aridad se comprueba con la
+        MISMA regla —``_check_arity``— que ``Caja<int>`` en una anotación. Sin
+        esto, ``Caja<int>{...}`` y ``Caja{...}`` producirían tipos que no
+        unifican con la anotación que los recibe.
+        """
+        t = node.restype
+        if t is None or t.kind is not TypeKind.NOMINAL:
+            return
+        args = tuple(self._check_type(a, node.ln, node.col) or a
+                     for a in t.args)
+        self._check_arity(symbol, args, node.ln, node.col)
+        canonical = type_service.canonical_name(symbol, t.name)
+        if canonical != t.name or args != t.args:
+            # el nombre CANONICO es el que viaja al HIR y el que usan la tabla
+            # de hooks y la identidad de tipos; los argumentos, la identidad
+            # del generico instanciado.
+            node.type_name = canonical
+            node.restype = Type(TypeKind.NOMINAL, name=canonical, args=args)
+
+    def bind_cast(self, node: ast.CastExpr) -> None:
         """``cast<T>(x)`` con T NOMINAL: valida que T exista y CANONICALIZA
         el destino (``cast<dt.int8>(x)`` -> nominal ``int8``, el nombre bajo
         el que la librería registró sus conversiones). La resolución contra
@@ -134,11 +239,22 @@ class _TypeResolver:
         symbol = self._check_nominal(t.name, node.ln, node.col)
         if symbol is None:
             return  # tipo inexistente u OPACO: ya reportado (o silenciado)
-        canonical = _canonical_name(symbol, t.name)
+        canonical = type_service.canonical_name(symbol, t.name)
         if canonical != t.name:
             # reescritura EN SITIO (mismo patron que restype): el lookup en
             # la tabla de casts y el HIR usan el nombre canonico.
             node.restype = Type(TypeKind.NOMINAL, name=canonical)
+
+    def check_type(self, t: Optional[Type], ln: int,
+                   col: int) -> Optional[Type]:
+        """Valida y canonicaliza un tipo escrito en una posicion que no es una
+        declaracion con nombre — hoy, el payload de una variante de ``enum``.
+
+        Envoltorio publico de la misma regla que usan las anotaciones: el
+        payload son tipos del usuario y tienen que validarse igual, pero no
+        cuelgan de un nodo con ``restype``, asi que ``bind`` no sirve.
+        """
+        return self._check_type(t, ln, col)
 
     def _check_type(self, t: Optional[Type], ln: int,
                     col: int) -> Optional[Type]:
@@ -174,15 +290,44 @@ class _TypeResolver:
         symbol = self._check_nominal(core.name, ln, col)
         if symbol is None:
             return t  # inexistente u opaco: ya reportado (o silenciado)
-        canonical = _canonical_name(symbol, core.name)
-        if canonical == core.name:
+
+        # los ARGUMENTOS de un generico son tipos como cualquier otro: se
+        # validan y canonicalizan igual (un 'Vector<point.Point>' tiene que
+        # quedar como 'Vector<Point>' o no unificaria con nada).
+        args = tuple(self._check_type(a, ln, col) or a for a in core.args)
+        self._check_arity(symbol, args, ln, col)
+
+        canonical = type_service.canonical_name(symbol, core.name)
+        if canonical == core.name and args == core.args:
             return t
 
-        rebuilt = Type(TypeKind.NOMINAL, name=canonical)
+        rebuilt = Type(TypeKind.NOMINAL, name=canonical, args=args)
         for wrapper in reversed(wrappers):
             rebuilt = Type(wrapper.kind, name=wrapper.name, inner=rebuilt,
                            mut=wrapper.mut)
         return rebuilt
+
+    def _check_arity(self, symbol, args, ln: int, col: int) -> None:
+        """El uso de un generico trae tantos argumentos como parametros declara.
+
+        Un parametro de tipo se salta la comprobacion consigo mismo: dentro de
+        la libreria que declara ``Vector<T>``, la ``T`` de sus propias firmas
+        es un tipo opaco sin parametros y no se esta instanciando nada.
+        """
+        esperados = len(symbol.type_params)
+        if esperados == len(args):
+            return
+        if esperados == 0:
+            self.ctx.error(SemanticError.TypeArityError(
+                f"'{symbol.name}' no es un tipo generico: no admite argumentos "
+                f"de tipo, y se le pasaron {len(args)}",
+                line=ln, column=col))
+            return
+        firma = f"{symbol.name}<{', '.join(symbol.type_params)}>"
+        self.ctx.error(SemanticError.TypeArityError(
+            f"'{symbol.name}' declara {esperados} parametro(s) de tipo "
+            f"({firma}) y se usa con {len(args)}",
+            line=ln, column=col))
 
     def _check_nominal(self, name: str, ln: int, col: int) -> Optional[Symbol]:
         """El Symbol del tipo ``name``, o ``None`` (reportando el error).
@@ -239,4 +384,4 @@ class _TypeResolver:
         )
 
 
-__all__ = ["run"]
+__all__ = ["TypeBinder"]

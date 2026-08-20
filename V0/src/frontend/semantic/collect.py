@@ -165,27 +165,46 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
     # 'hook' promete un nombre del SET FIJO; si no lo es, es un error explicito
     # (antes un '__foo__' desconocido se ignoraba en silencio — ahora el
     # usuario afirmo que es un hook).
-    if fn.dunder is None or fn.dunder not in HOOK_SPECS:
+    vocabulario = getattr(ctx, "hook_specs", None) or HOOK_SPECS
+    if fn.dunder is None or fn.dunder not in vocabulario:
+        # el set que se lista es el de ESTE proyecto: el fijo del compilador
+        # mas lo que declare su 'extends.srcx'. Decirle al usuario que
+        # '__gravity__' no existe sin mencionar que su propio proyecto puede
+        # declararlo seria enviarlo al sitio equivocado.
+        disponibles = sorted("__" + n + "__" for n in vocabulario)
+        aportados = sorted("__" + n + "__" for n, spec in vocabulario.items()
+                           if getattr(spec, "declared", None) is not None)
+        extra = (f" (de ellos, {aportados} los declara tu proyecto)"
+                 if aportados else
+                 "; para declarar hooks propios, ver htims/readme.md")
         ctx.error(SemanticError.UnknownHookError(
             f"'{fn.name}' no es un hook reconocido; el set es "
-            f"{sorted('__' + n + '__' for n in HOOK_SPECS)}. Para un metodo "
-            "especial libre usa 'dunder fn' en vez de 'hook fn'",
+            f"{disponibles}{extra}. Para un metodo especial libre usa "
+            "'dunder fn' en vez de 'hook fn'",
             line=fn.ln, column=fn.col,
         ))
         return
-    owner, error_msg = validate_hook(fn, fn.dunder)
+    owner, error_msg = validate_hook(fn, fn.dunder, vocabulario[fn.dunder])
     if owner is None:
         ctx.error(SemanticError.InvalidHookSignatureError(
             f"'{fn.name}': {error_msg}", line=fn.ln, column=fn.col,
         ))
         return
 
-    spec = HOOK_SPECS[fn.dunder]
+    spec = vocabulario[fn.dunder]
     symbol = Symbol(
         name=fn.name, kind=SymbolKind.HOOK, ln=fn.ln, col=fn.col,
         type=fn.return_restype,
         param_types=tuple(p.restype for p in fn.params if p.restype is not None),
         hook_kind=spec.kind, hook_owner=owner, visibility=fn.visibility,
+        # los hooks del vocabulario fijo se identifican por su 'kind'; uno
+        # declarado por el proyecto, por su NOMBRE (el compilador no puede
+        # enumerar lo que aun no existe). Ver htims/readme.md.
+        hook_name=fn.name if spec.kind is HookKind.EXTENDED else None,
+        hook_module=(getattr(spec.declared, "module", None)
+                     if spec.declared is not None else None),
+        const_value=(_literal_devuelto(fn)
+                     if spec.kind in (HookKind.MIN, HookKind.MAX) else None),
     )
 
     if spec.kind is HookKind.CAST:
@@ -203,11 +222,66 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
             ))
         return
 
-    if not ctx.table.register_hook(owner, spec.kind, symbol):
+    if not ctx.table.register_hook(owner, spec.kind, symbol,
+                                   name=symbol.hook_name):
+        cual = symbol.hook_name or spec.kind.name
         ctx.error(SemanticError.DuplicateHookError(
-            f"ya existe un hook {spec.kind.name} para '{owner}'",
+            f"ya existe un hook {cual} para '{owner}'",
             line=fn.ln, column=fn.col,
         ))
+
+
+def _literal_devuelto(fn: ast.FunctionDecl) -> Optional[int]:
+    """El entero que devuelve un cuerpo ``{ return <literal>; }``, o ``None``.
+
+    Es lo unico que el frontend lee del CUERPO de una funcion, y solo de
+    ``__min__``/``__max__``: el rango de un tipo tiene que conocerse en
+    compilacion o no sirve para rechazar un literal. La forma exigida es
+    deliberadamente rigida —un solo ``return`` de un literal entero, con el
+    signo opcional— porque cualquier cosa mas seria evaluar codigo, y esta
+    fase no evalua nada.
+    """
+    if fn.body is None or len(fn.body.statements) != 1:
+        return None
+    stmt = fn.body.statements[0]
+    if not isinstance(stmt, ast.ReturnStmt) or stmt.value is None:
+        return None
+    valor = stmt.value
+    signo = 1
+    if isinstance(valor, ast.UnaryOp) and valor.operator == "-":
+        signo, valor = -1, valor.operand
+    if isinstance(valor, ast.Literal) and valor.literal_kind == "int":
+        return signo * valor.value
+    return None
+
+
+def _declarar_parametros(node, ctx: SemanticContext) -> None:
+    """Registra los parametros de un generico como tipos OPACOS del scope.
+
+    ``struct { T ptr datos; } Vector<T>;`` necesita que ``T`` sea un nombre de
+    tipo valido para que sus campos, sus metodos y sus hooks
+    (``fn __index__(Vector<T> ptr self, int i) -> T``) resuelvan. Un parametro
+    es exactamente eso: un tipo del que no se sabe nada mas que su nombre —
+    justo lo que ya significa un ``const type`` opaco, asi que no hace falta
+    una clase de simbolo nueva.
+
+    Se declara en el scope de la DECLARACION (el archivo de la libreria): el
+    consumidor nunca ve ``T``, ve ``Vector<int>``.
+    """
+    for nombre in getattr(node, "type_params", ()):
+        param = Symbol(name=nombre, kind=SymbolKind.TYPE, ln=node.ln,
+                       col=node.col, type=nominal(nombre), visibility="internal")
+        if not ctx.scope.define_type(param):
+            # ya existe: o es el parametro de otro generico del mismo archivo
+            # (compartirlo es correcto: mismo nombre, mismo papel) o choca con
+            # un tipo real, y eso si es un error del autor de la libreria.
+            existente = ctx.scope.resolve_type(nombre)
+            if existente is not None and existente.kind is not SymbolKind.TYPE:
+                ctx.error(SemanticError.DuplicateSymbolError(
+                    f"el parametro de tipo '{nombre}' choca con un tipo ya "
+                    f"declarado en este archivo",
+                    line=node.ln, column=node.col,
+                ))
 
 
 def _collect_struct(node: ast.StructDecl, ctx: SemanticContext) -> None:
@@ -223,9 +297,11 @@ def _collect_struct(node: ast.StructDecl, ctx: SemanticContext) -> None:
             name=f.name, kind=SymbolKind.FIELD, ln=f.ln, col=f.col,
             type=f.restype, mutable=True,
         )
+    _declarar_parametros(node, ctx)
     symbol = Symbol(
         name=node.name, kind=SymbolKind.STRUCT, ln=node.ln, col=node.col,
         type=nominal(node.name), members=members, visibility=node.visibility,
+        type_params=tuple(node.type_params),
     )
     if not ctx.scope.define_type(symbol):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -254,9 +330,11 @@ def _collect_type_decl(node: ast.TypeDecl, ctx: SemanticContext) -> None:
     # 'const type T;' liga el nombre a ESE tipo para siempre; 'type T;' (o
     # 'var type T;') lo deja redefinible — mismo modelo que las variables.
     mutable = node.qualifier != "const"
+    _declarar_parametros(node, ctx)
     symbol = Symbol(
         name=node.name, kind=SymbolKind.TYPE, ln=node.ln, col=node.col,
         type=nominal(node.name), mutable=mutable, visibility=node.visibility,
+        type_params=tuple(node.type_params),
     )
     if not ctx.scope.define_type(symbol):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -286,9 +364,16 @@ def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
                 line=item.ln, column=item.col,
             ))
             continue
+        # una variante con PAYLOAD es un CONSTRUCTOR: sus tipos son los
+        # parametros que hay que pasarle ('Literal(5)'), y el tipo que produce
+        # sigue siendo el enum. Es la misma forma que una funcion, asi que la
+        # verificacion de aridad y de tipos de los argumentos es la de
+        # cualquier llamada — no hace falta ninguna regla nueva.
         item_sym = Symbol(
             name=item.name, kind=SymbolKind.ENUM_ITEM, ln=item.ln,
             col=item.col, type=enum_type,
+            param_types=(tuple(item.payload_restypes)
+                         if item.payload_restypes else None),
         )
         members[item.name] = item_sym
         # los items tambien viven PELADOS en el namespace de valores (mismo
@@ -405,10 +490,12 @@ def define_import(name: str, source, ctx: SemanticContext, *, mutable: bool,
         # se compilo) pero NO se fusiona en un consumidor de OTRO paquete —
         # el que usa la libreria no conoce el hook, aunque las funciones que lo
         # usan sigan funcionando. 'internal' ya se filtro en el loader.
-        for (owner, kind), hook_sym in library.hooks.items():
+        for (owner, kind, hname), hook_sym in library.hooks.items():
             if hook_sym.visibility == "private" and not same_pkg:
                 continue
-            ctx.table.register_hook(owner, kind, hook_sym)
+            # la clave viaja ENTERA: un hook declarado por el proyecto
+            # (EXTENDED) se distingue por su nombre, no por su kind.
+            ctx.table.register_hook(owner, kind, hook_sym, name=hname)
         # ...y sus dunders (métodos de usuario): 'x.__m__()' sobre un tipo de la
         # librería despacha a su cuerpo. Misma regla de visibilidad que hooks:
         # un 'private' solo se fusiona dentro del mismo paquete.

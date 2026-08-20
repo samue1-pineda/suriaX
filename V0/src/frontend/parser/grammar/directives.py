@@ -49,6 +49,19 @@ def parse_directive(cursor: Cursor, ctx: ParserContext) -> ast.Declaration:
         return parse_from_dir(cursor, ctx)
     if name == "extern":
         return _parse_extern_block(cursor, ctx)
+
+    if name == "test":
+        # '#test <fase>' SI es una directiva valida, pero solo como PRIMER
+        # elemento del archivo: ahi la consume 'Parser.consume_test_directive'
+        # antes de parsear. Llegar hasta aqui significa que esta en otro sitio.
+        #
+        # Decir solo "no valida en esta posicion" deja al usuario adivinando
+        # cual es la posicion valida; el mensaje nombra la regla.
+        raise ParseError.UnknownDirectiveError(
+            "la directiva '#test' debe ser el PRIMER elemento del archivo",
+            line=tok.ln, column=tok.col,
+        )
+
     raise ParseError.UnknownDirectiveError(
         f"directiva '#{name}' no valida en esta posicion",
         line=tok.ln, column=tok.col,

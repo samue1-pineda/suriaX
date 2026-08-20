@@ -1,11 +1,19 @@
 """Semántica de suriaX: orquestador.
 
-La fase ejecuta cuatro pasadas sobre el mismo contexto compartido:
+La fase ejecuta TRES pasadas sobre el mismo contexto compartido:
 
-    1. ``collect``        registra símbolos, hooks y imports de librerías
-    2. ``type_resolver``  resuelve tipos nominales y los hooks asociados
-    3. ``scope_resolver``  valida alcance, mutabilidad, aridad y miembros
-    4. ``memory_check``   revisa reglas de memoria y movimiento de valores
+    1. ``collect``         registra símbolos, hooks e imports de librerías
+    2. ``scope_resolver``  alcance, tipos nominales, mutabilidad, aridad,
+                           miembros y enlace de hooks
+    3. ``memory_check``    reglas de memoria y movimiento de valores
+
+Eran cuatro. ``type_resolver`` era un recorrido PLANO que validaba los tipos
+nominales antes de que nadie abriera un scope, y por eso un ``type``
+declarado dentro de una función no lo veía nadie: su primer uso salía como
+``AST005``. Su lógica no se duplicó ni se tiró — vive en
+``type_resolver.TypeBinder`` y la invoca ``scope_resolver`` en el punto donde
+cada anotación entra en juego, que es el único sitio que conoce el scope.
+El frontend hace un recorrido menos.
 
 Cada pasada recorre el AST una vez y acumula los diagnósticos en lugar de
 lanzarlos inmediatamente, de modo que el compilador puede reportar todos los
@@ -23,7 +31,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
     import SemanticError  # type: ignore
 
-from . import collect, memory_check, scope_resolver, type_resolver
+from . import collect, memory_check, scope_resolver
 from .context import SemanticContext
 from .symbol_table import SymbolTable
 
@@ -49,7 +57,7 @@ def analyze(
     contrato que ``parser.parse()`` / ``Lexer.errors``.
     """
     ctx = SemanticContext(SymbolTable(), source_path=source_path, config=config)
-    for pass_ in (collect, type_resolver, scope_resolver, memory_check):
+    for pass_ in (collect, scope_resolver, memory_check):
         try:
             pass_.run(program, ctx)
         except RecursionError:

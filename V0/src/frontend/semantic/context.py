@@ -15,6 +15,7 @@ try:
 except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
 
+from .hooks import HOOK_SPECS
 from .symbol_table import Scope, ScopeKind, Symbol, SymbolTable
 
 
@@ -29,6 +30,7 @@ class SemanticContext:
         "config",
         "fn_locals",
         "loaded_libraries",
+        "hook_specs",
     )
 
     def __init__(
@@ -63,6 +65,22 @@ class SemanticContext:
         # ruta del archivo. La fase HIR emite un .phir por unidad y el
         # modulo principal solo las referencia (Module.libraries).
         self.loaded_libraries: Dict[str, str] = {}
+        # VOCABULARIO de hooks de ESTA compilacion: el fijo del compilador mas
+        # el que declara el proyecto (HTIMS, 'extends.srcx'). Deja de ser una
+        # constante de modulo porque ya no es el mismo para todos: depende del
+        # proyecto. Se construye una vez, aqui, y las pasadas lo consultan.
+        self.hook_specs: Dict[str, Any] = dict(HOOK_SPECS)
+        extensiones = (config or {}).get("_extensions")
+        if extensiones is not None:
+            from .extensions import build_vocabulary
+            aportados, problemas = build_vocabulary(extensiones)
+            # una extension NO puede redefinir el vocabulario fijo: htims ya
+            # lo rechaza al declarar (EXT027), y aqui se sostiene aunque el
+            # conjunto llegue por otra via.
+            for nombre, spec in aportados.items():
+                if nombre not in self.hook_specs:
+                    self.hook_specs[nombre] = spec
+            self.notes.extend(problemas)
 
     # ------------------------------------------------------------------ #
     # pila de scopes (via cadena 'parent', sin lista auxiliar)

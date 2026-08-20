@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover - compatibility for direct execution
 class SemanticError(CompilerError):
     """Base para los errores de la fase semántica.
 
-    Agrupa problemas de símbolos, mutabilidad, regiones, hooks y llamadas.
+    Agrupa problemas de símbolos, mutabilidad, propiedad, hooks y llamadas.
     Los errores de tipo más específicos se representan con clases propias del
     AST o del subsistema de tipos para mantener el reporte más claro.
     """
@@ -136,12 +136,34 @@ class UnknownLibraryMemberError(SemanticError):
         super().__init__(message, code="SEM011", **kwargs)
 
 
-class UndefinedRegionError(SemanticError):
-    """``make T in r`` / ``expr at r`` refieren una región ``r`` que no está
-    declarada (o ya se cerró) en ese punto."""
+class UseAfterFreeError(SemanticError):
+    """Uso de un valor destruido con ``free``.
 
-    def __init__(self, message: Any = "región no declarada en este punto", **kwargs: Any):
-        super().__init__(message, code="SEM012", **kwargs)
+    Hermano de :class:`UseAfterMoveError`: en los dos casos el dueño ya soltó
+    el valor, y lo único que cambia es POR QUÉ — ``move`` lo transfirió,
+    ``free`` lo destruyó. Lo detecta la misma pasada lineal
+    (``semantic/memory_check.py``), así que hereda sus garantías: cero falsos
+    positivos, y los caminos que el análisis conservador no ve los cubre el
+    intérprete en ejecución (``RT003``).
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "uso después de 'free'", **kwargs: Any):
+        super().__init__(message, code="SEM023", **kwargs)
+
+
+class DoubleFreeError(SemanticError):
+    """``free`` sobre un valor que ya fue destruido.
+
+    Hermano de :class:`DoubleMoveError`. Antes solo lo veía el intérprete
+    (``RT005``); ahora el camino lineal lo rechaza al compilar.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "'free' de un valor ya destruido", **kwargs: Any):
+        super().__init__(message, code="SEM024", **kwargs)
 
 
 class InvalidAddressOfError(SemanticError):
@@ -214,17 +236,6 @@ class VisibilityViolationError(SemanticError):
         super().__init__(message, code="SEM019", **kwargs)
 
 
-class InvalidDeleteError(SemanticError):
-    """``delete()`` sin argumento fuera del bloque de una región (no hay
-    región a la que referirse), o ``delete(region r)`` sobre un nombre que no
-    es una región."""
-
-    severity = Severity.PANIC
-
-    def __init__(self, message: Any = "'delete' de región inválido", **kwargs: Any):
-        super().__init__(message, code="SEM020", **kwargs)
-
-
 class TraitNotSatisfiedError(SemanticError):
     """Un ``@impl(trait)`` no cumple el contrato: al tipo le falta un método
     dunder que el trait requiere, o la firma no coincide (con ``self``
@@ -244,8 +255,117 @@ class InvalidDunderSignatureError(SemanticError):
         super().__init__(message, code="SEM022", **kwargs)
 
 
+class InvalidValueTypeError(SemanticError):
+    """``void`` usado como tipo de un VALOR (variable, parámetro o campo).
+
+    ``void`` significa "no hay valor": solo tiene sentido como tipo de
+    retorno. Se comprueba en el único punto por el que pasan las tres
+    posiciones de valor (``TypeBinder.bind``), no en cada una — así no puede
+    quedar una sin cubrir, que es como ``struct { void v; }`` llegó a
+    compilar.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "'void' no puede ser el tipo de un valor",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM025", **kwargs)
+
+
+class InfiniteSizeTypeError(SemanticError):
+    """Un ``struct`` que se contiene a sí mismo POR VALOR.
+
+    ``struct { S s; } S;`` no tiene tamaño finito: cada ``S`` contendría otro
+    ``S``. La recursión legítima se escribe con un puntero
+    (``struct { S ptr sig; } S;``), que sí tiene tamaño conocido — y es la
+    misma distinción que gobierna la propiedad: un puntero no contiene, se
+    refiere.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "tipo de tamaño infinito", **kwargs: Any):
+        super().__init__(message, code="SEM026", **kwargs)
+
+
+class TypeArityError(SemanticError):
+    """Un tipo generico usado con un numero de argumentos que no es el suyo.
+
+    ``Vector<int, str>`` sobre un ``Vector<T>``, o ``Vector`` a secas cuando
+    declara un parametro. Es la razon de que los parametros se escriban en la
+    declaracion: sin ellos escritos, la aridad no seria comprobable.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "numero de argumentos de tipo incorrecto",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM027", **kwargs)
+
+
+class IncompleteStructLiteralError(SemanticError):
+    """Un literal de struct que deja campos sin valor.
+
+    ``P{ a: 1 }`` sobre un ``struct { int a; int b; } P;`` construia un valor
+    al que le FALTA ``b``: el programa compilaba y reventaba al leer ``p.b``,
+    en runtime y lejos de la causa. No hay valor por defecto en suriaX —un
+    campo sin escribir no tiene nada que leer—, asi que el literal es el unico
+    sitio donde la ausencia se puede ver, y aqui se ve.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "literal de struct incompleto",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM028", **kwargs)
+
+
+class UnsupportedPayloadError(SemanticError):
+    """Una variante de ``enum`` que lleva un valor con destructor.
+
+    Destruir un enum suma exige saber QUE variante es en ejecucion para
+    destruir lo que esa variante lleva, y el drop de hoy trabaja sobre rutas
+    estaticas de campos. Se rechaza en vez de filtrarse: un payload con
+    ``__free__`` que nadie libera es una fuga silenciosa, y el silencio es
+    justo lo que el modelo de memoria promete no hacer.
+    """
+
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "payload de variante no soportado",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM029", **kwargs)
+
+
+class MissingHandlerError(SemanticError):
+    """Un nodo del AST llegó a una pasada que no sabe recorrerlo.
+
+    NO es un error del programa que se compila: es un defecto del compilador.
+    Se reporta como diagnóstico —y no con una excepción— por la misma razón
+    que el resto de la fase: un fallo no debe tirar la compilación entera ni
+    esconder los diagnósticos reales que ya se habían acumulado. Va con
+    severidad ``PANIC`` para que se distinga de un error del usuario.
+
+    Existe porque el silencio costó caro: el despacho de ``scope_resolver``
+    ignoraba sin decir nada las clases que no estaban en su tabla, y por eso
+    el inicializador de un ``type_decl`` cruzó el frontend entero sin que
+    nadie lo mirara.
+    """
+    severity = Severity.PANIC
+
+    def __init__(self, message: Any = "nodo sin handler en esta pasada",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM000", **kwargs)
+
+
 __all__ = [
     "SemanticError",
+    "InvalidValueTypeError",
+    "InfiniteSizeTypeError",
+    "TypeArityError",
+    "IncompleteStructLiteralError",
+    "UnsupportedPayloadError",
+    "MissingHandlerError",
     "UndefinedSymbolError",
     "DuplicateSymbolError",
     "ImmutableAssignmentError",
@@ -257,7 +377,8 @@ __all__ = [
     "LibraryNotFoundError",
     "InvalidLibraryError",
     "UnknownLibraryMemberError",
-    "UndefinedRegionError",
+    "UseAfterFreeError",
+    "DoubleFreeError",
     "InvalidAddressOfError",
     "InvalidFreeTargetError",
     "ReadOnlyPointerWriteError",
@@ -265,7 +386,6 @@ __all__ = [
     "ExpressionTooDeepError",
     "UnknownHookError",
     "VisibilityViolationError",
-    "InvalidDeleteError",
     "TraitNotSatisfiedError",
     "InvalidDunderSignatureError",
 ]

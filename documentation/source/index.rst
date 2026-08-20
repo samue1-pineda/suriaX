@@ -25,7 +25,7 @@ El pipeline, de principio a fin:
 
    .srcx → lexer → parser → AST-tipado → semántica → HIR (protobuf)
                                                       ├→ intérprete (Python)
-                                                      ├→ backend C++  → MIR → VM / LLVM
+                                                      ├→ backend C++  → MIR → VM / JIT
                                                       └→ target web   → WIR → WebAssembly
 
 .. toctree::
@@ -42,6 +42,7 @@ El pipeline, de principio a fin:
    grammar
    type_system
    libsrx
+   memory_model
    repo/hooks
 
 .. toctree::
@@ -62,6 +63,8 @@ El pipeline, de principio a fin:
 
    repo/ARCHITECTURE
    repo/DESIGN_PRINCIPLES
+   memory_decision
+   inference_decision
    repo/ROADMAP
    repo/CONTRIBUTING
 

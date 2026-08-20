@@ -42,7 +42,8 @@ hook y si ejecuta hoy.
 | `__index__` | `hook fn __index__(T ptr x, int i) -> E` | `x[i]` | 1.er parámetro | ✅ |
 | `__index_set__` | `hook fn __index_set__(T ptr mutable x, int i, E v) -> void` | `x[i] = v` | 1.er parámetro | ✅ |
 | `__eq__` | `hook fn __eq__(T ptr a, T ptr b) -> bool` | `a == b` | 1.er parámetro | ✅ |
-| `__make__` | `hook fn __make__(...) -> T ptr` | `make T in r` (regiones) | tipo de **retorno** | ⛔ `HIR005` |
+| `__min__` | `hook fn __min__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
+| `__max__` | `hook fn __max__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
 
 Qué significa cada uno, con algo más de detalle:
 
@@ -73,13 +74,30 @@ Qué significa cada uno, con algo más de detalle:
   receptor, índice y valor.
 - **`__eq__`** — comparar `a == b` entre dos valores del mismo tipo nominal.
   Devuelve `bool`. Sin él, `==` entre nominales cae a la identidad.
-- **`__make__`** — construir en una **región** (RBMM). Se asocia por el tipo de
-  retorno porque cuando se llama todavía no existe la instancia a la que
-  apuntar. Se escribe y se valida, pero **no ejecuta**: las regiones no están
-  en el HIR v1 y el emisor las rechaza con `HIR005`.
+- **`__min__` / `__max__`** — el **rango** de un tipo numérico. Son los únicos
+  hooks que el compilador **lee en compilación** en vez de ejecutar: mira el
+  literal de su `return`, así que el cuerpo tiene que ser exactamente
+  `{ return <entero>; }` (el `-` unario vale). Sirven para una sola cosa, y es
+  la que hace usable un tipo de ancho fijo: decidir si un **literal** cabe.
 
-> El **primer parámetro** decide de quién es el hook (para `__cast__` y
-> `__make__`, ver arriba). Un mismo archivo puede tener **varios**
+  ```srcx
+  const type int8;
+  hook fn __cast__(int n)     -> int8;
+  hook fn __min__(int8 ptr _) -> int { return -128; }
+  hook fn __max__(int8 ptr _) -> int { return 127; }
+  ```
+
+  Con eso, `const dt.int8 a = 10;` compila (el compilador inserta la
+  conversión declarada) y `= 300` es un error que dice el rango. Sin ellos el
+  tipo sigue funcionando, pero solo con `cast<dt.int8>(...)` explícito: el
+  compilador sabría por `__sizeof__` que mide un byte y no si ese byte va de
+  −128 a 127 o de 0 a 255.
+
+  > La asimetría es deliberada, la misma de Rust: el literal **implícito**
+  > tiene que caber; `cast<T>(x)` **explícito** trunca.
+
+> El **primer parámetro** decide de quién es el hook (salvo `__cast__`, que
+> se asocia por el lado NOMINAL de su firma). Un mismo archivo puede tener **varios**
 > `__sizeof__` o `__cast__`, uno por tipo: se distinguen por el tipo dueño, no
 > por el nombre.
 
@@ -300,7 +318,6 @@ de verdad con `--run`.
 | Hooks **declarados por tu proyecto** (HTIMS) | Sí — contra la firma que declara tu extensión | ✅ Sí, invocados como `x.__hook__(...)` |
 | Hooks `__print__` / `__len__` / `__sizeof__` / `__free__` / `__cast__` | Sí | ✅ Sí |
 | Hooks `__index__` / `__index_set__` / `__eq__` | Sí | ✅ Sí (`v[i]`, `v[i] = x`, `a == b`) |
-| Hook `__make__` | Sí | ⛔ No — es para construir en REGIONES, y las regiones (RBMM) no están en v1 (`HIR005`) |
 | Dunders (`x.__metodo__()`) en el mismo archivo | Sí | ✅ Sí — el método corre y la mutación del receptor se propaga |
 | Dunders sobre un tipo de **otra librería** | Sí | ✅ Sí — el despacho cross-módulo funciona |
 | Traits (`@trait` / `@impl`) | Sí (conformidad verificada, `SEM021`) | — (el contrato no "ejecuta"; los dunders que exige, sí) |
@@ -320,7 +337,5 @@ de verdad con `--run`.
   [../htims/readme.md](../htims/readme.md).
 - [ ] **Que el LSP conozca los hooks del proyecto**: `--emit-lang-info`
   publica hoy solo el vocabulario fijo.
-- [ ] **`__make__` / regiones**: reintroducir RBMM (HIR v2) para que la
-  construcción en región y su hook ejecuten.
 - [ ] **Sincronizar la extensión de VS Code**: que consuma `--emit-diagnostics`
   en vez de reimplementar la gramática.

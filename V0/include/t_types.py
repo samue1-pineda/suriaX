@@ -27,7 +27,7 @@ class TokenType(Enum):
 
     # --- declaracion / bindings ---
     CONST = 15
-    MUTABLE = 16       # 'mutable': califica PUNTEROS ('ptr mutable T') y REGIONES ('mutable region r')
+    MUTABLE = 16       # 'mutable': califica PUNTEROS ('ptr mutable T')
     VAR = 24           # 'var': binding mutable ('var int x = 10;')
     FUNCTION = 17      # 'fn'
     STRUCT = 18
@@ -42,7 +42,7 @@ class TokenType(Enum):
     INTERNAL = 36
 
     # --- especificador de metodo especial (antes se ADIVINABA por la forma __x__) ---
-    HOOK = 37          # 'hook': metodo del set fijo del compilador (free/make/sizeof/print/len/cast)
+    HOOK = 37          # 'hook': metodo del set fijo del compilador (free/sizeof/print/len/cast)
     DUNDER_KW = 38     # 'dunder': metodo especial LIBRE del usuario ('dunder fn __xxx__()')
 
     # --- control de flujo ---
@@ -56,19 +56,13 @@ class TokenType(Enum):
     CONTINUE = 32
     TEST = 33          # funcion nativa 'test' (NO la directiva #test)
 
-    # --- memoria: region-based + move-semantics ---
-    REGION = 40        # 'region', declara una region de memoria
-    SHRD = 44          # 'shrd', modifica una region: compartible ('shrd region r {}')
-    NA = 45            # 'na', modifica una region: NO auto-liberada ('na region r {}', usa delete())
-    IN = 41            # 'in', operacion imperativa sobre una region ('in region r: delete(x)')
-    AT = 42            # 'at', ubica/asocia un valor en una region (x at r)
-    MOVE = 43          # 'move', transferencia de propiedad (move-semantics) / de region ('move region a -> region b')
-    FREE = 46          # keyword del lenguaje
-    NEW = 57           # 'new', inicializa una region ('new(shrd region r);')
-    DELETE = 58        # 'delete', libera una region ('delete(region r)' o 'delete()' dentro de ella)
-    # 47 retirado: 'alloc' dejo de ser keyword (la reserva cruda ahora la
-    # aporta una libreria; no reutilizar el valor).
-    MAKE = 48          # keyword del lenguaje
+    # --- memoria: ownership + move-semantics ---
+    # Los valores 40-42, 44-45, 47-48 y 57-58 quedaron LIBRES al retirar el
+    # modelo por regiones en v0.2.0 (REGION/IN/AT/SHRD/NA/alloc/MAKE/NEW/
+    # DELETE). No se reutilizan: un volcado de tokens viejo mostraria un
+    # nombre distinto para el mismo numero y no habria como notarlo.
+    MOVE = 43          # 'move', transferencia de propiedad (move-semantics)
+    FREE = 46          # 'free', destruccion anticipada de un valor con dueno
     POINTER = 49       # 'ptr'
     ADDRESS = 50       # '&'
     NULLABLE = 51      # '?'
@@ -86,6 +80,18 @@ class TokenType(Enum):
     MINUS = 62         # -
     MULTIPLY = 63      # *
     DIVIDE = 64        # /
+    MODULO = 72        # %  (resto de la division entera)
+
+    # --- asignacion compuesta e incremento ---
+    # AZUCAR: el parser los desazucara ('n += 2' -> 'n = n + 2'), asi que no
+    # llegan al AST ni al HIR. Solo existen como tokens.
+    PLUS_ASSIGN = 73     # +=
+    MINUS_ASSIGN = 74    # -=
+    STAR_ASSIGN = 78     # *=
+    SLASH_ASSIGN = 79    # /=
+    PERCENT_ASSIGN = 91  # %=
+    INCREMENT = 92       # ++
+    DECREMENT = 93       # --
 
     # --- operadores de comparacion ---
     EQUAL = 65         # ==
@@ -146,7 +152,7 @@ KEYWORDS: dict[str, TokenType] = {
     # declaracion
     "const": TokenType.CONST,
     "var": TokenType.VAR,
-    "mutable": TokenType.MUTABLE,  # tipos puntero ('ptr mutable T') y regiones ('mutable region r')
+    "mutable": TokenType.MUTABLE,  # tipos puntero ('ptr mutable T')
     "fn": TokenType.FUNCTION,
     "struct": TokenType.STRUCT,
     "enum": TokenType.ENUM,
@@ -173,23 +179,14 @@ KEYWORDS: dict[str, TokenType] = {
     "break": TokenType.BREAK,
     "continue": TokenType.CONTINUE,
     "test": TokenType.TEST,
-    # memoria: region-based + move-semantics
-    "region": TokenType.REGION,
-    "shrd": TokenType.SHRD,
-    "na": TokenType.NA,
-    "in": TokenType.IN,
-    "at": TokenType.AT,
+    # memoria: ownership + move-semantics
     "move": TokenType.MOVE,
     "free": TokenType.FREE,
-    "new": TokenType.NEW,
-    "delete": TokenType.DELETE,
-    # 'make' NO es palabra clave: 'make T in r' es RBMM, que no forma parte
-    # del lenguaje v1 (hir.proto la tiene 'reserved' y el emisor rechaza
-    # 'region' con HIR005). Reservarla solo impedia usar 'make' como nombre
-    # corriente — justo el nombre natural de una fabrica de libreria
-    # ('fn make(int n) -> vec'). TokenType.MAKE y ast.MakeExpr se conservan:
-    # devolver RBMM al lenguaje es reponer esta entrada y su handler en
-    # 'expressions/nud.PRIMARY_HANDLERS'.
+    # 'region', 'shrd', 'na', 'in', 'at', 'new', 'delete' y 'make' NO son
+    # palabras clave: pertenecian al modelo por regiones, retirado en v0.2.0
+    # (ver documentation/source/memory_decision.rst). Al dejar de reservarlas
+    # quedan disponibles como nombres corrientes — justo los nombres naturales
+    # de una libreria de memoria ('fn new(int n) -> ptr int', 'arena.delete').
     "ptr": TokenType.POINTER,
     "cast": TokenType.CAST,
     # operadores logicos (son palabras, no simbolos)

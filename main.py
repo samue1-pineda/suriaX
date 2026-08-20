@@ -22,8 +22,11 @@ _ROOT = os.path.abspath(os.path.dirname(__file__))
 _V0_ROOT = os.path.join(_ROOT, "V0")
 _V0_MAIN = os.path.join(_V0_ROOT, "main.py")
 
-#Subcomandos que no deben ejecutar un archivo fuente 
-_NON_RUN_FLAGS = {"--check", "--init-config", "-h", "--help"}
+#Subcomandos que no deben ejecutar un archivo fuente
+#('--emit-extensions' acepta un fuente para anclar la raiz del proyecto, pero
+# consulta las extensiones: no compila ni ejecuta nada)
+_NON_RUN_FLAGS = {"--check", "--init-config", "--emit-extensions",
+                  "-h", "--help"}
 
 
 def _forward_argv(argv: list[str]) -> list[str]:

@@ -33,8 +33,20 @@ def dumps_dir(config: Optional[dict]) -> str:
 def _target_path(config: Optional[dict], source_path: str, suffix: str,
                  explicit: Optional[str]) -> str:
     """Ruta final de un volcado: explícita del usuario, o
-    ``<dumps_dir>/<basename del fuente><suffix>``."""
+    ``<dumps_dir>/<basename del fuente><suffix>``.
+
+    En los DOS casos se crea la carpeta destino. La ruta explícita no la
+    creaba, y eso rompía el caso normal de un clon recién hecho: ``dumps/``
+    no se versiona, así que compilar con ``--emit-hir <ruta>`` un programa
+    que importa una librería reventaba con un ``FileNotFoundError`` sin
+    diagnóstico —el emisor de unidades pasa una ruta explícita dentro de
+    ``dumps/``— en vez de escribir el volcado. Quien elige la ruta no tiene
+    por qué haber creado el directorio.
+    """
     if explicit:
+        directory = os.path.dirname(os.path.abspath(explicit))
+        if directory:
+            os.makedirs(directory, exist_ok=True)
         return explicit
     base = os.path.basename(source_path)
     directory = dumps_dir(config)
@@ -81,6 +93,19 @@ def dump_hir(data: bytes, *, source_path: str, config: Optional[dict] = None,
     return target
 
 
+def hir_pretty_path(*, source_path: str, config: Optional[dict] = None,
+                    out_path: Optional[str] = None) -> str:
+    """Ruta de la vista LEGIBLE del HIR (``<fuente>.phir.pretty``).
+
+    Devuelve la ruta en vez de escribir el contenido, a diferencia del resto
+    de volcados: la vista se escribe en STREAMING (``HIR/pretty.write_pretty``)
+    porque para un programa grande son megabytes que no tiene sentido armar en
+    memoria. Aquí vive la política de dónde va; el contenido lo pone el
+    paquete HIR, que es quien conoce el formato.
+    """
+    return _target_path(config, source_path, ".phir.pretty", out_path)
+
+
 def dump_tokens_txt(tokens: List, *, source_path: str, config: Optional[dict] = None,
                     out_path: Optional[str] = None) -> str:
     """Vuelca la lista de tokens a un ``.txt`` y devuelve la ruta escrita.
@@ -96,4 +121,5 @@ def dump_tokens_txt(tokens: List, *, source_path: str, config: Optional[dict] = 
     return target
 
 
-__all__ = ["dumps_dir", "dump_ast_json", "dump_hir", "dump_tokens_txt"]
+__all__ = ["dumps_dir", "dump_ast_json", "dump_hir", "dump_tokens_txt",
+           "hir_pretty_path"]

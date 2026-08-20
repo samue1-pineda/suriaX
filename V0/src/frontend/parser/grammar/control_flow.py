@@ -94,6 +94,14 @@ def _parse_case_arm(cursor: Cursor, ctx: ParserContext) -> ast.CaseArm:
     finally:
         ctx.no_struct_literal = previous
 
+    # el ':' es obligatorio solo cuando el cuerpo NO es un bloque; cuando SI
+    # lo es, se admiten las dos formas ('case X { }' y la costumbre de C,
+    # 'case X: { }'). Un bloque no es un 'statement' de la gramatica, asi que
+    # sin este caso el ':{' caia en 'parse_expression' y el diagnostico
+    # ('token inesperado en expresion: L_BRACE') no decia nada del 'case'.
+    if cursor.check(TokenType.COLON) \
+            and cursor.peek(1).type is TokenType.L_BRACE:
+        cursor.advance()
     if cursor.check(TokenType.L_BRACE):
         body: ast.Statement = parse_block(cursor, ctx)
     else:

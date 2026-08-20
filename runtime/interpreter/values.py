@@ -69,16 +69,57 @@ class TypeValue:
 
 class EnumNamespace:
     """El NOMBRE de un enum usado como valor (``Estado.Activo``): expone sus
-    items (enteros auto-numerados estilo C, calculados por el loader)."""
+    items (enteros auto-numerados estilo C, calculados por el loader) y, si el
+    enum es un tipo SUMA, los constructores de sus variantes con payload."""
 
     __slots__ = ("name", "items")
 
-    def __init__(self, name: str, items: Dict[str, int]) -> None:
+    def __init__(self, name: str, items: Dict[str, Any]) -> None:
         self.name = name
         self.items = items
 
     def __repr__(self) -> str:
         return f"<enum {self.name}>"
+
+
+class VariantCtor:
+    """El CONSTRUCTOR de una variante con payload (``Nodo.Literal``).
+
+    Se invoca como cualquier otra cosa invocable y produce un
+    :class:`EnumValue`. Existe como valor propio —en vez de que el intérprete
+    reconozca la forma ``Enum.Variante(...)`` en el árbol— porque la variante
+    también se nombra PELADA (``Literal(5)``), y entonces no hay ninguna forma
+    sintáctica que reconocer: hay un nombre que resuelve a algo invocable.
+    """
+
+    __slots__ = ("enum_name", "variant", "arity")
+
+    def __init__(self, enum_name: str, variant: str, arity: int) -> None:
+        self.enum_name = enum_name
+        self.variant = variant
+        self.arity = arity
+
+    def __repr__(self) -> str:
+        return f"<variante {self.enum_name}.{self.variant}/{self.arity}>"
+
+
+class EnumValue:
+    """El valor de un enum SUMA: qué variante es, y lo que lleva.
+
+    Los campos son :class:`Cell` como los de un struct, así que el payload
+    participa del mismo modelo de memoria que todo lo demás (una variante que
+    lleva un puntero lo comparte igual que un campo).
+    """
+
+    __slots__ = ("enum_name", "variant", "fields")
+
+    def __init__(self, enum_name: str, variant: str, fields: list) -> None:
+        self.enum_name = enum_name
+        self.variant = variant
+        self.fields = fields
+
+    def __repr__(self) -> str:
+        return f"{self.variant}({', '.join(repr(f) for f in self.fields)})"
 
 
 def format_value(value: Any) -> str:
@@ -89,8 +130,14 @@ def format_value(value: Any) -> str:
         return "true"
     if value is False:
         return "false"
+    if isinstance(value, EnumValue):
+        # 'Literal(5)' — la misma forma con la que se escribe en el fuente.
+        if not value.fields:
+            return value.variant
+        dentro = ", ".join(format_value(c.value) for c in value.fields)
+        return f"{value.variant}({dentro})"
     return str(value)
 
 
 __all__ = ["FunctionValue", "Namespace", "StructValue", "TypeValue",
-           "EnumNamespace", "format_value"]
+           "EnumNamespace", "VariantCtor", "EnumValue", "format_value"]

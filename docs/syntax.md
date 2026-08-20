@@ -42,11 +42,10 @@ while (y < x) {
     y = y + 1;
 }
 
-// memoria: region-based + move-semantics
-region scratch {
-    int ptr p = make int in scratch;
-    move p;
-}   // se libera toda la región
+// memoria: ownership + move-semantics
+int ptr p = reservar(1);
+int ptr q = move p;      // 'p' deja de ser utilizable
+free q;                  // destrucción anticipada; si no, al cerrar el ámbito
 ```
 
 ## Secciones
@@ -56,14 +55,14 @@ region scratch {
 - Métodos especiales: `hook fn __x__` (set fijo del compilador) / `dunder fn __x__` (libre).
 - Sentencias: `var`, `if`, `while`, `match`, `return`, `break`, `continue`.
 - Expresiones: aritméticas, comparación, lógicas, llamadas, acceso `.`.
-- Memoria: `region` (mods `shrd`/`mutable`/`na`), `new`/`delete`/`in region`,
-  `move region a -> region b`, `make ... in`, `at`, `move`, `ptr`/`&`/`?`.
+- Memoria: `move`, `free`, `ptr`/`&`/`?`. Las arenas son un tipo de librería,
+  no sintaxis (ver el modelo de memoria).
 - Directivas: `#import`, `#export`, `#from`, `#test`, `#extern cpp{}`.
 
 ## Ejemplos
 
 - [Hello, world!](examples/helloworld.md) — import de librería e interpolación.
-- [Regiones y move-semantics](examples/regions.md) — ejemplo completo de memoria.
+- [Propiedad, drop y arenas](examples/ownership.md) — ejemplo completo de memoria.
 - [Structs, enums y control de flujo](examples/structs_and_control.md) — `match`/`case`, `if`/`while`.
 - [Escribir una librería `.libsrx`](examples/library_libsrx.md) — librería nativa con `#export`.
 

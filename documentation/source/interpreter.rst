@@ -76,11 +76,11 @@ Cada celda tiene una **máquina de estados**:
               │
               └──free──▶ FREED
 
-Leer una celda movida es ``RT001``; usar una liberada, ``RT002``; liberar dos
-veces, ``RT003``. Los tres traen la línea y la columna de la operación que los
-provocó, porque el HIR las transporta.
+Leer una celda movida es ``RT001``; volver a moverla, ``RT002``; acceder a una
+liberada, ``RT003``. Los tres traen la línea y la columna de la operación que
+los provocó, porque el HIR las transporta.
 
-El mismo core lo enlazarán la VM de bytecode y el backend LLVM: la lógica de
+El mismo core lo enlazará la VM de bytecode del backend nativo: la lógica de
 memoria vive en un solo sitio y es agnóstica del target.
 
 .. table::
@@ -108,16 +108,22 @@ de la imagen y ejecuta el cuerpo, con los globales de **su** unidad.
 
 .. code-block:: srcx
 
+   #from io #import stdp
+
    struct { str texto; int largo; } Cadena;
 
    hook fn __print__(Cadena ptr c) -> void {
-       __write__(c.texto);
+       stdp.print(c.texto);
+   }
+
+   hook fn __len__(Cadena ptr c) -> int {
+       return c.largo;
    }
 
    fn main() -> int {
        var Cadena c = Cadena{ texto: "hola", largo: 4 };
        print(&c);        // despacha a __print__
-       return len(&c);   // despacha a __len__ si está declarado
+       return len(&c);   // despacha a __len__
    }
 
 .. _trazas:

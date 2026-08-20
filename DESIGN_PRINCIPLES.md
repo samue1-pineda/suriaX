@@ -40,30 +40,44 @@ del tipo viene de su nombre/declaración, no de su forma) y **fuerte** (sin
 conversiones implícitas inseguras). Un binding o parámetro sin anotación de tipo
 es un error.
 
-## 5. Modelo de memoria: region-based + move-semantics
+## 5. Modelo de memoria: ownership + drop + arenas
 
-> **Cambio de diseño:** el modelo anterior (RAII + tipos afines + typestate) fue
-> reemplazado por **memoria basada en regiones (region-based) combinada con
-> move-semantics**, esto gracias a la facilidad del modelo. 
+> **Cambio de diseño (v0.2.0):** el modelo por regiones (*region-based*) fue
+> retirado. Su seguridad dependía por completo de un análisis de no-escape que
+> a su vez exigía polimorfismo de región en las firmas —un sistema de tipos que
+> nunca se llegó a definir—, y mientras tanto el modelo no era *incompleto*
+> sino *inseguro*. El razonamiento entero está en
+> [el registro de la decisión](documentation/source/memory_decision.rst).
 
 Ideas centrales:
 
-- **Regiones (`region r { ... }`):** las asignaciones se agrupan en una región;
-  al cerrarse la región, **toda** su memoria se libera de una vez (no objeto por
-  objeto). Esto da liberación barata, y lifetimes claros.
-- **Asociación a región (`make T in r`, `x at r`):** un valor se ubica
-  explícitamente en una región concreta.
-- **Move-semantics (`move x`):** la propiedad de un valor se transfiere, tras un
-  `move` el origen deja de ser usable. Evita aliasing accidental y dobles
-  liberaciones.
+- **Propiedad única (*ownership*):** todo valor con recursos tiene un dueño y
+  solo uno: la variable que lo nombra. No hay aliasing con propiedad
+  compartida, así que no hay dobles liberaciones que detectar.
+- **Move-semantics (`move x`):** la propiedad se transfiere explícitamente;
+  tras un `move` el origen deja de ser usable.
+- **Drop determinista:** al cerrar el ámbito que posee un valor, el compilador
+  invoca el `__free__` de su tipo. El punto de destrucción es visible en el
+  fuente; no hay recolector de basura.
+- **Liberación anticipada (`free x;`):** destruye antes del cierre del ámbito
+  cuando el ámbito dura mucho más que el valor. A partir de ahí el valor queda
+  inutilizable, igual que tras un `move`.
+- **Arenas explícitas:** el patrón «reservar mucho, liberar de golpe» que hacía
+  atractivas a las regiones se conserva, pero como **tipo de librería**, no
+  como sintaxis. Una arena es un valor con dueño y se destruye con las reglas
+  de siempre — sin análisis especial.
 - **Punteros y nulabilidad:** `ptr T`, el operador de dirección `&` y el tipo
-  nullable `T?` siguen disponibles, se pueden usar en paralelo al modelo de regiones.
-- **Gestión explícita puntual:** `make` / `alloc` / `free` existen como keywords
-  para casos que lo requieran, pero la vía recomendada son las regiones.
+  nullable `T?` son **préstamos**: no transfieren propiedad.
 
-La **verificación** de este modelo (lifetimes de región, validez de un `move`,
-escapes de región) la corrección semántica 
-ocurre en la etapa **semántica** y, sobre todo, en el **lowering a MIR** (en C++).
+La **verificación** ocurre en dos niveles: la etapa **semántica** valida la
+propiedad sobre el flujo del cuerpo (uso-tras-move, doble move) y el
+**lowering a MIR** (en C++) hará la verificación final, incluidos los tiempos
+de vida de los préstamos.
+
+Por qué este modelo y no otro: ownership **degrada bien**. Sin su verificador
+de préstamos sigue siendo seguro —restrictivo, pero nunca acepta un programa
+mal— mientras que las regiones sin análisis de escape aceptaban punteros
+colgantes en silencio.
 
 ## 6. Interoperabilidad con C++
 
@@ -77,8 +91,8 @@ backend.
 
 Un aclaracion importante: el *type system* **no es una caja en el
 pipeline**, sino un servicio que opera sobre varias representaciones (AST,
-AST-tipado, semántica) y, en el modelo de regiones, también informa el lowering
-a MIR (donde se comprueban lifetimes y moves).
+AST-tipado, semántica) y también informa el lowering a MIR (donde se
+comprueban los moves y los tiempos de vida de los préstamos).
 
 La **tabla de símbolos** es, por esto, un **estado persistente del compilador**,
 no de una sola fase:

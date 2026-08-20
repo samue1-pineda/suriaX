@@ -68,6 +68,37 @@ class Parser:
     # ------------------------------------------------------------------ #
     # orquestador de directivas de prueba (#test lexer/parser/ast)
     # ------------------------------------------------------------------ #
+    def consume_test_directive(self) -> Optional[str]:
+        """Consume ``#test <objetivo>`` al inicio del flujo y devuelve el objetivo.
+
+        SOLO consume: no ejecuta nada ni imprime nada. Separarlo de
+        ``run_test_directive`` es lo que permite que un consumidor que unicamente
+        quiere PARSEAR el archivo -- el canal de diagnosticos del LSP, ver
+        ``driver/inspect.py:emit_diagnostics`` -- salte la directiva igual que hace la
+        ruta normal, sin disparar el volcado de una fase.
+
+        Sin esa separacion ``#test`` llegaba a ``parse_directive``, que no tiene
+        rama para el, y un archivo VALIDO se reportaba con ``PAR020`` (y, por la
+        recuperacion en modo panico, con errores semanticos inventados detras).
+
+        Devuelve el nombre del objetivo (tal cual se escribio) o ``None`` si el
+        flujo no empieza por una directiva de prueba.
+        """
+        tok = self.cursor.peek()
+        if tok.type is not TokenType.DIRECTIVE or tok.value != "test":
+            return None
+
+        # Mirar el token siguiente SIN consumir la directiva todavia: si no hay
+        # objetivo, '#test' no es una directiva de prueba y el flujo debe quedar
+        # intacto para que el parser lo reporte como corresponde.
+        target = self.cursor.peek(1)
+        if target.type is not TokenType.IDENTIFIER:
+            return None
+
+        self.cursor.advance()  # '#test'
+        self.cursor.advance()  # el objetivo
+        return target.lexeme
+
     def run_test_directive(self, *, source_path: Optional[str] = None) -> Optional[str]:
         """Detecta y ejecuta ``#test <objetivo>`` al inicio del flujo.
 
@@ -77,13 +108,8 @@ class Parser:
         directiva de prueba reconocida. ``source_path`` (ruta del archivo
         fuente) ancla la resolucion de ``.libsrx`` en ``#test sem``.
         """
-        tok = self.cursor.peek()
-        if tok.type is not TokenType.DIRECTIVE or tok.value != "test":
-            return None
-
-        self.cursor.advance()  # consumir la directiva '#test'
-        target = self.cursor.peek()
-        if target.type is not TokenType.IDENTIFIER:
+        target = self.consume_test_directive()
+        if target is None:
             return None
 
         # matching CASE-INSENSITIVE ('#test HIR' == '#test hir'): cada fase
@@ -92,16 +118,13 @@ class Parser:
         # ver. Un objetivo desconocido se reporta con la lista disponible en
         # vez de caer al pipeline normal (que intentaria parsear '#test X'
         # como codigo y daria un PAR003 confuso).
-        name = target.lexeme.lower()
-        handler = self._TEST_TARGETS.get(name)
+        handler = self._TEST_TARGETS.get(target.lower())
         if handler is None:
-            self.cursor.advance()
             available = ", ".join(sorted(self._TEST_TARGETS))
-            print(f"=== #test {target.lexeme} — objetivo desconocido ===",
+            print(f"=== #test {target} — objetivo desconocido ===",
                   file=sys.stderr)
             print(f"  fases disponibles: {available}", file=sys.stderr)
             return "unknown"
-        self.cursor.advance()
         return handler(self, source_path)
 
     # tabla de despacho de '#test <fase>': nombre (minusculas) -> metodo.
@@ -136,6 +159,27 @@ class Parser:
         table, sem_errors = analyze(program, source_path=source_path)
         self._dump_hir(program, table, sem_errors, source_path=source_path)
         return "hir"
+
+    def run_stage(self, name: str, *, source_path: Optional[str] = None) -> Optional[str]:
+        """Ejecuta el volcado de UNA fase, sin que el fuente traiga '#test'.
+
+        Misma tabla de despacho que ``#test <fase>`` -- una fase nueva sigue
+        siendo una entrada en ``_TEST_TARGETS`` y nada mas. Lo que cambia es
+        quien la pide: la directiva la pide DESDE el archivo, y esto la pide
+        desde fuera, que es lo que necesita un visualizador para mostrar
+        cualquier fase de un archivo que el usuario no quiere modificar.
+
+        Devuelve la fase ejecutada, o ``None`` si el nombre no existe.
+        """
+        handler = self._TEST_TARGETS.get(name.lower())
+        if handler is None:
+            return None
+        return handler(self, source_path)
+
+    @classmethod
+    def available_stages(cls) -> list:
+        """Nombres de fase que ``run_stage`` acepta, en orden de pipeline."""
+        return list(cls._TEST_TARGETS)
 
     _TEST_TARGETS = {
         "lexer": _run_test_lexer,

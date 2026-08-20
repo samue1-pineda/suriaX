@@ -11,11 +11,10 @@
      [OK]    implementada de punta a punta: el parser la reconoce, la
              Semántica la valida y viaja en el HIR.
      [HIR-]  el parser la reconoce y la Semántica la valida, pero NO cruza al
-             HIR v1: el emisor la rechaza con HIR005. Hoy es TODO el modelo
-             RBMM (region/new/delete/in region/move region/at). Se conserva
-             porque el lenguaje la define y volverá; sus tags están
-             'reserved' en proto/hir.proto para reintroducirla sin romper el
-             esquema.
+             HIR: el emisor la rechaza con HIR005. Hoy no hay ninguna: el
+             modelo por regiones, que era todo este grupo, se retiró del
+             lenguaje en v0.2.0 (ver documentation/source/memory_decision.rst)
+             y sus tags quedan 'reserved' en proto/hir.proto.
      [TBD]   sintaxis diseñada, todavía no implementada.
 
    Notación EBNF:
@@ -142,7 +141,17 @@ field          = type IDENTIFIER ";" ;
 
 (* enum: estilo C++.                                                        *)
 enum_decl      = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}" ;  (* [OK] *)
-enum_item      = IDENTIFIER [ "=" expression ] ;
+(* Dos formas de variante, EXCLUYENTES entre si:                            *)
+(*   UNIDAD  'ROJO' / 'ROJO = 5'   -> un entero (estilo C)                  *)
+(*   PAYLOAD 'Literal(int)'        -> lleva valores propios                 *)
+(* En cuanto UNA variante lleva payload, el enum pasa a ser un tipo SUMA y  *)
+(* sus valores dejan de ser enteros. Se construye invocando la variante     *)
+(* ('Nodo.Literal(5)') y se abre desestructurando en un 'case'              *)
+(* ('case Nodo.Literal(v)'): el patron tiene la MISMA forma que la          *)
+(* construccion, asi que no hizo falta sintaxis de patrones aparte — lo que *)
+(* cambia es que ahi sus argumentos son nombres que se LIGAN.               *)
+enum_item      = IDENTIFIER ( "(" type { "," type } [ "," ] ")"
+                            | [ "=" expression ] ) ;
 
 (* type: declara un TIPO NOMINAL OPACO -- con nombre y sin representación   *)
 (* escrita en suriaX (su layout lo aportan el backend o sus hooks). Es la    *)
@@ -161,10 +170,6 @@ type_decl      = [ qualifier ] "type" IDENTIFIER [ "=" expression ] ";" ;  (* [O
 
 statement      = var_decl
                | type_decl                (* 'const type int8;' (secc. 1)  *)
-               | region_stmt
-               | new_stmt                  (* 'new(shrd region r);'          *)
-               | delete_stmt               (* 'delete(region r);' / 'delete()' *)
-               | in_region_stmt            (* 'in region r: ...'             *)
                | if_stmt
                | while_stmt
                | match_stmt
@@ -183,7 +188,12 @@ statement      = var_decl
 (* en ese bloque). Un throw que escapa de todo catch aborta la ejecución.   *)
 (* El TIPO 'error T' (sección 4) anota que un valor puede ser un error.     *)
 throw_stmt     = "throw" expression ";" ;                           (* [OK] *)
-try_stmt       = "try" block "catch" "(" IDENTIFIER ")" block [ ";" ] ;
+(* Varias ramas 'catch', probadas EN ORDEN; gana la primera cuyo tipo       *)
+(* encaje. El tipo es opcional: sin el la rama atrapa cualquier valor. Lo   *)
+(* que ninguna rama entiende SIGUE propagandose, que es lo que hace util    *)
+(* filtrar — un catch que no sabe manejar el fallo no se lo queda.          *)
+try_stmt       = "try" block catch_clause { catch_clause } [ ";" ] ;
+catch_clause   = "catch" "(" [ type ] IDENTIFIER ")" block ;
 
 (* declaración de variable: 'tipo nombre = valor;'  El ';' es OBLIGATORIO.  *)
 (* var_decl y type_decl comparten prefijo y se distinguen con UN token: el   *)
@@ -193,29 +203,15 @@ qualifier      = "const" | "var" ;    (* sin qualifier = 'var' (mutable, estilo 
                                       (* 'mutable' ya NO califica variables: solo   *)
                                       (* punteros ('T ptr mutable', regla 'type')   *)
 
-(* memoria: region-based + move-semantics. Modelo HIBRIDO (bloque + handle). *)
-(* Los 3 modificadores son componibles y de ORDEN LIBRE                       *)
-(* ('shrd mutable na region r' es valido):                                    *)
-(*   shrd    = COMPARTIBLE entre regiones                                     *)
-(*   mutable = puede MUTAR y dividirse (split)                                *)
-(*   na      = "no auto": NO se auto-libera; hay que 'delete'-arla            *)
-(* La ejecucion REAL del modelo RBMM la hace el runtime de forma AGNOSTICA    *)
-(* DEL TARGET (interprete -> C++ via pybind11), no se difiere al MIR.         *)
-region_mods    = { "shrd" | "mutable" | "na" } ;                    (* [HIR-] orden libre *)
-region_stmt    = region_mods "region" IDENTIFIER block ;   (* [HIR-] con BLOQUE  *)
-new_stmt       = "new" "(" region_mods "region" IDENTIFIER ")" ";" ; (* [HIR-] handle *)
-delete_stmt    = "delete" "(" [ "region" IDENTIFIER ] ")" ";" ; (* [HIR-] ext. | int. *)
-in_region_stmt = "in" "region" IDENTIFIER ( ":" statement | block ) ;   (* [HIR-] *)
-
-(* 'move' es una SENTENCIA, no un operador de expresión: 'move y;'. Con el    *)
-(* prefijo 'region' es move-semantics DE REGIONES ('move region a -> region   *)
-(* b'), que transfiere (no copia) el contenido de a a b. Se distingue con UN  *)
-(* token de lookahead ('region' tras 'move').                                 *)
-(* La forma de REGIONES es [HIR-]; 'move x;' a secas es [OK] y viaja en el   *)
-(* HIR (MoveStmt + Symbol.moved_at): el runtime hace cumplir el use-after-    *)
-(* move que el analisis estatico conservador no ve.                          *)
-move_stmt      = "move" ( "region" IDENTIFIER "->" "region" IDENTIFIER
-                        | expression ) ";" ;                  (* [OK] / [HIR-] *)
+(* memoria: ownership + move-semantics. Dos sentencias, sin sintaxis para la *)
+(* destruccion por defecto — esa ocurre al cerrar el ambito que posee el      *)
+(* valor, invocando el '__free__' de su tipo. Las arenas son un TIPO DE       *)
+(* LIBRERIA, no una construccion del lenguaje.                               *)
+(* 'move' es una SENTENCIA, no un operador de expresion: 'move y;'. Viaja en  *)
+(* el HIR (MoveStmt + Symbol.moved_at): el runtime hace cumplir el            *)
+(* use-after-move que el analisis estatico conservador no ve.                 *)
+(* 'free' (mas abajo) destruye ANTES del cierre del ambito.                  *)
+move_stmt      = "move" expression ";" ;                            (* [OK] *)
 
 if_stmt        = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ] ;  (* [OK] *)
 while_stmt     = "while" "(" expression ")" block ;                 (* [OK] *)
@@ -224,18 +220,32 @@ match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" ;  (* [OK] *)
 (* el ':' es obligatorio SOLO cuando el cuerpo NO es un bloque: con llaves  *)
 (* se omite ('case X { ... }'), sin ellas se exige ('case X: stmt;'). Es la *)
 (* forma del corpus real (docs/examples/structs_and_control.md).            *)
-case_arm       = "case" expression ( ":" statement | block ) ;
+(* con llaves el ':' SOBRA, pero escribirlo se acepta: 'case X: { ... }' es *)
+(* la costumbre de C y un bloque no es un 'statement' de esta gramatica, asi *)
+(* que sin admitirlo el ':{' caia en 'expression' con un error que no        *)
+(* mencionaba el 'case'.                                                     *)
+case_arm       = "case" expression ( block | ":" ( block | statement ) ) ;
 
 return_stmt    = "return" [ expression ] ";" ;                      (* [OK] *)
 break_stmt     = "break" ";" ;                                      (* [OK] *)
 continue_stmt  = "continue" ";" ;                                   (* [OK] *)
 
-expr_stmt      = expression ";" ;                                   (* [OK] *)
+(* AZUCAR del parser: no hay nodo propio en el AST. 'n += 2' se construye   *)
+(* como 'n = n + 2' y 'n++' como 'n = n + 1', asi que ni la Semantica ni el *)
+(* HIR ni el interprete saben que existen. El incremento es SENTENCIA y no  *)
+(* expresion: como expresion habria que decidir si vale el valor viejo o el *)
+(* nuevo, y esa distincion no compra nada. El destino aparece dos veces en  *)
+(* la expansion, asi que tiene que poder evaluarse dos veces sin efectos.   *)
+expr_stmt      = expression [ "++" | "--" ] ";" ;                    (* [OK] *)
 
 
 (* ============================= 3. EXPRESIONES =========================== *)
 (* Precedencia de menor a mayor (el parser será descenso recursivo + Pratt).*)
 
+(* La ASIGNACION no aparece en esta cadena (el EBNF formal solo la usa      *)
+(* dentro de 'var_decl'), pero el parser la modela como el operador de      *)
+(* menor precedencia y asociativo a la DERECHA, junto con sus formas        *)
+(* compuestas '+=' '-=' '*=' '/=' '%=' — todas azucar de 'x = x op v'.      *)
 expression     = logic_or ;                                         (* [OK] *)
 
 logic_or       = logic_and { "or" logic_and } ;
@@ -243,7 +253,11 @@ logic_and      = equality  { "and" equality } ;
 equality       = comparison { ( "==" | "!=" ) comparison } ;
 comparison     = term { ( "<" | "<=" | ">" | ">=" ) term } ;
 term           = factor { ( "+" | "-" ) factor } ;
-factor         = unary { ( "*" | "/" ) unary } ;
+factor         = unary { ( "*" | "/" | "%" ) unary } ;
+(* '%' es el RESTO de la division entera, con el signo del DIVIDENDO (como  *)
+(* C, no como Python): '-7 % 3' es -1. El backend nativo baja a la          *)
+(* instruccion de resto del hardware, que hace justo eso; si el interprete  *)
+(* usara el '%' de Python, los dos targets darian numeros distintos.        *)
 
 (* '&' produce un NODO PROPIO (AddrOf), no un UnaryOp genérico: sus reglas  *)
 (* (exige lvalue; la mutabilidad del puntero resultante se hereda del       *)
@@ -251,10 +265,7 @@ factor         = unary { ( "*" | "/" ) unary } ;
 (* nodo y viajan resueltas en el HIR.                                       *)
 unary          = ( "not" | "-" ) unary                       (* 'move' es sentencia, no unario *)
                | "&" unary                                   (* addr_of *)
-               | placement ;
-
-(* asociación a región: 'expr at region'                                    *)
-placement      = postfix [ "at" IDENTIFIER ] ;                      (* [HIR-] *)
+               | postfix ;
 
 postfix        = ( primary | struct_literal )
                  { ( "." IDENTIFIER
@@ -262,7 +273,7 @@ postfix        = ( primary | struct_literal )
                    | "[" expression "]" ) } ;
 
 (* instanciación de un struct nominal: ÚNICA forma nativa de construir un   *)
-(* valor de struct (sin RBMM ni 'alloc'). Se reconoce cuando un NOMBRE va   *)
+(* valor de struct (sin 'alloc'). Se reconoce cuando un NOMBRE va          *)
 (* seguido de '{' — sin ambigüedad con los bloques, porque las condiciones  *)
 (* van entre paréntesis y un bloque es una sentencia, nunca sigue a un      *)
 (* nombre en posición de expresión. Coma final tolerada.                    *)
@@ -270,7 +281,12 @@ postfix        = ( primary | struct_literal )
 (* un struct publicado por una librería se escribe igual en un literal que  *)
 (* en una anotación de tipo. La Semántica lo canonicaliza al nombre con     *)
 (* que la librería lo declaró.                                             *)
-struct_literal = IDENTIFIER { "." IDENTIFIER } "{" [ field_init { "," field_init } [ "," ] ] "}" ;
+(* Un GENERICO escribe sus argumentos: 'Caja<int>{ v: 1 }'. Es la UNICA     *)
+(* posicion del lenguaje donde '<' es ambiguo (comparacion vs argumentos de  *)
+(* tipo) y se resuelve mirando: solo son argumentos si tras el '>' viene un  *)
+(* '{'. Si no, el parser retrocede y el '<' vuelve a ser el operador.        *)
+struct_literal = IDENTIFIER { "." IDENTIFIER } [ type_args ]
+                 "{" [ field_init { "," field_init } [ "," ] ] "}" ;
 field_init     = IDENTIFIER ":" expression ;
 
 arg_list       = expression { "," expression } ;
@@ -278,23 +294,30 @@ arg_list       = expression { "," expression } ;
 primary        = literal
                | IDENTIFIER
                | cast_expr
+               (* 'sizeof' toma un TIPO ('sizeof(int8)') o un NOMBRE de     *)
+               (* valor ('sizeof(a)': el tamano del tipo de 'a'). Las dos     *)
+               (* formas se escriben igual; cual es la decide la Semantica,   *)
+               (* que es la unica que sabe en que namespace vive el nombre.   *)
                | "sizeof" "(" type ")"
                | "(" expression ")" ;
 
-(* [RETIRADA] 'make T in r' construía un valor en una región (RBMM). RBMM no *)
-(* forma parte del lenguaje v1: 'region' se rechaza al emitir el HIR (HIR005) *)
-(* y 'make' ha dejado de ser palabra clave — reservarla solo impedía usarla   *)
-(* como nombre corriente ('fn make(int n) -> vec', la fábrica natural de una  *)
-(* librería). 'alloc' tampoco es keyword: la reserva cruda la aporta una      *)
-(* librería. Reponer RBMM = devolver 'make' a KEYWORDS y su handler a         *)
-(* parser/expressions/nud.PRIMARY_HANDLERS.                                   *)
-(* make_expr   = "make" type "in" IDENTIFIER ;                     (* make T in region *) *)
+(* [RETIRADA] 'make T in r' construia un valor en una region. El modelo por  *)
+(* regiones se retiro del lenguaje en v0.2.0, y con el su hook '__make__'.    *)
+(* Ni 'make' ni 'alloc' son palabras clave: la construccion y la reserva las  *)
+(* aporta una libreria ('fn make(int n) -> vec' es la fabrica natural de una, *)
+(* y reservar el nombre solo impedia escribirla).                             *)
 
 (* conversión EXPLÍCITA de tipo: la ÚNICA vía (sin coerciones implícitas).   *)
-(* 'type_args' es la posición COMPARTIDA de argumentos de tipo: hoy la usa   *)
-(* solo 'cast'; los genéricos de librería ('vec<int>') la reutilizarán.      *)
+(* 'type_args' es la posición COMPARTIDA de argumentos de tipo: la usan      *)
+(* 'cast', las anotaciones de un genérico ('Vector<int> v') y su literal.    *)
 cast_expr      = "cast" type_args "(" expression ")" ;              (* cast<int8>(x) *)
 type_args      = "<" type { "," type } ">" ;
+
+(* PARAMETROS de un tipo generico, pegados a su NOMBRE en la declaracion:    *)
+(* 'struct { T ptr d; } Vector<T>;' / 'const type Caja<T>;'. Espeja a        *)
+(* type_args pero admite solo NOMBRES: un parametro es un nombre por ligar,  *)
+(* no un tipo ya escrito.                                                    *)
+type_params    = [ "<" IDENTIFIER { "," IDENTIFIER } ">" ] ;         (* [OK] *)
 (* [REVISAR] 'free' NO produce un valor útil; como expresión compondría en   *)
 (* aritmética ('free x + 1'). Se saca de make_expr y se modela como          *)
 (* sentencia propia (free_stmt) para que solo aparezca como 'free x;'.       *)

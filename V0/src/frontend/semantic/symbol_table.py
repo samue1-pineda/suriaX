@@ -37,7 +37,6 @@ class SymbolKind(Enum):
     VAR = auto()
     FIELD = auto()   # campo de un struct (vive en Symbol.members del struct)
     IMPORT = auto()
-    REGION = auto()  # nombre de una 'region r { ... }' (resoluble solo dentro de su bloque)
     HOOK = auto()    # metodo del set FIJO reconocido como hook de un tipo (ver hooks.py)
     DUNDER = auto()  # metodo especial LIBRE del usuario ('dunder fn'), indexado por (tipo, nombre)
 
@@ -46,7 +45,6 @@ class ScopeKind(Enum):
     GLOBAL = auto()
     FUNCTION = auto()
     BLOCK = auto()
-    REGION = auto()
 
 
 @dataclass(slots=True)
@@ -57,10 +55,6 @@ class Symbol:
     col: int
     type: Optional[Type] = None
     mutable: bool = False
-    region: Optional[str] = None
-    shared: bool = False  # solo kind REGION: 'shrd region r {}' (compartible)
-    region_mutable: bool = False  # solo kind REGION: 'mutable region r' (muta/divide)
-    region_na: bool = False       # solo kind REGION: 'na region r' (no auto-liberada)
     visibility: Optional[str] = None
     """Reserva de visibilidad del simbolo: ``"public"`` (o ``None``, el
     default) / ``"private"`` (mismo paquete) / ``"internal"`` (mismo archivo).
@@ -70,6 +64,23 @@ class Symbol:
     # solo relevante si kind is SymbolKind.HOOK (ver semantic/hooks.py)
     hook_kind: Optional[HookKind] = None
     hook_owner: Optional[str] = None
+    # nombre completo ('__gravity__') SOLO en los hooks declarados por el
+    # proyecto (HookKind.EXTENDED): son los unicos cuya identidad no cabe en
+    # el enum. Ver semantic/extensions.py y htims/readme.md.
+    hook_name: Optional[str] = None
+    # extensión que DECLARÓ el hook ('physics'): solo procedencia, para los
+    # diagnósticos y para el .phir. None en el vocabulario fijo.
+    hook_module: Optional[str] = None
+    # HOOK __min__/__max__: el valor LITERAL que su cuerpo devuelve, leido en
+    # compilacion. Es el unico dato de un cuerpo que el frontend mira, y solo
+    # de estos dos hooks: sin el, el rango de un tipo de libreria no existiria
+    # hasta la ejecucion y un literal fuera de rango no se podria rechazar.
+    const_value: Optional[int] = None
+    # STRUCT/TYPE: nombres de sus parametros de tipo ('Vector<T>' -> ('T',)).
+    # Vacio en un tipo corriente. Es lo que permite verificar la ARIDAD de un
+    # uso ('Vector<int,str>' sobre un generico de un parametro) y saber que
+    # sustituir en sus campos y firmas.
+    type_params: Tuple[str, ...] = ()
     # FUNCTION/HOOK: tipos de sus parametros en orden (para validar aridad y,
     # a futuro Fase 3, compatibilidad de argumentos). 'type' es el retorno.
     param_types: Optional[Tuple[Type, ...]] = None
@@ -155,18 +166,28 @@ class SymbolTable:
         # automatico: cada paso se escribe (cast<B>(cast<A>(x))).
         self.casts: Dict[Tuple[Type, Type], Symbol] = {}
 
-    def register_hook(self, owner_type: str, kind: HookKind, symbol: Symbol) -> bool:
+    def register_hook(self, owner_type: str, kind: HookKind, symbol: Symbol,
+                      *, name: Optional[str] = None) -> bool:
         """Registra un hook para ``owner_type``. ``False`` si ya existe uno
-        del mismo ``HookKind`` para ese tipo (el llamador reporta
-        ``SemanticError.DuplicateHookError``)."""
-        key = (owner_type, kind)
+        con la misma clave (el llamador reporta
+        ``SemanticError.DuplicateHookError``).
+
+        La clave es la TERNA ``(dueño, kind, nombre)``: los hooks del
+        vocabulario fijo la cierran con ``""`` porque el ``kind`` ya los
+        distingue, y los declarados por el proyecto (``EXTENDED``) necesitan
+        el nombre — si no, dos hooks de usuario del mismo tipo colisionarían
+        entre sí. Es la misma clave que viaja al HIR y con la que despacha el
+        intérprete.
+        """
+        key = (owner_type, kind, name or "")
         if key in self.hooks:
             return False
         self.hooks[key] = symbol
         return True
 
-    def lookup_hook(self, owner_type: str, kind: HookKind) -> Optional[Symbol]:
-        return self.hooks.get((owner_type, kind))
+    def lookup_hook(self, owner_type: str, kind: HookKind,
+                    *, name: Optional[str] = None) -> Optional[Symbol]:
+        return self.hooks.get((owner_type, kind, name or ""))
 
     def register_cast(self, source: Type, target: Type, symbol: Symbol) -> bool:
         """Registra una conversión ``source -> target``. ``False`` si ese par
@@ -215,7 +236,7 @@ def to_debug_dict(table: SymbolTable) -> dict:
         },
         "hooks": [
             {"owner_type": owner, "hook": kind.name, "symbol": symbol}
-            for (owner, kind), symbol in table.hooks.items()
+            for (owner, kind, _name), symbol in table.hooks.items()
         ],
         "casts": [
             {"from": repr(source), "to": repr(target), "symbol": symbol}

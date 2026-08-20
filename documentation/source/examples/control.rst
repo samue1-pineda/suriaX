@@ -6,8 +6,8 @@ bucle.
 
 .. _ej-control:
 
-Condicionales y bucles
-=======================
+Ramas y bucles
+--------------
 
 .. code-block:: srcx
 
@@ -49,7 +49,7 @@ la segunda no se evalúa.
 .. _ej-break:
 
 ``break`` y ``continue``
-=========================
+------------------------
 
 .. code-block:: srcx
 

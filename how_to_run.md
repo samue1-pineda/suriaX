@@ -9,7 +9,8 @@ ejecutará a futuro. Para la arquitectura interna ver
 ## 1. Estado actual (Pre-Alpha)
 
 El pipeline **compila y EJECUTA**: `.srcx` → lexer → parser → AST-tipado →
-Semántica → **HIR (protobuf)** → intérprete tree-walk. El backend C++/LLVM es
+Semántica → **HIR (protobuf)** → intérprete tree-walk. El backend C++ (MIR →
+VM/JIT) es
 lo que falta (ver [ROADMAP.md](ROADMAP.md)).
 
 > **`fn main` es OPCIONAL.** Las sentencias en el nivel superior del archivo
@@ -43,6 +44,9 @@ python V0/main.py archivo.srcx --run
 # verificar dependencias / generar el .suriaX_config.yaml
 python V0/main.py --check
 python V0/main.py --init-config
+
+# que version es esta (la lee de 'version.py', la fuente unica)
+python V0/main.py --version
 ```
 
 `main.py`:
@@ -159,6 +163,7 @@ Cada `.libsrx` importada emite **su propio `.phir`** junto al principal; el
 ```bash
 python test/main.py                    # todas las categorías
 python test/main.py unit negative_tests  # solo algunas
+python test/main.py --json resumen.json  # + resumen legible por máquina (CI)
 SURIAX_UPDATE_GOLDEN=1 python test/main.py snapshot   # regenerar golden
 ```
 
@@ -170,6 +175,14 @@ de códigos y `schema_version`), `e2e` (programas reales que compilan y
 ejecutan, comparando salida — incluye librerías/paquetes, `try`/`catch` y
 memoria) y `fuzz` (entradas adversariales y de escala). El runner es propio,
 sin framework externo.
+
+**Todas** las pruebas del repositorio viven bajo `test/`. Además de las seis
+categorías hay dos carpetas que no lo son:
+
+| Carpeta | Qué es |
+|---|---|
+| `test/web/` | La suite del backend web (TypeScript). La engancha `test/unit/test_web_backend.py`, que la corre con `node --test`, así que `python test/main.py` sigue siendo el único comando. Sin node se salta con aviso |
+| `test/manual/` | Utilidades que se corren a mano (p. ej. el volcado del lexer), no en cada corrida |
 
 Los tests de `grammar` existen para **localizar** un fallo sin leer el resto
 del pipeline: si falla el de AST, el problema está en el parser; si ése pasa
@@ -221,7 +234,7 @@ actual:
 ```yaml
 version: 1
 target: native              # native | wasm | interp
-                            #   native/wasm -> HIR -> backend C++ (LLVM)
+                            #   native/wasm -> HIR -> backend C++ (VM/JIT)
                             #   interp      -> HIR -> intérprete tree-walk (Python)
 platform: linux             # win32 | linux | macos
 optimization: O0            # O0 | O1 | O2 | O3
@@ -255,7 +268,7 @@ cache:
 
 interpreter:                # target 'interp': consume el HIR (runtime/interpreter/)
   entry: main               # función de entrada a ejecutar
-  trace_memory: false       # traza regiones/move en runtime (educativo)
+  trace_memory: false       # traza celdas/move/free en runtime (educativo)
   max_steps: 0              # 0 = sin límite; guarda contra bucles infinitos
 
 visualization:              # objetivo educativo: qué etapas volcar
@@ -290,7 +303,7 @@ Importan al construir/ejecutar el compilador desde el código:
 | *(ninguna)* | **frontend completo**: lexer → parser → AST-tipado → Semántica, con diagnósticos en consola | siempre disponible: solo librería estándar de Python | — |
 | **protobuf** + `protoc` | serialización del HIR (`.phir`) y ejecución | `--emit-hir`, `--run`, `#test hir` | `pip install protobuf` + `protoc` del sistema |
 | **pyyaml** | leer/generar `.suriaX_config.yaml` | `--init-config` (sin él se usan los defaults) | `pip install pyyaml` |
-| **LLVM-22** | backend / generación de LLVM IR | fase futura (backend C++) | gestor del sistema o `LLVM_PATH`; se detecta con `llvm-config` |
+| **LLVM-22** | *nada del pipeline actual*: se detecta y se reporta en `--check`, pero el target nativo es la VM/JIT y no pasa por LLVM | opcional | gestor del sistema o `LLVM_PATH`; se detecta con `llvm-config` |
 | **pybind11** | bindings C++ (incl. `#extern cpp{}`) | fase futura (backend C++) | `pip install pybind11` |
 
 > **El frontend no depende de nada externo.** Compilar, validar y ver los
@@ -314,8 +327,11 @@ python -m config.compilerconfig
 
 Si falta una dependencia **necesaria para la operación solicitada**, el
 compilador aborta con un mensaje que indica qué falta y cómo instalarlo. Las
-fases que no la necesitan (p. ej. el lexer, que no usa LLVM) siguen funcionando.
+fases que no la necesitan siguen funcionando: el frontend entero corre solo
+con la librería estándar de Python.
 
-> **Nota sobre LLVM:** se exige exactamente **LLVM-22**. `--check` valida la
-> versión vía `llvm-config --version`; si tienes otra (p. ej. 21 o 23), lo
-> reportará como incompatible aunque LLVM esté instalado.
+> **Nota sobre LLVM:** `--check` sigue detectando `llvm-config` y avisando si
+> la versión no es la 22, pero **nada del pipeline usa LLVM**. El target
+> nativo es una VM de bytecode con JIT; LLVM quedó fuera del plan en la
+> v0.2.0 (ver [docs/llvm_backend.md](docs/llvm_backend.md)). No hace falta
+> instalarlo para nada de lo que hoy funciona.

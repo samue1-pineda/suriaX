@@ -9,7 +9,7 @@ serialización.
 .. code-block:: text
 
    .srcx  →  frontend (Python)  →  .phir  →  intérprete
-                                          →  backend C++   (MIR → VM / LLVM)
+                                          →  backend C++   (MIR → VM / JIT)
                                           →  target web    (WIR → WebAssembly)
 
 Está escrito en **protobuf**, que aporta tres cosas concretas: un formato
@@ -90,9 +90,10 @@ alias y archivo.
 .. code-block:: console
 
    $ python V0/main.py programa.srcx --emit-hir
-   HIR (1.4 kB) generado en: dumps/programa.srcx.phir
-     unidad 'IO.stdp':  924 bytes -> dumps/IO.stdp.phir
-     unidad 'IO':        75 bytes -> dumps/IO.phir
+   HIR (1255 bytes) generado en: dumps/programa.srcx.phir
+     unidad 'IO.stdpf': 349 bytes -> dumps/IO.stdpf.phir
+     unidad 'IO.stdp': 956 bytes -> dumps/IO.stdp.phir
+     unidad 'IO': 145 bytes -> dumps/IO.phir
 
 El consumidor resuelve cada referencia **relativa al archivo que la
 referencia** y liga las unidades. La consecuencia práctica: los ``.phir``
@@ -135,11 +136,14 @@ par origen-destino derivable de cada firma.
 Alcance de la versión 1
 ------------------------
 
-El HIR v1 transporta el lenguaje completo salvo el modelo de regiones
-(``region``, ``new``/``delete``, ``in region``, ``x at r``). El emisor lo
-rechaza con ``HIR005`` en su posición, y los identificadores de esos campos
-quedan **reservados** en el esquema, de modo que reintroducirlos no romperá a
-ningún lector existente.
+El HIR transporta el lenguaje completo. El modelo de regiones —lo único que
+nunca viajó— se retiró del lenguaje en la v0.2.0 (ver :ref:`decision-memoria`);
+los identificadores de sus campos quedan **reservados** en el esquema, así que
+nada de lo que un lector existente conoce cambió de significado.
+
+Un nodo del AST sin correspondencia en el esquema se rechaza con ``HIR005`` y
+su posición, en vez de degradarse en silencio: es el fail-fast que garantiza
+que todo lo que la Semántica acepta, o viaja al HIR, o dice por qué no.
 
 Move-semantics **sí** viaja: la sentencia ``move`` y la línea del movimiento
 anotada en el símbolo, para que el runtime haga cumplir lo que el análisis

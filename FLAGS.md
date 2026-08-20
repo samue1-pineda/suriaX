@@ -35,9 +35,10 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 | Flag | Qué hace |
 |---|---|
 | `-h`, `--help` | ayuda de argparse y termina |
+| `--version` | imprime `suriaX <version>` y termina. La lee de `version.py` (raiz del repo), la misma fuente que CMake, la documentacion y las medallas |
 | `--check` | verifica las dependencias del compilador y termina |
 | `--init-config` | genera un `.suriaX_config.yaml` por defecto y termina (requiere `pyyaml`) |
-| `--emit-lang-info` | imprime en stdout la **especificación del lenguaje** en JSON (keywords por categoría, tokens, directivas, hooks, códigos de error). Fuente única para el LSP/extensión. No necesita `source` |
+| `--emit-lang-info` | imprime en stdout la **especificación del lenguaje** en JSON (keywords por categoría, tokens, directivas, hooks, códigos de error) junto a `compiler_version`, para que el LSP sepa contra qué compilador habla. Fuente única para el LSP/extensión. No necesita `source` |
 | `--emit-extensions` | descubre las **extensiones del proyecto** (HTIMS: `extends.srcx` + la lista `extensions:` del YAML) y emite en stdout un JSON con el proyecto, los hooks declarados con su firma y posición, y las líneas de config equivalentes. **No importa ni ejecuta** el `.py` del usuario (lo lee con `ast.parse`). Sin `source` usa el directorio actual como raíz; con él, la raíz del proyecto de ese fuente. **exit 4** si el manifiesto o una declaración tienen errores. Ver [htims/readme.md](htims/readme.md) |
 
 ### 2.2 Ejecución
@@ -65,12 +66,12 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 
 | Flag | Qué hace |
 |---|---|
-| `--time` | imprime cuánto tomó cada fase de la compilación (ms), a consola |
+| `--time` | imprime cuánto tomó cada fase de la compilación (ms), a consola. El **TOTAL es el reloj de pared** del proceso, no la suma de las fases: la diferencia va en la fila `arranque` (arranque de Python + importación del compilador), que en un archivo pequeño es la mayor parte del tiempo. `hir-protobuf` es aparte porque el descriptor pool de protobuf se construye una vez por proceso y no es trabajo de emisión |
 | `--trace-exec` | traza la ejecución (llamadas/retornos anidados) al `--run` |
 | `--trace-memory` | traza las instrucciones de memoria (`&`, `move`, `free`) al `--run` |
 | `--debug` | reporte **UNIFICADO** en `<dumps_dir>/<fuente>.debug.txt` (entorno, dependencias, métricas, tokens, AST, símbolos, HIR en texto, traza y tiempos). **Implica `--time` y `--hir-pretty`.** Combínalo con `--run --trace-exec --trace-memory` para incluir la ejecución paso a paso |
 | `--stdin` | con `--emit-diagnostics` o `--emit-stage`: lee el **fuente** de la entrada estándar en vez del disco. El argumento de archivo sigue siendo obligatorio y sigue anclando la resolución de `.libsrx`, pero no hace falta que exista todavía — permite a un editor analizar un buffer sin guardar |
-| `--emit-diagnostics` | corre el frontend y emite en stdout un JSON con **todos** los diagnósticos (código/mensaje/línea/columna/fase/severidad) y notas, sin tocar disco. Incluye una detección **ligera** de la fase HIR: marca los constructos RBMM (`region`, `new`, `at`, …) con `HIR005` **sin** construir el HIR ni requerir protobuf, para que el editor no se los salte. Canal en vivo para el LSP; **exit 0** aunque haya diagnósticos (van en el JSON) |
+| `--emit-diagnostics` | corre el frontend y emite en stdout un JSON con **todos** los diagnósticos (código/mensaje/línea/columna/fase/severidad) y notas, sin tocar disco. Canal en vivo para el LSP; **exit 0** aunque haya diagnósticos (van en el JSON) |
 
 ---
 
@@ -128,6 +129,7 @@ desconocido lista los disponibles.
 | `2` | archivo fuente no encontrado |
 | `3` | dependencia faltante para la operación pedida |
 | `4` | error de las **extensiones** del proyecto (`EXT0xx`: manifiesto `extends.srcx` o declaraciones). Se detecta antes del léxico, así que la compilación no llega a empezar |
+| `5` | **configuración** inválida (`CFG0xx`: `.suriaX_config.yaml` malformado, una clave que no existe o un valor del tipo equivocado). Se detecta antes de leer el fuente: el resto del pipeline resuelve rutas contra esa configuración |
 | `70` | error de ejecución (runtime del intérprete: `RTxxx`, throw no capturado) |
 
 ---

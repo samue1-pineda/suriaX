@@ -11,10 +11,18 @@ emisor **no lanza** por construcciones del programa — acumula
 ``HIRError`` y devuelve ``(bytes | None, errores)``. Solo hay bytes si no
 hubo NINGÚN error: un HIR parcial no cruza la frontera (fail-fast).
 
-Alcance v1 (``SCHEMA_VERSION == 1``): sin RBMM ni move-semantics.
-``region``/``shrd``, ``make T in r``, ``x at r`` y ``move`` producen
-``HIR005`` (``HIRUnsupportedInstructionError``) con su posición; sus tags
-del esquema quedan ``reserved`` (ver ``proto/hir.proto``).
+**POOL DE TIPOS** (``SCHEMA_VERSION == 2``). Un programa mediano emitía
+decenas de miles de mensajes ``Type`` sobre unas pocas decenas de formas
+distintas (medido en ``dev/bench_hir.py``: 21 065 mensajes de 43 formas, el
+20 % del artefacto). Ahora cada tipo viaja UNA vez en ``Module.types`` y los
+nodos lo referencian por índice (``Expr.type_id`` y hermanos). La
+``SymbolTable`` NO participa: es el 4 % de los bytes y la parte que una
+persona lee al depurar (ver :meth:`_Emitter._type_id`).
+
+Las construcciones del modelo por REGIONES se retiraron del lenguaje en
+v0.2.0; el emisor ya no necesita rechazarlas. Un nodo sin handler se sigue
+rechazando con ``HIR005`` (:meth:`_Emitter._error_unsupported`), que es el
+fail-fast contra un AST que la Semántica acepta y el esquema no transporta.
 
 La dependencia ``google.protobuf`` se carga de forma PEREZOSA (``stubs.py``):
 importar este módulo no la exige, ejecutar :func:`emit` sí.
@@ -36,23 +44,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
 from src.frontend.semantic.symbol_table import Symbol, SymbolTable
 from src.frontend.semantic.symbol_table import SymbolKind as PySymbolKind
 
-SCHEMA_VERSION = 1
-
-# mensajes de rechazo v1: una sola fuente para el error y para los tests.
-# move-semantics SI viaja (MoveStmt/moved_at); solo RBMM queda fuera.
-_UNSUPPORTED = {
-    ast.RegionStmt: "'region' (RBMM) no viaja en el HIR v1",
-    ast.MakeExpr: "'make T in r' (RBMM) no viaja en el HIR v1",
-    ast.Placement: "'expr at region' (RBMM) no viaja en el HIR v1",
-    # operaciones de region (modelo hibrido): su ejecucion REAL la hara el
-    # runtime RBMM (C++/pybind11, agnostico del target, EN PROGRESO); todavia
-    # no viajan por este HIR v1. Se rechazan con posicion, no crashean.
-    ast.NewStmt: "'new(region r)' (RBMM) no viaja en el HIR v1",
-    ast.DeleteStmt: "'delete(region r)' (RBMM) no viaja en el HIR v1",
-    ast.InRegionStmt: "'in region r: ...' (RBMM) no viaja en el HIR v1",
-    ast.MoveRegionStmt: "'move region a -> region b' (RBMM) no viaja en el HIR v1",
-}
-
+SCHEMA_VERSION = 2
 
 def build_module(
     program: ast.Program,
@@ -88,41 +80,6 @@ def build_module(
     return module, []
 
 
-def collect_unsupported(program: ast.Program) -> List:
-    """Enumera los nodos que el HIR v1 rechaza (``HIR005``) SIN construir ni
-    serializar el HIR: un walk del AST contra la MISMA tabla ``_UNSUPPORTED``
-    que usa el emisor (fuente única). Es lo que el canal en vivo del LSP
-    (``--emit-diagnostics``) necesita para no 'saltarse' RBMM — el editor marca
-    ``region { }`` MIENTRAS se escribe, no recién en el build (que exige
-    protobuf). No carga protobuf: es un recorrido puro del árbol. Reporta
-    TODOS los usos, cada uno con su posición."""
-    try:
-        from include.ast_walk import child_fields
-    except ImportError:  # pragma: no cover - ejecucion directa
-        from ast_walk import child_fields  # type: ignore
-
-    errors: List = []
-
-    def walk(node) -> None:
-        detail = _UNSUPPORTED.get(node.__class__)
-        if detail is not None:
-            errors.append(HIRError.HIRUnsupportedInstructionError(
-                detail, line=getattr(node, "ln", 0),
-                column=getattr(node, "col", 0)))
-        for field in child_fields(node.__class__):
-            child = getattr(node, field)
-            if child.__class__ is list:
-                for item in child:
-                    if isinstance(item, ast.ASTNode):
-                        walk(item)
-            elif isinstance(child, ast.ASTNode):
-                walk(child)
-
-    for item in program.items:
-        walk(item)
-    return errors
-
-
 def module_to_text(module) -> str:
     """``Module`` -> formato de TEXTO de protobuf (debugging del formato).
 
@@ -131,6 +88,22 @@ def module_to_text(module) -> str:
     """
     from google.protobuf import text_format  # perezoso, como los stubs
     return text_format.MessageToString(module)
+
+
+def serialize(module) -> bytes:
+    """Serializa un ``Module`` a bytes. **Único** sitio del repositorio que
+    llama a ``SerializeToString``.
+
+    Usa la serialización DETERMINISTA de protobuf porque los ``map<>`` de la
+    ``SymbolTable`` se escriben en orden no especificado: sin esto, compilar
+    dos veces el mismo archivo daba artefactos con los mismos datos y bytes
+    distintos. Eso invalidaba los golden ``.phir``, cualquier caché por hash y
+    el diferencial que ``docs/plan_hir_v2.md`` necesita para demostrar que un
+    cambio del emisor no alteró la salida. Lo sostiene
+    ``test/unit/test_hir_reproducible.py``, incluido un test que compila en
+    tres procesos y compara hashes.
+    """
+    return module.SerializeToString(deterministic=True)
 
 
 def emit(
@@ -143,7 +116,7 @@ def emit(
     module, errors = build_module(program, table, source_file=source_file)
     if module is None:
         return None, errors
-    return module.SerializeToString(), []
+    return serialize(module), []
 
 
 def emit_text(program: ast.Program, table: SymbolTable, *, source_file: str = "") -> Tuple[Optional[str], List]:
@@ -158,13 +131,20 @@ class _Emitter:
     """Estado de UNA emisión: stubs cargados, tablas de despacho y errores."""
 
     __slots__ = ("pb", "errors", "source_file", "_expr_dispatch",
-                 "_stmt_dispatch", "_type_kind", "_symbol_kind", "_hook_kind")
+                 "_stmt_dispatch", "_type_kind", "_symbol_kind", "_hook_kind",
+                 "_types", "_pool_por_id", "_pool_por_valor", "_anclas")
 
     def __init__(self, source_file: str) -> None:
         from .stubs import load_hir_pb2
         self.pb = load_hir_pb2()
         self.errors: List = []
         self.source_file = source_file
+        # POOL DE TIPOS (ver _type_id). '_types' se liga al Module en
+        # emit_module; hasta entonces no hay donde escribir.
+        self._types = None
+        self._pool_por_id: Dict[int, int] = {}
+        self._pool_por_valor: Dict[Type, int] = {}
+        self._anclas: List[Type] = []
 
         # enums espejo: mismo NOMBRE en Python y en el .proto — el mapeo se
         # construye una vez por emision consultando el descriptor (O(1) después).
@@ -173,10 +153,9 @@ class _Emitter:
                            if k.name != "SELF"}  # placeholder de trait, solo-frontend
         self._symbol_kind = {k: self.pb.SymbolKind.Value(k.name)
                              for k in _py_symbol_kinds()
-                             if k.name not in ("REGION", "DUNDER")}
-        # REGION: retirado de v1. DUNDER: hook del usuario, vive en
-        # 'SymbolTable.dunders', nunca se emite como simbolo proto (su runtime
-        # esta diferido, como las regiones).
+                             if k.name != "DUNDER"}
+        # DUNDER: hook del usuario, vive en 'SymbolTable.dunders'; nunca se
+        # emite como simbolo proto (su runtime esta diferido).
         self._hook_kind = {k: self.pb.HookKind.Value(k.name)
                            for k in _py_hook_kinds()}
 
@@ -220,6 +199,12 @@ class _Emitter:
         module = self.pb.Module(
             schema_version=SCHEMA_VERSION, source_file=self.source_file,
         )
+        # la entrada 0 del pool es el tipo VACIO: 'type_id = 0' significa "sin
+        # tipo anotado", que es exactamente el default de proto3 — asi la
+        # ausencia no necesita un campo de presencia y un nodo sin tipo no
+        # ocupa ningun byte.
+        self._types = module.types
+        module.types.add()
         self._emit_symbol_table(table, module.symbols)
         for item in program.items:
             # un trait es un CONTRATO verificado en la Semantica; no tiene
@@ -237,10 +222,20 @@ class _Emitter:
             self._emit_symbol(sym, msg.types[name])
         for name, sym in table.global_scope.values.items():
             self._emit_symbol(sym, msg.values[name])
-        for (owner, kind), sym in table.hooks.items():
+        # la clave es la TERNA (dueno, kind, nombre): los hooks del
+        # vocabulario fijo la cierran con "" porque el 'kind' ya los
+        # distingue; los declarados por el proyecto (EXTENDED) necesitan el
+        # nombre — sin el, dos hooks de usuario del mismo tipo colisionarian.
+        for (owner, kind, name), sym in table.hooks.items():
             entry = msg.hooks.add()
             entry.owner_type = owner
             entry.kind = self._hook_kind[kind]
+            if name:
+                entry.hook_name = name
+            # procedencia: de que extension salio este vocabulario. Solo sirve
+            # para que un diagnostico lo diga; el despacho no la mira.
+            if sym.hook_module:
+                entry.extension = sym.hook_module
             self._emit_symbol(sym, entry.symbol)
         # tabla de conversiones: la clave (origen, destino) es derivable de
         # la firma de cada Symbol (param_types[0] -> type), no se duplica.
@@ -249,11 +244,11 @@ class _Emitter:
 
     def _emit_symbol(self, sym: Symbol, msg) -> None:
         kind = self._symbol_kind.get(sym.kind)
-        if kind is None:  # REGION: no puede llegar aqui en un programa v1 valido
+        if kind is None:  # DUNDER: no llega aqui, se emite por otra via
             self.errors.append(HIRError.HIRUnsupportedInstructionError(
-                f"símbolo '{sym.name}' de región en el scope global (RBMM no "
-                "viaja en el HIR v1)", line=sym.ln, column=sym.col,
-                file=self.source_file,
+                f"el simbolo '{sym.name}' es de una clase que el esquema HIR no "
+                f"transporta ({sym.kind.name}). Es un fallo del compilador.",
+                line=sym.ln, column=sym.col, file=self.source_file,
             ))
             return
         msg.name = sym.name
@@ -277,10 +272,45 @@ class _Emitter:
             msg.hook_kind = self._hook_kind[sym.hook_kind]
         if sym.hook_owner is not None:
             msg.hook_owner = sym.hook_owner
+        if sym.hook_name:
+            msg.hook_name = sym.hook_name
 
     # ------------------------------------------------------------------ #
     # tipos y hooks
     # ------------------------------------------------------------------ #
+    def _type_id(self, t: Optional[Type]) -> int:
+        """Indice de ``t`` en ``Module.types``; 0 si no hay tipo.
+
+        INDICE DOBLE, y el porque importa. La clave natural seria el VALOR
+        (``Type`` es frozen, hashea recursivo), pero medido cuesta 472 ns por
+        aparicion frente a 115 ns de ``id()`` — y el frontend REUTILIZA sus
+        objetos ``Type``: 19 666 apariciones sobre 805 instancias que colapsan
+        a 43 formas. Asi que la ruta caliente va por identidad y solo el
+        primer encuentro de cada objeto paga el hash estructural, que es lo
+        que garantiza el dedupe por valor (dos ``int`` construidos por
+        separado comparten entrada).
+
+        ``_anclas`` mantiene VIVOS los objetos que llegaron por la ruta de
+        valor. Sin eso, uno podria recolectarse, su ``id()`` reutilizarse para
+        un ``Type`` nuevo de otra forma, y ``_pool_por_id`` devolveria el
+        indice equivocado: un artefacto con un tipo mentido y ningun error.
+        """
+        if t is None:
+            return 0
+        clave = id(t)
+        tid = self._pool_por_id.get(clave)
+        if tid is not None:
+            return tid
+        tid = self._pool_por_valor.get(t)
+        if tid is None:
+            tid = len(self._types)
+            self._emit_type(t, self._types.add())
+            self._pool_por_valor[t] = tid
+        else:
+            self._anclas.append(t)
+        self._pool_por_id[clave] = tid
+        return tid
+
     def _emit_type(self, t: Type, msg) -> None:
         msg.kind = self._type_kind[t.kind]
         if t.name is not None:
@@ -289,18 +319,24 @@ class _Emitter:
             self._emit_type(t.inner, msg.inner)
         if t.mut:
             msg.mut = True
+        for arg in t.args:
+            self._emit_type(arg, msg.args.add())
 
     def _emit_hook_ref(self, hook: Optional[Symbol], msg) -> None:
-        """Anotación ``.hook`` de la Semántica -> referencia (owner, kind).
+        """Anotación ``.hook`` de la Semántica -> referencia (owner, kind, name).
 
         El ``Symbol`` completo ya viaja en ``SymbolTable.hooks``; aquí solo
         la CLAVE para el lookup O(1) del lector (PROTOBUF_BRIDGE.md secc. 1).
+        El ``hook_name`` es lo que distingue a dos hooks de usuario del mismo
+        tipo: sin él serían la misma referencia.
         """
         if hook is None:
             return
         msg.owner_type = hook.hook_owner or ""
         if hook.hook_kind is not None:
             msg.kind = self._hook_kind[hook.hook_kind]
+        if hook.hook_name:
+            msg.hook_name = hook.hook_name
 
     # ------------------------------------------------------------------ #
     # declaraciones top-level
@@ -327,8 +363,7 @@ class _Emitter:
             for f in node.fields:
                 field = msg.struct_decl.fields.add()
                 field.name = f.name
-                if f.restype is not None:
-                    self._emit_type(f.restype, field.type)
+                field.type_id = self._type_id(f.restype)
         elif cls is ast.EnumDecl:
             msg.enum_decl.name = node.name
             for item in node.items:
@@ -336,6 +371,11 @@ class _Emitter:
                 entry.name = item.name
                 if item.value is not None:
                     self._emit_expr(item.value, entry.value)
+                # el PAYLOAD es lo que separa un entero con nombre de un
+                # constructor: sin el, el consumidor no sabria que 'Literal'
+                # hay que invocarlo.
+                for t in item.payload_restypes:
+                    entry.payload_type_ids.append(self._type_id(t))
         elif cls is ast.TestDecl:
             msg.test_decl.name = node.name
             self._emit_block(node.body, msg.test_decl.body)
@@ -368,11 +408,16 @@ class _Emitter:
         for p in fn.params:
             param = msg.params.add()
             param.name = p.name
-            if p.restype is not None:
-                self._emit_type(p.restype, param.type)
-        if fn.return_restype is not None:
-            self._emit_type(fn.return_restype, msg.return_type)
+            param.type_id = self._type_id(p.restype)
+        msg.return_type_id = self._type_id(fn.return_restype)
         if fn.body is not None:  # ausente = prototipo (msg.body queda unset)
+            # SetInParent marca el campo como PRESENTE aunque el bloque quede
+            # vacio. Sin esto, 'fn f() -> void { }' emitia un 'body' que
+            # protobuf considera ausente —un submensaje sin campos escritos es
+            # indistinguible del default— y el lector lo tomaba por un
+            # PROTOTIPO: fallaba en ejecucion con 'no tiene intrinseco
+            # registrado', que no tiene nada que ver con lo que pasaba.
+            msg.body.SetInParent()
             self._emit_block(fn.body, msg.body)
         if fn.dunder is not None:
             msg.dunder = fn.dunder
@@ -394,6 +439,12 @@ class _Emitter:
     def _emit_block(self, block: ast.Block, msg) -> None:
         for stmt in block.statements:
             self._emit_stmt(stmt, msg.statements.add())
+        # destrucciones al cerrar: las decidio la Semantica (ver
+        # scope_resolver._anotar_drops); aqui solo viajan.
+        for drop in block.drops:
+            out = msg.drops.add()
+            out.path.extend(drop.path)
+            self._emit_hook_ref(drop.hook, out.hook)
 
     def _stmt_block(self, node: ast.Block, msg) -> None:
         self._emit_block(node, msg.block)
@@ -402,8 +453,7 @@ class _Emitter:
         out = msg.var_decl
         out.qualifier = node.qualifier or ""
         out.name = node.name
-        if node.restype is not None:
-            self._emit_type(node.restype, out.type)
+        out.type_id = self._type_id(node.restype)
         if node.value is not None:
             self._emit_expr(node.value, out.value)
 
@@ -453,6 +503,8 @@ class _Emitter:
         if node.value is not None:
             self._emit_expr(node.value, out.value)
 
+        if node.transfers:
+            msg.return_stmt.transfers = True
     def _stmt_break(self, node: ast.BreakStmt, msg) -> None:
         msg.break_stmt.SetInParent()  # marca la variante del oneof (sin campos)
 
@@ -475,8 +527,12 @@ class _Emitter:
     def _stmt_try(self, node: ast.TryStmt, msg) -> None:
         out = msg.try_stmt
         self._emit_block(node.try_block, out.try_block)
-        out.catch_name = node.catch_name
-        self._emit_block(node.catch_block, out.catch_block)
+        for clausula in node.catches:
+            rama = out.catches.add()
+            rama.name = clausula.name
+            self._emit_block(clausula.block, rama.block)
+            if clausula.restype is not None:
+                self._emit_type(clausula.restype, rama.type)
 
     def _stmt_import_binding(self, node: ast.ImportBinding, msg) -> None:
         out = msg.import_binding
@@ -490,15 +546,18 @@ class _Emitter:
     # expresiones
     # ------------------------------------------------------------------ #
     def _emit_expr(self, node, msg) -> None:
-        msg.ln = node.ln
-        msg.col = node.col
-        restype = getattr(node, "restype", None)
-        if restype is not None:
-            self._emit_type(restype, msg.restype)
         handler = self._expr_dispatch.get(node.__class__)
         if handler is None:
+            # se sale ANTES de tocar 'node.restype': lo que no esta en la
+            # tabla puede no ser siquiera una Expression.
             self._error_unsupported(node)
             return
+        msg.ln = node.ln
+        msg.col = node.col
+        # lectura DIRECTA, no 'getattr' defensivo: toda Expression declara
+        # 'restype', y quien no lo declare ya salio por la rama de arriba.
+        # Medido: el getattr costaba ~5 % del tiempo de emision.
+        msg.type_id = self._type_id(node.restype)
         handler(node, msg)
 
     def _expr_literal(self, node: ast.Literal, msg) -> None:
@@ -547,10 +606,19 @@ class _Emitter:
         self._emit_expr(node.value, msg.assignment.value)
 
     def _expr_call(self, node: ast.Call, msg) -> None:
+        # 'min(T)'/'max(T)' se resolvieron a un entero en compilacion (el
+        # rango que el tipo declara): viajan como el LITERAL que son. Ningun
+        # consumidor del HIR necesita saber que hubo una llamada, y asi el
+        # rango no depende de que el destino sepa despachar un hook.
+        if node.valor_constante is not None:
+            msg.literal.kind = "int"
+            msg.literal.int_value = node.valor_constante
+            return
         self._emit_expr(node.callee, msg.call.callee)
         for arg in node.args:
             self._emit_expr(arg, msg.call.args.add())
         self._emit_hook_ref(node.hook, msg.call.hook)
+        self._emit_hook_ref(node.temp_drop, msg.call.temp_drop)
 
     def _expr_index(self, node: ast.Index, msg) -> None:
         self._emit_expr(node.obj, msg.index.obj)
@@ -573,24 +641,32 @@ class _Emitter:
         for name, value in zip(node.field_names, node.values):
             out.field_names.append(name)
             self._emit_expr(value, out.values.add())
+        self._emit_hook_ref(node.temp_drop, msg.struct_literal.temp_drop)
 
     def _expr_sizeof(self, node: ast.SizeofExpr, msg) -> None:
-        # el tipo CONSULTADO ('sizeof(Punto)' -> Punto) sale del TypeExpr via
-        # el restype del contenedor NO (ese es 'int'): se re-resuelve barato.
-        from src.frontend.parser.typed_ast import resolve_type_expr
-        self._emit_type(resolve_type_expr(node.type), msg.sizeof.type)
+        # el tipo CONSULTADO ('sizeof(Punto)' -> Punto) lo dejo resuelto la
+        # Semantica en 'medido': es la unica que sabe si lo escrito nombraba
+        # un tipo o un VALOR ('sizeof(a)' mide el tipo de 'a'). El fallback
+        # re-resuelve el TypeExpr para los nodos que no pasaron por ella.
+        medido = node.medido
+        if medido is None:
+            from src.frontend.parser.typed_ast import resolve_type_expr
+            medido = resolve_type_expr(node.type)
+        self._emit_type(medido, msg.sizeof.type)
         self._emit_hook_ref(node.hook, msg.sizeof.hook)
 
     # ------------------------------------------------------------------ #
     # rechazo v1
     # ------------------------------------------------------------------ #
     def _error_unsupported(self, node) -> None:
-        detail = _UNSUPPORTED.get(
-            node.__class__,
-            f"nodo '{node.__class__.__name__}' sin mapeo en el esquema HIR v1",
-        )
+        """Nodo del AST sin handler en el emisor: se RECHAZA con su posicion en
+        vez de degradarse en silencio. Es el fail-fast que garantiza que todo
+        lo que la Semantica acepta, o viaja al HIR, o dice por que no."""
         self.errors.append(HIRError.HIRUnsupportedInstructionError(
-            detail, line=node.ln, column=node.col, file=self.source_file,
+            f"el nodo '{node.__class__.__name__}' no tiene correspondencia en "
+            "el esquema HIR: el emisor no sabe serializarlo. Es un fallo del "
+            "compilador, no del programa.",
+            line=node.ln, column=node.col, file=self.source_file,
         ))
 
 
@@ -609,4 +685,5 @@ def _py_hook_kinds():
     return HookKind
 
 
-__all__ = ["build_module", "module_to_text", "emit", "emit_text", "SCHEMA_VERSION"]
+__all__ = ["build_module", "serialize", "module_to_text", "emit", "emit_text",
+           "SCHEMA_VERSION"]

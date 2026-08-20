@@ -33,6 +33,7 @@ Importar
 ---------
 
 .. code-block:: srcx
+   :class: fragmento
 
    #import mate                 // el módulo entero, bajo su alias
    #import mate as m            // con otro nombre local
@@ -63,6 +64,7 @@ Los submódulos se descubren solos: no hace falta importarlos en el padre.
 Desde fuera se llega a ellos calificando:
 
 .. code-block:: srcx
+   :class: fragmento
 
    #import IO             // IO.stdp.println("...")
    #import IO.stdp        // stdp.println("...")
@@ -139,17 +141,56 @@ igual que los nativos, calificados por el alias del módulo:
    #from d_types #import dt_variables as dt
 
    fn main() -> int {
-       const dt.int8 pequeno = 100;
-       return 0;
+       const dt.int8 pequeno = cast<dt.int8>(300);   // 44
+       return sizeof(dt.int8);                        // 1
    }
+
+.. _ancho-fijo:
+
+Un tipo de librería con ancho real
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``int8`` no es un primitivo con otro nombre: es un tipo nominal que publica
+``d_types``, y su **ancho** lo aplica de verdad la conversión. El ancho no se
+puede escribir en suriaX —haría falta aritmética de bits sobre un entero que
+ya es de 64—, así que la librería declara el ``__cast__`` como
+:ref:`prototipo <prototipos>` y el cuerpo lo pone el host, igual que
+``__write__``:
+
+.. code-block:: srcx
+   :class: fragmento
+
+   hook fn __cast__(int n) -> int8;      // el ancho lo aplica el host
+   hook fn __cast__(int8 v) -> int;      // y la vuelta al primitivo
+
+Los enteros **truncan como C** (complemento a dos) y los flotantes
+**redondean** al formato IEEE-754 de su ancho:
+
+.. table::
+   :widths: auto
+
+   =========================  ============  =========================
+   Conversión                 Resultado     Regla
+   =========================  ============  =========================
+   ``cast<dt.int8>(300)``     ``44``        trunca a 8 bits con signo
+   ``cast<dt.int8>(128)``     ``-128``      complemento a dos
+   ``cast<dt.int16>(70000)``  ``4464``      trunca a 16 bits
+   ``cast<dt.float16>(pi)``   ``3.140625``  redondeo binary16
+   =========================  ============  =========================
+
+El ancho que aplica el host y el ``sizeof`` que declara la librería son la
+misma cifra, y la suite lo comprueba: si divergieran, el tipo estaría
+mintiendo sobre su tamaño.
 
 Y también hooks, con lo que un tipo de librería se comporta como uno nativo:
 
 .. code-block:: srcx
 
+   #from io #import stdp
+
    public struct { str texto; int largo; } Cadena;
 
-   public hook fn __print__(Cadena ptr c) -> void { __write__(c.texto); }
+   public hook fn __print__(Cadena ptr c) -> void { stdp.print(c.texto); }
    public hook fn __len__(Cadena ptr c) -> int { return c.largo; }
 
 Desde fuera, ``print(x)`` y ``len(x)`` funcionan sin que nadie escriba el
@@ -195,11 +236,12 @@ El paquete ``io`` es el que trae la impresión:
 .. code-block:: srcx
 
    #from io #import stdp
+   #from io #import stdpf
 
    fn main() -> int {
        var int n = 21;
        stdp.println("empezando");
-       stdp.printf(f"n vale {n}\n");
+       stdpf.printf(f"n vale {n}\n");
        return 0;
    }
 
@@ -217,9 +259,10 @@ emite su propio ``.phir`` junto al del programa.
 .. code-block:: console
 
    $ python V0/main.py programa.srcx --emit-hir
-   HIR (1.4 kB) generado en: dumps/programa.srcx.phir
-     unidad 'IO.stdp':  924 bytes -> dumps/IO.stdp.phir
-     unidad 'IO':        75 bytes -> dumps/IO.phir
+   HIR (1255 bytes) generado en: dumps/programa.srcx.phir
+     unidad 'IO.stdpf': 349 bytes -> dumps/IO.stdpf.phir
+     unidad 'IO.stdp': 956 bytes -> dumps/IO.stdp.phir
+     unidad 'IO': 145 bytes -> dumps/IO.phir
 
 Los archivos viajan juntos: el consumidor resuelve cada referencia relativa al
 ``.phir`` que la contiene.

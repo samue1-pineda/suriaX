@@ -24,7 +24,8 @@
             "kind": "INT",
             "name": null,
             "inner": null,
-            "mut": false
+            "mut": false,
+            "args": []
           }
         },
         {
@@ -43,7 +44,8 @@
                 "__node__": "NominalTypeExpr",
                 "ln": 1,
                 "col": 17,
-                "name": "Nodo"
+                "name": "Nodo",
+                "args": []
               },
               "mutable": false
             }
@@ -62,16 +64,20 @@
                 "kind": "NOMINAL",
                 "name": "Nodo",
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "mut": false
+              "mut": false,
+              "args": []
             },
-            "mut": false
+            "mut": false,
+            "args": []
           }
         }
       ],
       "name": "Nodo",
-      "visibility": null
+      "visibility": null,
+      "type_params": []
     },
     {
       "__node__": "FunctionDecl",
@@ -95,7 +101,8 @@
             "kind": "INT",
             "name": null,
             "inner": null,
-            "mut": false
+            "mut": false,
+            "args": []
           }
         }
       ],
@@ -111,7 +118,8 @@
             "__node__": "NominalTypeExpr",
             "ln": 3,
             "col": 19,
-            "name": "Nodo"
+            "name": "Nodo",
+            "args": []
           },
           "mutable": false
         }
@@ -130,7 +138,8 @@
               "__node__": "NominalTypeExpr",
               "ln": 4,
               "col": 9,
-              "name": "Nodo"
+              "name": "Nodo",
+              "args": []
             },
             "name": "n",
             "value": {
@@ -153,7 +162,8 @@
                     "kind": "INT",
                     "name": null,
                     "inner": null,
-                    "mut": false
+                    "mut": false,
+                    "args": []
                   }
                 },
                 {
@@ -165,20 +175,24 @@
                   "restype": null
                 }
               ],
+              "type_args": [],
               "restype": {
                 "__node__": "Type",
                 "kind": "NOMINAL",
                 "name": "Nodo",
                 "inner": null,
-                "mut": false
-              }
+                "mut": false,
+                "args": []
+              },
+              "temp_drop": null
             },
             "restype": {
               "__node__": "Type",
               "kind": "NOMINAL",
               "name": "Nodo",
               "inner": null,
-              "mut": false
+              "mut": false,
+              "args": []
             },
             "visibility": null
           },
@@ -200,7 +214,8 @@
                   "kind": "NOMINAL",
                   "name": "Nodo",
                   "inner": null,
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 }
               },
               "restype": {
@@ -212,14 +227,18 @@
                   "kind": "NOMINAL",
                   "name": "Nodo",
                   "inner": null,
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 },
-                "mut": true
+                "mut": true,
+                "args": []
               },
               "mut": true
-            }
+            },
+            "transfers": false
           }
-        ]
+        ],
+        "drops": []
       },
       "return_restype": {
         "__node__": "Type",
@@ -234,11 +253,14 @@
             "kind": "NOMINAL",
             "name": "Nodo",
             "inner": null,
-            "mut": false
+            "mut": false,
+            "args": []
           },
-          "mut": false
+          "mut": false,
+          "args": []
         },
-        "mut": false
+        "mut": false,
+        "args": []
       },
       "dunder": null,
       "specifier": null,
@@ -266,7 +288,8 @@
                 "__node__": "NominalTypeExpr",
                 "ln": 8,
                 "col": 9,
-                "name": "Nodo"
+                "name": "Nodo",
+                "args": []
               },
               "mutable": false
             }
@@ -285,11 +308,14 @@
                 "kind": "NOMINAL",
                 "name": "Nodo",
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "mut": false
+              "mut": false,
+              "args": []
             },
-            "mut": false
+            "mut": false,
+            "args": []
           }
         }
       ],
@@ -336,11 +362,14 @@
                       "kind": "NOMINAL",
                       "name": "Nodo",
                       "inner": null,
-                      "mut": false
+                      "mut": false,
+                      "args": []
                     },
-                    "mut": false
+                    "mut": false,
+                    "args": []
                   },
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 }
               },
               "right": {
@@ -356,7 +385,8 @@
                 "kind": "BOOL",
                 "name": null,
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               }
             },
             "then_block": {
@@ -379,11 +409,13 @@
                       "kind": "INT",
                       "name": null,
                       "inner": null,
-                      "mut": false
+                      "mut": false,
+                      "args": []
                     }
                   }
                 }
-              ]
+              ],
+              "drops": []
             },
             "else_branch": null
           },
@@ -408,11 +440,14 @@
                 "kind": "INT",
                 "name": null,
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               }
-            }
+            },
+            "transfers": false
           }
-        ]
+        ],
+        "drops": []
       },
       "return_restype": {
         "__node__": "Type",
@@ -423,9 +458,11 @@
           "kind": "INT",
           "name": null,
           "inner": null,
-          "mut": false
+          "mut": false,
+          "args": []
         },
-        "mut": false
+        "mut": false,
+        "args": []
       },
       "dunder": null,
       "specifier": null,
@@ -465,7 +502,8 @@
                   "__node__": "NominalTypeExpr",
                   "ln": 14,
                   "col": 9,
-                  "name": "Nodo"
+                  "name": "Nodo",
+                  "args": []
                 },
                 "mutable": false
               }
@@ -494,7 +532,8 @@
                     "kind": "INT",
                     "name": null,
                     "inner": null,
-                    "mut": false
+                    "mut": false,
+                    "args": []
                   }
                 }
               ],
@@ -511,13 +550,18 @@
                     "kind": "NOMINAL",
                     "name": "Nodo",
                     "inner": null,
-                    "mut": false
+                    "mut": false,
+                    "args": []
                   },
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 },
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "hook": null
+              "valor_constante": null,
+              "hook": null,
+              "temp_drop": null
             },
             "restype": {
               "__node__": "Type",
@@ -532,11 +576,14 @@
                   "kind": "NOMINAL",
                   "name": "Nodo",
                   "inner": null,
-                  "mut": false
+                  "mut": false,
+                  "args": []
                 },
-                "mut": false
+                "mut": false,
+                "args": []
               },
-              "mut": false
+              "mut": false,
+              "args": []
             },
             "visibility": null
           },
@@ -591,11 +638,14 @@
                               "kind": "NOMINAL",
                               "name": "Nodo",
                               "inner": null,
-                              "mut": false
+                              "mut": false,
+                              "args": []
                             },
-                            "mut": false
+                            "mut": false,
+                            "args": []
                           },
-                          "mut": false
+                          "mut": false,
+                          "args": []
                         }
                       }
                     ],
@@ -608,30 +658,46 @@
                         "kind": "INT",
                         "name": null,
                         "inner": null,
-                        "mut": false
+                        "mut": false,
+                        "args": []
                       },
-                      "mut": false
+                      "mut": false,
+                      "args": []
                     },
-                    "hook": null
+                    "valor_constante": null,
+                    "hook": null,
+                    "temp_drop": null
                   },
                   "restype": {
                     "__node__": "Type",
                     "kind": "INT",
                     "name": null,
                     "inner": null,
-                    "mut": false
+                    "mut": false,
+                    "args": []
                   },
                   "visibility": null
                 }
-              ]
+              ],
+              "drops": []
             },
-            "catch_name": "e",
-            "catch_block": {
-              "__node__": "Block",
-              "ln": 17,
-              "col": 17,
-              "statements": []
-            }
+            "catches": [
+              {
+                "__node__": "CatchClause",
+                "ln": 17,
+                "col": 7,
+                "name": "e",
+                "block": {
+                  "__node__": "Block",
+                  "ln": 17,
+                  "col": 17,
+                  "statements": [],
+                  "drops": []
+                },
+                "type": null,
+                "restype": null
+              }
+            ]
           },
           {
             "__node__": "ReturnStmt",
@@ -648,18 +714,22 @@
                 "kind": "INT",
                 "name": null,
                 "inner": null,
-                "mut": false
+                "mut": false,
+                "args": []
               }
-            }
+            },
+            "transfers": false
           }
-        ]
+        ],
+        "drops": []
       },
       "return_restype": {
         "__node__": "Type",
         "kind": "INT",
         "name": null,
         "inner": null,
-        "mut": false
+        "mut": false,
+        "args": []
       },
       "dunder": null,
       "specifier": null,

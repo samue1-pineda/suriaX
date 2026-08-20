@@ -1,0 +1,52 @@
+{
+  // Backend web de suriaX. Sin dependencias: `tsc` solo verifica tipos y,
+  // si se pide, emite a ./dist; node ejecuta los .ts directamente borrando
+  // los tipos (por eso `erasableSyntaxOnly`).
+  "compilerOptions": {
+    // File Layout
+    "rootDir": ".",
+    "outDir": "./dist",
+
+    // Environment Settings
+    "module": "nodenext",
+    "target": "esnext",
+    "lib": ["esnext"],
+    // `types: []` a propósito: src/ NO puede depender de node (corre en el
+    // navegador). Lo poco que el CLI y las pruebas necesitan de node está
+    // declarado a mano en ./node.d.ts.
+    "types": [],
+
+    // Los imports llevan la extensión .ts porque node los resuelve tal cual;
+    // al emitir, TS los reescribe a .js.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+
+    // Other Outputs
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    // Stricter Typechecking Options
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Recommended Options
+    "strict": true,
+    "jsx": "react-jsx",
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    // Prohíbe la sintaxis que no es solo-tipos (enum, namespace, parameter
+    // properties): es lo que node NO sabe borrar. Sin esta opción, un `enum`
+    // compila con tsc y revienta al ejecutar.
+    "erasableSyntaxOnly": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
+  },
+  // Las pruebas viven en test/web/ (todas las del repositorio están
+  // bajo test/) y tienen su propio tsconfig que hereda de este.
+  "include": ["main.ts", "node.d.ts", "src/**/*.ts"]
+}

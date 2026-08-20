@@ -1,0 +1,20 @@
+{
+  // La suite del backend web vive aquí, con el resto de las pruebas del
+  // proyecto, y no dentro de 'web/': las pruebas del repositorio están todas
+  // bajo 'test/'. Lo que se queda en 'web/' es el CÓDIGO.
+  //
+  // Por eso este tsconfig existe: hereda las opciones del backend (una sola
+  // fuente de verdad para el modo estricto) y solo cambia qué archivos mira y
+  // desde dónde. Sin él, 'web/tsconfig.json' tendría que subir su 'rootDir'
+  // fuera de 'web/' y arrastrar todo el repo a su salida.
+  "extends": "../../web/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "outDir": "./dist",
+    // las pruebas SÍ usan node (leen fixtures del disco, corren con
+    // 'node --test'); el código de 'web/src' no puede, y por eso allí
+    // 'types' está vacío.
+    "types": []
+  },
+  "include": ["**/*.ts", "../../web/node.d.ts", "../../web/src/**/*.ts"]
+}

@@ -41,12 +41,21 @@ con una responsabilidad cerrada:
 | # | Pasada | Módulo | Qué resuelve |
 |---|--------|--------|---------------|
 | 1 | **Recolección** | `collect.py` | Registra todo símbolo de nivel superior (`fn`, `struct`, `enum`, imports) en el scope global, **antes** de mirar ningún cuerpo. |
-| 2 | **Enlace de tipos** | `type_resolver.py` | Convierte cada `NominalTypeExpr` en un enlace real a su `Symbol` (struct/enum). Usa el `TypeService` (secc. 5). |
-| 3 | **Resolución de scopes** | `scope_resolver.py` | Recorre cuerpos de función; scope por bloque; resuelve cada `Identifier`/`Assignment`/`MemberAccess`; valida mutabilidad (`const`). |
-| 4 | **Memoria ligera** | `memory_check.py` | Move-semantics y pertenencia a región — **deliberadamente no exhaustivo**, ver secc. 4. |
+| 2 | **Resolución de scopes** | `scope_resolver.py` | Recorre cuerpos de función; scope por bloque; resuelve cada `Identifier`/`Assignment`/`MemberAccess`; valida mutabilidad (`const`); y **enlaza los tipos nominales** con `TypeBinder` (`type_resolver.py`). |
+| 3 | **Memoria ligera** | `memory_check.py` | Move-semantics y pertenencia a región — **deliberadamente no exhaustivo**, ver secc. 4. |
 
-**Por qué 4 pasadas y no 1**: cada pasada es **O(n)** en el número de nodos
-del AST; 4 pasadas siguen siendo **O(n)** (una constante, no crece con el
+**Fueron cuatro.** El enlace de tipos era una pasada aparte con su propio
+recorrido PLANO, y ahí estaba el problema: validar un tipo exige saber qué
+scope se está mirando, y un recorrido sin scopes no puede. Un `type`
+declarado dentro de una función no lo veía nadie —la declaración se
+descartaba en silencio y el fallo salía lejos, como un `AST005` en el primer
+uso—. Su lógica no se duplicó ni se tiró: vive en `type_resolver.TypeBinder`
+y la invoca `scope_resolver` en el punto donde cada anotación entra en juego.
+El frontend hace un recorrido menos (~25% menos de tiempo en la fase) y los
+tipos anidados existen.
+
+**Por qué 3 pasadas y no 1**: cada pasada es **O(n)** en el número de nodos
+del AST; 3 pasadas siguen siendo **O(n)** (una constante, no crece con el
 tamaño del programa). Intentar resolver todo en una sola pasada obligaría a
 soportar *forward references* con retrocesos (revisar nodos ya visitados) o
 a prohibir declarar `fn`/`struct` fuera de orden — ninguna de las dos es
@@ -117,7 +126,7 @@ V0/src/frontend/semantic/
 │                              #  librerías nativas — secc. 13.2)
 │
 ├── collect.py                 # Pasada 1: símbolos de nivel superior + hooks + imports  [IMPLEMENTADO]
-├── type_resolver.py           # Pasada 2: enlace de tipos nominales (+ __sizeof__)  [IMPLEMENTADO]
+├── type_resolver.py           # TypeBinder: enlace de tipos nominales (+ __sizeof__), lo usa scope_resolver  [IMPLEMENTADO]
 ├── scope_resolver.py          # Pasada 3: scopes de bloque + resolución de
 │                              #   nombres + mutabilidad (inline, ver secc. 4.3)
 │                              #   + despacho de hooks (secc. 13.3)  [IMPLEMENTADO]
@@ -139,7 +148,7 @@ secc. 12–13.
 
 ## 4. La decisión de diseño central: profundidad de la verificación de memoria
 
-`DESIGN_PRINCIPLES.md` (secc. 5) dice que la verificación de regiones/move
+`DESIGN_PRINCIPLES.md` (secc. 5) dice que la verificación de la propiedad
 ocurre *"sobre todo"* en el lowering a MIR (C++). Delegar el **100%** de la
 responsabilidad al MIR sería contraproducente por tres motivos, y hacer
 **todo** el análisis en Python (un solver de flujo de datos completo, con
@@ -160,13 +169,12 @@ Una pasada **lineal, O(n), de una sola pasada, conservadora e intra-función**:
   ambas ramas (si se movió en *alguna* rama, se trata como movido después —
   nunca al revés). Un `while` se analiza con una sola pasada de su cuerpo
   (no se itera hasta punto fijo).
-- Pertenencia a `region`: **gratis** a partir del scope de bloque que ya
-  construye `scope_resolver.py` — un símbolo declarado dentro de
-  `region r { ... }` vive en el scope de ese bloque; al cerrarse, el scope
-  se descarta como cualquier otro. Si el AST ya no permite referenciar ese
-  símbolo fuera de su bloque (porque `scope_resolver.py` ya lo reporta como
-  `UndefinedSymbolError`), el caso **obvio** de escape de región **no
-  necesita lógica dedicada**: lo cubre la resolución de scopes normal.
+- Alcance de un valor con dueño: **gratis** a partir del scope de bloque que
+  ya construye `scope_resolver.py` — un símbolo vive en el scope donde se
+  declara y al cerrarse el scope se descarta como cualquier otro. Ese cierre
+  es, además, el punto donde el drop tendrá que invocar el `__free__` del
+  tipo: la información de *cuándo muere un valor* ya está en la estructura de
+  scopes, no hace falta calcularla.
 
 ### 4.2 Qué NO hace (se defiere al MIR lowering, C++)
 
@@ -205,8 +213,8 @@ Una pasada **lineal, O(n), de una sola pasada, conservadora e intra-función**:
    específicas *ahora*, sería el primer código a tirar cuando el sistema de
    tipos real aterrice.
 4. **Costo proporcional al tamaño real del lenguaje hoy.** El modelo de
-   memoria son 4 construcciones (`region`, `move`, `make`, `free`,
-   ver `t_types.md` secc. 7) sobre un lenguaje sin genéricos, sin
+   memoria son 2 sentencias (`move`, `free`, ver `t_types.md` secc. 7)
+   sobre un lenguaje sin genéricos, sin
    herencia y sin closures. Un solver de punto fijo es una inversión de
    ingeniería que **hoy** no tiene suficiente superficie de lenguaje para
    justificarse; si el lenguaje crece (bucles con move complejos, closures),
@@ -271,13 +279,12 @@ Symbol:
                                 #   completo de cada función detrás de cada símbolo)
     type: Optional[Type]      # desde include/types_ast.py
     mutable: bool             # 'mutable' vs 'const'; N/A para FUNCTION/STRUCT/ENUM
-    region: Optional[str]     # nombre de la region que lo contiene, si aplica
     moved_at: Optional[int]   # anotado por memory_check.py (secc. 4.4)
     hook_kind: Optional[HookKind]   # solo si kind is HOOK (secc. 12)
     hook_owner: Optional[str]       # idem
 
 Scope:
-    kind: GLOBAL | FUNCTION | BLOCK | REGION
+    kind: GLOBAL | FUNCTION | BLOCK
     parent: Optional[Scope]
     types: dict[str, Symbol]   # namespace de TIPOS (struct/enum)
     values: dict[str, Symbol]  # namespace de VALORES (fn/var/param/import)
@@ -341,16 +348,24 @@ un scope propio del tipo), `EnumDecl` (+ sus `EnumItem`), `ImportBinding`,
 `ImportDirective`, `FromDirective`. Detecta `DuplicateSymbolError` si un
 nombre colisiona en el mismo namespace del mismo scope.
 
-#### `type_resolver.py` — Pasada 2
-Recorre cada `TypeExpr` ya resuelto sintácticamente por `typed_ast.py`
-(`NominalTypeExpr.name`) y lo enlaza contra `collect.py` vía
-`TypeService.resolve_nominal`. Ausente → `ASTError.UnknownTypeError`
-(reutilizado, ver secc. 2).
+#### `type_resolver.py` — `TypeBinder` (colaborador de la pasada 2)
+Enlaza cada `Type` que dejó `typed_ast.py` contra el símbolo del tipo, vía
+`TypeService`. Ausente → `ASTError.UnknownTypeError` (reutilizado, ver
+secc. 2). Ya **no es una pasada**: lo llama `scope_resolver` contra el scope
+actual, en el punto exacto en que cada anotación importa (la firma de una
+`fn` antes de su cuerpo, el tipo de un `VarDecl` antes de comparar su
+inicializador, el destino de un `cast<T>` antes de buscar la conversión).
 
-#### `scope_resolver.py` — Pasada 3
+Su caché de nombres es **por scope**: cuando el recorrido era plano un nombre
+resolvía siempre a lo mismo, pero con scopes un tipo local puede sombrear a
+uno global y recordar el primero daría el tipo equivocado dentro del bloque.
+`scope_resolver._pop_scope()` la invalida al cerrar un scope que declaró
+tipos.
+
+#### `scope_resolver.py` — Pasada 2
 Recorre el cuerpo de cada `FunctionDecl` (y expresiones a nivel de
-`Program.items` si las hay). Empuja un scope `BLOCK` por cada `Block`,
-`REGION` por cada `RegionStmt`. Resuelve `Identifier` (uso), valida
+`Program.items` si las hay). Empuja un scope `BLOCK` por cada `Block`.
+Resuelve `Identifier` (uso), valida
 `Assignment.target` contra `Symbol.mutable` (reasignar un `const` →
 `SemanticError.ImmutableAssignmentError` — **sin pasada separada**: se
 comprueba en el mismo punto donde ya se resuelve el símbolo del target, cero
@@ -373,7 +388,7 @@ Ver secc. 4 completa.
 | `ExternBlock`, `DecoratorDecl` | `collect.py` | registrados sin validación adicional (fuera de alcance, ver secc. 9) |
 | `Parameter`, `Field`, `EnumItem` | `collect.py` | registro en el scope de su dueño (función/struct/enum) |
 | `PrimitiveTypeExpr`, `NominalTypeExpr`, `PointerTypeExpr`, `NullableTypeExpr` | `type_resolver.py` | enlace nominal vía `TypeService` |
-| `Block`, `RegionStmt` | `scope_resolver.py` | push/pop de scope |
+| `Block` | `scope_resolver.py` | push/pop de scope |
 | `VarDecl` | `scope_resolver.py` | registro de símbolo local + chequeo de tipo del inicializador (vía `TypeService`) |
 | `Identifier` | `scope_resolver.py` | resolución de uso (`UndefinedSymbolError` si no existe) |
 | `Assignment` | `scope_resolver.py` | resolución de target + chequeo de mutabilidad |
@@ -460,12 +475,13 @@ AST, parser y esta fase. Motivación del usuario: en `.libsrx` (y también en
 | `__cast__` | `cast<T>(x)` (resuelto en `scope_resolver.py` contra la TABLA DE CONVERSIONES) | `fn __cast__(X x) -> T` | registro por PAR `(origen, destino)` en `SymbolTable.casts` — un tipo declara VARIAS conversiones (`int->int8`, `int8->int`, `str->Estado`...); duplicado = mismo par exacto. El "dueño" nominal (retorno con prioridad, si no el primer parámetro) solo identifica al hook en diagnósticos/HIR |
 
 `__make__` es asimétrico a propósito: `__free__`/`__sizeof__` operan
-**sobre** una instancia ya existente (primer parámetro); `__make__` la
-**produce** (no hay nada a lo que apuntar todavía), así que se asocia por su
-tipo de retorno. Decisión de usuario: `__make__` dispara **solo** con
-`make T in r` (la reserva "cruda" `alloc` dejó de ser parte del lenguaje:
-la aporta una librería, coherente con que la vía recomendada para memoria
-son las regiones, `DESIGN_PRINCIPLES.md` secc. 5).
+**sobre** una instancia ya existente (primer parámetro). `__make__` era la
+excepción —se asociaba por su tipo de retorno, porque cuando se llamaba no
+había nada a lo que apuntar—, pero su único disparador era `make T in r`:
+se retiró en v0.2.0 con el modelo por regiones, sin haber ejecutado nunca.
+Hoy la única excepción es `__cast__`, que se asocia por el lado NOMINAL de su
+firma. La reserva "cruda" (`alloc`) tampoco es del lenguaje: la aporta una
+librería.
 
 `__print__`/`__len__` (ya usados en `docs/examples/io.libsrx` con **otro**
 significado: formato/longitud lógica) se dejaron **fuera** de
@@ -612,10 +628,6 @@ formas `const IO = #import IO;` y `#import IO;` juntas).
 - **Variables globales** se registran en la pasada 1 (no solo fn/struct/
   enum): un cuerpo puede usar una global declarada más abajo. La pasada 3
   valida su inicializador sin redefinirlas.
-- **Regiones**: el nombre de `region r {}` vive DENTRO de su propio scope
-  (kind `REGION`); `make T in r`/`x at r` lo resuelven por la cadena de
-  scopes y `SEM012` cubre la región inexistente o ya cerrada. El caso obvio
-  de escape sigue cubierto por la resolución normal (secc. 4.1).
 - **`memory_check` con identidad por nombre + "revivir"**: re-declarar
   (`int x = ...;`) o reasignar (`x = ...;`) un nombre lo saca del conjunto
   `moved` — elimina los falsos positivos por shadowing sin reconstruir
@@ -648,7 +660,7 @@ formas `const IO = #import IO;` y `#import IO;` juntas).
 
 ---
 
-## 14. Estado de implementación (as-built, 3ª entrega): memoria fuera de regiones, paquetes y salidas
+## 14. Estado de implementación (as-built): memoria, paquetes y salidas
 
 ### 14.1 Cambio de modelo de declaración (decisión de usuario)
 
@@ -659,14 +671,10 @@ formas `const IO = #import IO;` y `#import IO;` juntas).
   puntero; `ptr mutable T` permite escribir a través de él
   (const-correctness estilo C). `Type` ganó el campo `mut` (participa de la
   igualdad); la coerción segura `ptr mutable T -> ptr T` vive SOLO en
-  `type_service.is_assignable`. `make` produce `ptr mutable T`
-  (una reserva recién creada es escribible); `&x` hereda la mutabilidad del
-  binding (`var` -> `ptr mutable`, `const` -> `ptr`).
-- `shrd region r {}`: región COMPARTIBLE. Parser y semántica solo
-  transportan el flag (`RegionStmt.shared` -> `Symbol.shared` -> HIR); la
-  verificación profunda es del MIR.
+  `type_service.is_assignable`. `&x` hereda la mutabilidad del binding
+  (`var` -> `ptr mutable`, `const` -> `ptr`).
 
-### 14.2 Punteros y memoria básica (foco pedido: fuera de regiones/move)
+### 14.2 Punteros y memoria básica
 
 Checks nuevos, todos en el punto donde el símbolo/tipo ya está resuelto
 (costo cero adicional):
@@ -762,29 +770,70 @@ en el linker (frontera real entre archivos):
 Dentro del propio archivo no hay filtro (todo es visible): la visibilidad es una
 regla de FRONTERA, no de scope local.
 
-### 15.3 Regiones (modelo híbrido) — resolución + transporte, ejecución en el runtime
+### 15.3 Memoria — retirada del modelo por regiones (v0.2.0)
 
-`scope_resolver` resuelve y transporta; **la ejecución RBMM la hace el runtime
-de forma agnóstica del target** (intérprete → C++ vía pybind11, en progreso),
-NO se difiere al MIR. `Symbol` (kind `REGION`) ganó `region_mutable`/`region_na`
-(ya tenía `shared`); los flags viajan al HIR.
+Lo que esta sección describía —`scope_resolver` resolviendo `RegionStmt`,
+`NewStmt`, `DeleteStmt`, `InRegionStmt` y `MoveRegionStmt`, con `Symbol` de
+kind `REGION` cargando `shared`/`region_mutable`/`region_na` hacia el HIR— se
+retiró entero. El razonamiento está en
+`documentation/source/memory_decision.rst`; el resumen es que las regiones
+ocupaban el 16 % del vocabulario reservado del lenguaje y empujaban hacia los
+hooks intrínsecos y los traits, y que su seguridad dependía de un análisis de
+escape que exigía un sistema de tipos que nunca se definió.
 
- - `RegionStmt`: los flags se anotan en el símbolo. Una región **`na`**
-   (no auto-liberada) registra además su nombre en el scope ENCLOSING (persiste
-   tras el bloque para `delete`/`move`/`in`); una región normal vive solo en su
-   propio scope `REGION` (auto-liberada, como antes).
- - `NewStmt`: registra la región-handle en el scope actual (persiste hasta
-   `delete`).
- - `DeleteStmt`: `delete(region r)` resuelve `r`; `delete()` sin argumento exige
-   estar dentro del bloque de una región (`_enclosing_region_name`), si no →
-   `SEM020` (`InvalidDeleteError`).
- - `InRegionStmt`/`MoveRegionStmt`: validan existencia de las regiones
-   nombradas (`SEM012`) y `in region` resuelve su cuerpo por scope léxico.
- - `memory_check` recorre el cuerpo de `in region { ... }` (por si hay `move`);
-   los demás nodos de región no leen identificadores movidos.
+Lo que la Semántica hace hoy con la memoria:
 
-Errores nuevos: `SEM018` (`UnknownHookError`), `SEM019`
-(`VisibilityViolationError`), `SEM020` (`InvalidDeleteError`).
+ - `MoveStmt`: `memory_check` (pasada 3) lo rastrea de forma lineal e
+   intra-función — uso tras move (`SEM004`), doble move (`SEM005`).
+ - `FreeStmt`: `scope_resolver` valida que el objetivo sea un puntero
+   (`SEM014`) y enlaza el `__free__` del tipo apuntado.
+ - `FreeStmt` en `memory_check`: `free` TERMINA una propiedad igual que
+   `move`, así que las rastrea la misma pasada, con un solo conjunto de rutas
+   muertas y el MOTIVO guardado. El motivo —no la operación— decide el
+   diagnóstico: `SEM023` (uso tras free), `SEM024` (doble free), y liberar
+   algo ya movido es `SEM004`, porque el problema no es liberarlo dos veces
+   sino que ya no es tuyo.
+ - `type_service.owns_resources(t, scope, table)`: qué tipos tienen una
+   obligación de destrucción. Vive en el servicio de tipos, no en una pasada,
+   porque es una pregunta SOBRE EL TIPO y la consultarán varias etapas. Tres
+   reglas: lo declara (`__free__`), lo contiene (campo por valor, transitivo),
+   y un `ptr` no (es un préstamo) — esta última es además lo que hace terminar
+   la recursión, porque los tipos recursivos se cierran por puntero.
+ - **Drop automático** (`scope_resolver._anotar_drops`): al cerrar cada scope,
+   con el scope TODAVÍA ABIERTO, se anota en el `ast.Block` qué locales mueren
+   ahí. Se hace en este punto por dos razones: el scope ES la lista de locales
+   del bloque en orden de declaración, y es el último momento en que un tipo
+   declarado dentro del bloque (`const type T;`) todavía resuelve — después de
+   esta pasada los scopes se descartan y la pregunta ya no se puede hacer.
+   El orden es inverso al de declaración. Los `PARAM` no entran: no los posee
+   este ámbito.
+ - El reparto con el runtime es la decisión de diseño: la lista es ESTÁTICA
+   (qué puede necesitar destruirse lo dice el tipo) pero el drop NO es
+   incondicional (si hace falta lo dice el estado de la celda, en ejecución).
+   Eso es lo que hace que un `move` dentro de un `if` salga correcto sin punto
+   fijo ni drop flags — el bit que haría falta ya existía.
+ - **Temporales** (`Call.temp_drop` / `StructLiteral.temp_drop`): una llamada
+   o un literal PRODUCEN un valor; si posee recursos y nadie se queda con él,
+   no hay ningún ámbito que lo alcance. Se marca en `visit_expr` —el único
+   punto por el que pasan todas las expresiones— y las cuatro posiciones que
+   SÍ le dan dueño lo desmarcan: inicializador de `var`, lado derecho de una
+   asignación, valor de `return` y **campo de un literal que lo envuelve**.
+   Marcar de más y quitar es más seguro que enumerar dónde marcar (si aparece
+   una posición nueva se destruye de más, no de menos), y por eso el
+   desmarcado se prueba en vez de fiarse.
+ - `_aplanar_drops` traduce "este valor posee" a destrucciones CONCRETAS: si
+   el tipo declara `__free__`, ESE destructor se hace cargo de todo lo suyo y
+   no se baja más; si no lo declara, se baja a sus campos que sí poseen, en
+   rutas aplanadas (`e.c.b`). La recursión termina porque `owns_resources`
+   solo es cierto si en algún punto del árbol POR VALOR hay un `__free__`, y
+   los punteros —por donde se cierran los tipos recursivos— no poseen.
+
+Diagnósticos retirados con el modelo, por quedarse sin productor: `SEM012`
+(`UndefinedRegionError`), `SEM020` (`InvalidDeleteError`) y `PAR022`
+(`InvalidRegionDeclarationError`).
+
+Errores que esta entrega sí dejó: `SEM018` (`UnknownHookError`) y `SEM019`
+(`VisibilityViolationError`).
 
 ### 15.4 Validado contra (4ª entrega)
 
@@ -810,7 +859,7 @@ parámetro (`collect._collect_dunder`). Sin receptor nominal → `SEM022`
 (`InvalidDunderSignatureError`). Se despacha con `x.__x__()`
 (`scope_resolver._call_member`, anota `Call.hook`). `SymbolKind.DUNDER` es
 solo-frontend (nunca se emite al HIR). La **ejecución** en runtime de dunders
-del usuario está **diferida** (como las regiones): el frontend resuelve y
+del usuario está **diferida**: el frontend resuelve y
 anota; el HIR emite una `HookRef` parcial (owner sin kind) que el runtime
 completará.
 

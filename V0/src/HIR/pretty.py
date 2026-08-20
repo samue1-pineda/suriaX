@@ -1,0 +1,412 @@
+"""Vista LEGIBLE del HIR (``--hir-pretty``).
+
+Es la respuesta a una medición incómoda: ``module_to_text`` —el
+``text_format`` de protobuf— era el proceso **más caro de toda la fase**,
+551 ms y 5,5 MB de texto para un programa de 47 k tokens, ocho veces lo que
+cuesta emitir el ``.phir``. Y a cambio de ese precio daba el árbol crudo del
+protobuf: veinte líneas anidadas para escribir ``return a + b``.
+
+Esta vista tiene otro objetivo. No describe el *formato*; describe el
+**programa tal como el HIR lo dejó**, que es lo que uno quiere ver al
+preguntarse "¿qué le llegó al intérprete?". Una línea por sentencia, las
+expresiones en línea con su tipo resuelto, y la posición del fuente a la
+derecha para poder cruzarla con el código::
+
+    unit programa.srcx   schema 2 · 4 items · 12 símbolos · 5 tipos
+
+    types
+      #1 int      #2 bool     #3 Punto    #4 Punto ptr
+
+    fn suma(int a, int b) -> int                              @14:1
+      return (a:int + b:int):int                              @15:5
+
+    fn main() -> int                                          @28:1
+      var Punto p = Punto{x: 1:int, y: 2:int}                 @29:5
+      if (total:int > 2:int):bool                             @32:5
+        stdp.println("mayor")                                 @33:9
+
+``--hir-text`` no desaparece: sigue siendo la herramienta para depurar el
+*wire format* (qué tag lleva qué), que es una pregunta distinta.
+
+**El pool no se ve, y ese es el punto.** Desde el esquema v2 los nodos
+guardan un ``type_id``; aquí se resuelve contra ``Module.types`` y se imprime
+``Punto ptr mutable``, no ``#7``. Plegar el artefacto lo hizo más pequeño sin
+hacerlo menos legible — siempre que exista esta vista.
+
+Escribe en **streaming** sobre un archivo: nunca construye la cadena
+completa en memoria (el texto de protobuf sí lo hacía, 24 MB para el mayor
+de los programas de prueba).
+"""
+
+from __future__ import annotations
+
+from typing import List, Optional, TextIO
+
+#: columna donde se alinean las posiciones ``@ln:col``.
+_POS_COL = 66
+
+
+# --------------------------------------------------------------------------- #
+# tipos
+# --------------------------------------------------------------------------- #
+def format_type(t, pb) -> str:
+    """``Type`` protobuf -> notación de suriaX (``int ptr mutable``, ``T?``).
+
+    Fuente ÚNICA de la notación: la comparte el resumen del intérprete
+    (``runtime/interpreter/loader.summarize``), para que un tipo no se
+    escriba de dos maneras según quién lo imprima.
+    """
+    kind = pb.TypeKind.Name(t.kind)
+    if kind == "POINTER":
+        return format_type(t.inner, pb) + (" ptr mutable" if t.mut else " ptr")
+    if kind == "NULLABLE":
+        return format_type(t.inner, pb) + "?"
+    if kind == "NOMINAL":
+        return t.name
+    if kind == "TYPE_UNSPECIFIED":
+        return "<?>"
+    return kind.lower()
+
+
+class _Printer:
+    """Estado de UNA impresión: stubs, pool de tipos resuelto y salida."""
+
+    __slots__ = ("pb", "out", "types", "_kind_names")
+
+    def __init__(self, module, out: TextIO) -> None:
+        from .stubs import load_hir_pb2
+        self.pb = load_hir_pb2()
+        self.out = out
+        # el pool se resuelve UNA vez a texto: cada nodo lo consulta por
+        # índice y no vuelve a formatear el mismo tipo (es el mismo motivo
+        # por el que el pool existe en el artefacto).
+        self.types: List[str] = [format_type(t, self.pb) for t in module.types]
+        self._kind_names = {}
+
+    # -- utilidades ------------------------------------------------------ #
+    def type_of(self, type_id: int) -> str:
+        """Índice del pool -> texto. 0 (o fuera de rango) = sin tipo."""
+        if 0 < type_id < len(self.types):
+            return self.types[type_id]
+        return ""
+
+    def line(self, text: str, *, ln: int = 0, col: int = 0,
+             indent: int = 0) -> None:
+        """Una línea, con su posición alineada a la derecha si la tiene."""
+        body = "  " * indent + text
+        if ln:
+            pad = max(1, _POS_COL - len(body))
+            body = f"{body}{' ' * pad}@{ln}:{col}"
+        self.out.write(body)
+        self.out.write("\n")
+
+    # -- expresiones ----------------------------------------------------- #
+    def expr(self, e) -> str:
+        """Expresión -> una sola línea, con el tipo resuelto como sufijo.
+
+        El sufijo ``:tipo`` solo aparece donde APORTA: en un literal el tipo
+        es evidente y ensucia; en una llamada o una variable es la
+        información que se vino a buscar.
+        """
+        which = e.WhichOneof("node")
+        text = self._expr_text(e, which)
+        tipo = self.type_of(e.type_id)
+        if tipo and which not in ("literal", "struct_literal", "identifier"):
+            return f"{text}:{tipo}"
+        return text
+
+    def _expr_text(self, e, which: str) -> str:
+        if which == "literal":
+            return self._literal(e.literal)
+        if which == "identifier":
+            tipo = self.type_of(e.type_id)
+            return f"{e.identifier.name}:{tipo}" if tipo else e.identifier.name
+        if which == "binary":
+            return (f"({self.expr(e.binary.left)} {e.binary.op} "
+                    f"{self.expr(e.binary.right)})")
+        if which == "unary":
+            return f"({e.unary.op} {self.expr(e.unary.operand)})"
+        if which == "assignment":
+            return (f"{self.expr(e.assignment.target)} = "
+                    f"{self.expr(e.assignment.value)}")
+        if which == "call":
+            args = ", ".join(self.expr(a) for a in e.call.args)
+            call = f"{self.expr(e.call.callee)}({args})"
+            hook = self._hook(e.call.hook)
+            return call + hook
+        if which == "index":
+            return f"{self.expr(e.index.obj)}[{self.expr(e.index.index)}]"
+        if which == "member":
+            return f"{self.expr(e.member.obj)}.{e.member.member}"
+        if which == "cast_expr":
+            destino = format_type(e.cast_expr.type, self.pb)
+            return (f"cast<{destino}>({self.expr(e.cast_expr.value)})"
+                    f"{self._hook(e.cast_expr.hook)}")
+        if which == "sizeof":
+            return (f"sizeof({format_type(e.sizeof.type, self.pb)})"
+                    f"{self._hook(e.sizeof.hook)}")
+        if which == "addr_of":
+            marca = "&mut " if e.addr_of.mut else "&"
+            return f"{marca}{self.expr(e.addr_of.operand)}"
+        if which == "struct_literal":
+            campos = ", ".join(
+                f"{name}: {self.expr(value)}"
+                for name, value in zip(e.struct_literal.field_names,
+                                       e.struct_literal.values))
+            return f"{e.struct_literal.type_name}{{{campos}}}"
+        if which == "interp":
+            partes = []
+            for part in e.interp.parts:
+                if part.WhichOneof("part") == "text":
+                    partes.append(part.text)
+                else:
+                    partes.append("{" + self.expr(part.expr) + "}")
+            return 'f"' + "".join(partes) + '"'
+        return f"<{which or 'vacío'}>"
+
+    def _literal(self, lit) -> str:
+        which = lit.WhichOneof("value")
+        if which == "str_value":
+            return f'"{lit.str_value}"' if lit.kind == "str" else f"'{lit.str_value}'"
+        if which == "int_value":
+            return str(lit.int_value)
+        if which == "float_value":
+            return repr(lit.float_value)
+        if which == "bool_value":
+            return "true" if lit.bool_value else "false"
+        return "null"
+
+    def _hook(self, hook) -> str:
+        """Anotación del hook enlazado: la decisión que tomó la Semántica y
+        que el intérprete ejecuta sin volver a decidir."""
+        if not hook.owner_type:
+            return ""
+        nombre = hook.hook_name or self._hook_kind_name(hook.kind)
+        return f"  ⟨hook {nombre} de {hook.owner_type}⟩"
+
+    def _hook_kind_name(self, kind: int) -> str:
+        cached = self._kind_names.get(kind)
+        if cached is None:
+            cached = "__" + self.pb.HookKind.Name(kind).lower() + "__"
+            self._kind_names[kind] = cached
+        return cached
+
+    # -- sentencias ------------------------------------------------------ #
+    def block(self, b, indent: int) -> None:
+        for stmt in b.statements:
+            self.stmt(stmt, indent)
+
+    def stmt(self, s, indent: int) -> None:
+        which = s.WhichOneof("node")
+        ln, col = s.ln, s.col
+
+        if which == "var_decl":
+            v = s.var_decl
+            tipo = self.type_of(v.type_id)
+            cabeza = f"{v.qualifier or 'var'} {tipo + ' ' if tipo else ''}{v.name}"
+            if v.HasField("value"):
+                self.line(f"{cabeza} = {self.expr(v.value)}", ln=ln, col=col,
+                          indent=indent)
+            else:
+                self.line(cabeza, ln=ln, col=col, indent=indent)
+        elif which == "expr_stmt":
+            self.line(self.expr(s.expr_stmt.expr), ln=ln, col=col, indent=indent)
+        elif which == "return_stmt":
+            valor = (f" {self.expr(s.return_stmt.value)}"
+                     if s.return_stmt.HasField("value") else "")
+            self.line(f"return{valor}", ln=ln, col=col, indent=indent)
+        elif which == "if_stmt":
+            self._if(s.if_stmt, indent, ln, col)
+        elif which == "while_stmt":
+            self.line(f"while {self.expr(s.while_stmt.condition)}", ln=ln,
+                      col=col, indent=indent)
+            self.block(s.while_stmt.body, indent + 1)
+        elif which == "match_stmt":
+            self.line(f"match {self.expr(s.match_stmt.subject)}", ln=ln,
+                      col=col, indent=indent)
+            for arm in s.match_stmt.cases:
+                self.line(f"case {self.expr(arm.pattern)}", indent=indent + 1)
+                self.stmt(arm.body, indent + 2)
+        elif which == "block":
+            self.line("{", ln=ln, col=col, indent=indent)
+            self.block(s.block, indent + 1)
+            self.line("}", indent=indent)
+        elif which == "break_stmt":
+            self.line("break", ln=ln, col=col, indent=indent)
+        elif which == "continue_stmt":
+            self.line("continue", ln=ln, col=col, indent=indent)
+        elif which == "move_stmt":
+            self.line(f"move {self.expr(s.move_stmt.target)}", ln=ln, col=col,
+                      indent=indent)
+        elif which == "free_stmt":
+            self.line(f"free {self.expr(s.free_stmt.target)}"
+                      f"{self._hook(s.free_stmt.hook)}", ln=ln, col=col,
+                      indent=indent)
+        elif which == "throw_stmt":
+            self.line(f"throw {self.expr(s.throw_stmt.value)}", ln=ln, col=col,
+                      indent=indent)
+        elif which == "try_stmt":
+            self.line("try", ln=ln, col=col, indent=indent)
+            self.block(s.try_stmt.try_block, indent + 1)
+            self.line(f"catch {s.try_stmt.catch_name}", indent=indent)
+            self.block(s.try_stmt.catch_block, indent + 1)
+        elif which == "type_decl":
+            t = s.type_decl
+            valor = f" = {self.expr(t.value)}" if t.HasField("value") else ""
+            self.line(f"{t.qualifier or 'const'} type {t.name}{valor}", ln=ln,
+                      col=col, indent=indent)
+        elif which == "import_binding":
+            b = s.import_binding
+            miembro = f".{b.member}" if b.member else ""
+            self.line(f"bind {b.name} <- {b.lib}{miembro}", ln=ln, col=col,
+                      indent=indent)
+        else:
+            self.line(f"<{which or 'vacío'}>", ln=ln, col=col, indent=indent)
+
+    def _if(self, node, indent: int, ln: int, col: int) -> None:
+        self.line(f"if {self.expr(node.condition)}", ln=ln, col=col,
+                  indent=indent)
+        self.block(node.then_block, indent + 1)
+        rama = node.WhichOneof("else_branch")
+        if rama == "else_block":
+            self.line("else", indent=indent)
+            self.block(node.else_block, indent + 1)
+        elif rama == "else_if":
+            self.line("else if " + self.expr(node.else_if.condition),
+                      indent=indent)
+            self.block(node.else_if.then_block, indent + 1)
+            self._if_tail(node.else_if, indent)
+
+    def _if_tail(self, node, indent: int) -> None:
+        rama = node.WhichOneof("else_branch")
+        if rama == "else_block":
+            self.line("else", indent=indent)
+            self.block(node.else_block, indent + 1)
+        elif rama == "else_if":
+            self.line("else if " + self.expr(node.else_if.condition),
+                      indent=indent)
+            self.block(node.else_if.then_block, indent + 1)
+            self._if_tail(node.else_if, indent)
+
+    # -- declaraciones --------------------------------------------------- #
+    def decl(self, d) -> None:
+        which = d.WhichOneof("node")
+        if which == "function":
+            self._function(d.function, d.ln, d.col)
+        elif which == "struct_decl":
+            campos = ", ".join(f"{self.type_of(f.type_id)} {f.name}"
+                               for f in d.struct_decl.fields)
+            self.line(f"struct {d.struct_decl.name} {{ {campos} }}", ln=d.ln,
+                      col=d.col)
+            self.out.write("\n")
+        elif which == "enum_decl":
+            items = ", ".join(
+                item.name + (f" = {self.expr(item.value)}"
+                             if item.HasField("value") else "")
+                for item in d.enum_decl.items)
+            self.line(f"enum {d.enum_decl.name} {{ {items} }}", ln=d.ln, col=d.col)
+            self.out.write("\n")
+        elif which == "import_directive":
+            i = d.import_directive
+            alias = f" as {i.alias}" if i.alias else ""
+            self.line(f"import {i.lib}{alias}   -> unidad '{i.unit}', liga "
+                      f"'{i.binding}'", ln=d.ln, col=d.col)
+        elif which == "from_directive":
+            f = d.from_directive
+            alias = f" as {f.alias}" if f.alias else ""
+            self.line(f"from {f.lib} import {f.name}{alias}   -> unidad "
+                      f"'{f.unit}'", ln=d.ln, col=d.col)
+        elif which == "export_directive":
+            e = d.export_directive
+            paquete = "package " if e.package else ""
+            self.line(f"export {paquete}as {e.alias}", ln=d.ln, col=d.col)
+        elif which == "extern_block":
+            lineas = d.extern_block.raw.count("\n") + 1
+            self.line(f"extern {d.extern_block.target} {{ … {lineas} líneas }}",
+                      ln=d.ln, col=d.col)
+        elif which == "test_decl":
+            self.line(f'test "{d.test_decl.name}"', ln=d.ln, col=d.col)
+            self.block(d.test_decl.body, 1)
+            self.out.write("\n")
+        elif which == "statement":
+            self.stmt(d.statement, 0)
+        else:
+            self.line(f"<{which or 'vacío'}>", ln=d.ln, col=d.col)
+
+    def _function(self, fn, ln: int, col: int) -> None:
+        params = ", ".join(f"{self.type_of(p.type_id)} {p.name}"
+                           for p in fn.params)
+        retorno = self.type_of(fn.return_type_id) or "void"
+        marca = ""
+        if fn.decorator:
+            marca += f"@{fn.decorator} "
+        if fn.dunder:
+            marca += "dunder "
+        if not fn.HasField("body"):
+            self.line(f"{marca}fn {fn.name}({params}) -> {retorno};   "
+                      f"(prototipo: lo aporta el host)", ln=ln, col=col)
+            self.out.write("\n")
+            return
+        self.line(f"{marca}fn {fn.name}({params}) -> {retorno}", ln=ln, col=col)
+        self.block(fn.body, 1)
+        self.out.write("\n")
+
+
+# --------------------------------------------------------------------------- #
+# API
+# --------------------------------------------------------------------------- #
+def write_pretty(module, out: TextIO) -> None:
+    """Escribe la vista legible de ``module`` en ``out``, en streaming."""
+    p = _Printer(module, out)
+    pb = p.pb
+
+    simbolos = len(module.symbols.types) + len(module.symbols.values)
+    out.write(f"unit {module.source_file or '<sin nombre>'}   "
+              f"schema {module.schema_version} · {len(module.items)} items · "
+              f"{simbolos} símbolos · {max(len(module.types) - 1, 0)} tipos")
+    if module.libraries:
+        out.write(f" · {len(module.libraries)} librerías")
+    out.write("\n\n")
+
+    # el POOL de tipos, que es lo que hace legible todo lo de abajo
+    if len(module.types) > 1:
+        out.write("types\n")
+        for i, texto in enumerate(p.types):
+            if i:
+                out.write(f"  #{i:<3} {texto}\n")
+        out.write("\n")
+
+    if module.libraries:
+        out.write("libs\n")
+        for lib in module.libraries:
+            out.write(f"  {lib.alias} -> {lib.phir}\n")
+        out.write("\n")
+
+    hooks = module.symbols.hooks
+    casts = module.symbols.casts
+    if hooks or casts:
+        out.write("hooks\n")
+        for h in hooks:
+            nombre = h.hook_name or p._hook_kind_name(h.kind)
+            origen = f"   (extensión '{h.extension}')" if h.extension else ""
+            out.write(f"  {nombre} de {h.owner_type}{origen}\n")
+        for c in casts:
+            origen = (format_type(c.param_types[0], pb)
+                      if c.param_types else "<?>")
+            out.write(f"  __cast__ {origen} -> {format_type(c.type, pb)}\n")
+        out.write("\n")
+
+    for decl in module.items:
+        p.decl(decl)
+
+
+def pretty(module) -> str:
+    """La vista legible como cadena. Para tests y para quien la quiera en
+    memoria; el camino normal (``--hir-pretty``) escribe a archivo."""
+    import io
+    buffer = io.StringIO()
+    write_pretty(module, buffer)
+    return buffer.getvalue()
+
+
+__all__ = ["format_type", "pretty", "write_pretty"]

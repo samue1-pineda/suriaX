@@ -1,5 +1,5 @@
 """grammar/modifiers — reservas de visibilidad, especificador ``hook``/
-``dunder`` y las operaciones de región del modelo híbrido.
+``dunder`` y las sentencias del modelo de memoria.
 
 Forma del AST (parser) y, donde aplica, el símbolo/hook resultante
 (semántica). Convención: ``_items``/``_stmt`` exigen compilación sintáctica
@@ -154,60 +154,41 @@ def test_decorador_sobre_enum():
 
 
 # --------------------------------------------------------------------------- #
-# regiones: modelo híbrido (modificadores + new/delete/in/move-region)
+# memoria: ownership (y que las palabras de las regiones ya no son del lenguaje)
 # --------------------------------------------------------------------------- #
 
-def test_region_mods_orden_libre():
-    r = _stmt("shrd mutable na region r { };")
-    assert isinstance(r, ast.RegionStmt)
-    assert r.shared and r.mutable and r.na and r.name == "r"
-
-
-def test_region_sin_mods():
-    r = _stmt("region r { };")
-    assert not r.shared and not r.mutable and not r.na
-
-
-def test_new_stmt():
-    n = _stmt("new(shrd region c);")
-    assert isinstance(n, ast.NewStmt) and n.name == "c" and n.shared
-    assert not n.mutable and not n.na
-
-
-def test_delete_externo():
-    d = _stmt("delete(region c);")
-    assert isinstance(d, ast.DeleteStmt) and d.name == "c"
-
-
-def test_delete_interno_sin_argumento():
-    d = _stmt("delete();")
-    assert isinstance(d, ast.DeleteStmt) and d.name is None
-
-
-def test_in_region_forma_corta():
-    i = _stmt("in region c: return;")
-    assert isinstance(i, ast.InRegionStmt) and i.region == "c"
-    assert isinstance(i.body, ast.ReturnStmt)
-
-
-def test_in_region_forma_bloque():
-    i = _stmt("in region c { return; };")
-    assert isinstance(i, ast.InRegionStmt) and isinstance(i.body, ast.Block)
-
-
-def test_move_region():
-    m = _stmt("move region a -> region b;")
-    assert isinstance(m, ast.MoveRegionStmt) and m.src == "a" and m.dst == "b"
-
-
-def test_move_valor_sigue_siendo_move_stmt():
+def test_move_de_un_valor_es_move_stmt():
     m = _stmt("move x;")
     assert isinstance(m, ast.MoveStmt)
 
 
-def test_mutable_region_no_es_mal_uso():
-    """'mutable region r' es válido; 'mutable int x' sigue siendo error."""
-    r = _stmt("mutable region r { };")
-    assert isinstance(r, ast.RegionStmt) and r.mutable
+def test_free_de_un_valor_es_free_stmt():
+    f = _stmt("free p;")
+    assert isinstance(f, ast.FreeStmt)
+
+
+def test_las_palabras_de_region_son_identificadores_corrientes():
+    """El modelo por regiones se retiró en v0.2.0 y con él sus 8 palabras
+    reservadas. Liberarlas era medio punto del cambio: son los nombres
+    NATURALES de una librería de memoria ('arena.new', 'fn make(...)'), y
+    mientras estuvieron reservadas ninguna librería podía usarlos."""
+    for nombre in ("region", "shrd", "na", "at", "make", "new", "delete"):
+        d = _stmt(f"var int {nombre} = 1;")
+        assert isinstance(d, ast.VarDecl) and d.name == nombre, (
+            f"'{nombre}' deberia ser un identificador corriente")
+
+
+def test_in_ya_no_arranca_una_sentencia():
+    """'in region r: ...' era una sentencia propia; hoy 'in' no es keyword."""
+    d = _stmt("var int in = 2;")
+    assert isinstance(d, ast.VarDecl) and d.name == "in"
+
+
+def test_mutable_siempre_es_mal_uso():
+    """'mutable' era válido arrancando una sentencia SOLO como modificador de
+    región ('mutable region r'). Sin regiones, cualquier 'mutable' en esa
+    posición es el mal uso histórico como qualifier de variable."""
+    assert error_codes("fn f() -> void { mutable region r { }; };"), \
+        "'mutable region' ya no deberia parsear"
     assert error_codes("fn f() -> void { mutable int x = 1; };"), \
         "'mutable int' debe seguir siendo error"

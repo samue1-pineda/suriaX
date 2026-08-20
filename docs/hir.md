@@ -1,7 +1,8 @@
 # HIR (High-level Intermediate Representation)
 
 El HIR es la **frontera entre el frontend (Python) y sus consumidores**: el
-backend C++ (MIR → LLVM IR) y el intérprete tree-walk. Se serializa en
+backend C++ (MIR → VM de bytecode), el intérprete tree-walk y el target web
+(TypeScript → WIR → JS/WASM). Se serializa en
 **protobuf**, lo que permite desacoplamiento y mantener un contexto
 semántico persistente. Ver [ARCHITECTURE.md](../ARCHITECTURE.md).
 
@@ -14,11 +15,16 @@ semántico persistente. Ver [ARCHITECTURE.md](../ARCHITECTURE.md).
 - Serialización en protobuf: puente Python → C++ e intérprete.
 - Transporta la tabla de símbolos enriquecida (tipos, mutabilidad, hooks) y
   el AST-tipado con el `restype` de **cada expresión** anotado por la
-  Semántica — la semántica rica que LLVM IR y el intérprete necesitan.
+  Semántica — la semántica rica que el MIR, el intérprete y el target web
+  necesitan.
 
-## Alcance de v1 (`schema_version == 1`)
+## Alcance de v2 (`schema_version == 2`)
 
-- **Sin RBMM**: `region`/`shrd`, `make T in r` y `x at r` producen `HIR005`
+El v2 añadió un **pool de tipos** en el `Module`: los tipos se escriben una
+vez y los nodos los referencian por índice. Lo demás de esta lista viene del
+v1 y no cambió.
+
+- **Sin regiones**: retiradas del lenguaje en v0.2.0; sus tags siguen `reserved`
   (rechazo fail-fast, nunca degradación silenciosa); sus tags quedan
   `reserved` en el esquema para reintroducirlos sin romperlo.
 - **move-semantics SÍ viaja** (`MoveStmt` + `Symbol.moved_at`): el
@@ -75,9 +81,12 @@ commitean**: `V0/src/HIR/stubs.py` los genera con `protoc` en build (carpeta
 
 ## TODO
 
-- [x] Esquema `.proto` v1 con tags reservados para RBMM/move.
+- [x] Esquema `.proto` v2 (pool de tipos) con tags reservados para las
+  regiones retiradas.
 - [x] Emisor Python (`emit`/`emit_text`) + `#test hir` + `--emit-hir`.
 - [x] Versionado de esquema (`schema_version` fail-fast, paquete `v0`).
+- [x] Lector de HIR en TypeScript (target web): valida `schema_version`,
+  reconstruye la `SymbolTable` y baja a WIR → JS/WASM.
 - [ ] Lector de HIR en C++ (valida `schema_version`, reconstruye
   `SymbolTable`, `switch` exhaustivo por `oneof`).
 - [ ] Round-trip golden tests por cada ejemplo de `docs/examples/`.

@@ -49,7 +49,11 @@ def resolve_type_expr(type_expr: ast.TypeExpr) -> Type:
     if isinstance(type_expr, ast.NominalTypeExpr):
         # el nombre puede venir cualificado ('dt.int8'): se transporta entero,
         # el enlace hasta el simbolo es de la Semantica (type_resolver).
-        return nominal(type_expr.name)
+        # Los ARGUMENTOS de un generico ('Vector<int>') se resuelven aqui
+        # mismo, recursivamente: son tipos como cualquier otro y participan
+        # de la identidad ('Vector<int>' != 'Vector<str>').
+        return nominal(type_expr.name,
+                       tuple(resolve_type_expr(a) for a in type_expr.args))
     if isinstance(type_expr, ast.MetaTypeExpr):
         return META_TYPE
     if isinstance(type_expr, ast.SelfTypeExpr):
@@ -106,13 +110,6 @@ def _resolve_interp(node: ast.InterpolatedString) -> None:
     node.restype = PRIMITIVE_TYPES["str"]
 
 
-def _resolve_ptr_of_type(node: ast.MakeExpr) -> None:
-    # una reserva RECIEN creada siempre es escribible por su creador:
-    # make produce 'ptr mutable T'. Asignarla a un 'ptr T' (solo lectura)
-    # es la coercion segura que permite type_service.is_assignable.
-    node.restype = pointer_of(resolve_type_expr(node.type), mut=True)
-
-
 def _resolve_sizeof(node: ast.SizeofExpr) -> None:
     node.restype = PRIMITIVE_TYPES["int"]
 
@@ -123,10 +120,26 @@ def _resolve_cast(node: ast.CastExpr) -> None:
     node.restype = resolve_type_expr(node.type)
 
 
+def _resolve_catch(node: ast.CatchClause) -> None:
+    # 'catch (Fallo e)': el filtro es un tipo escrito por el usuario. Sin tipo
+    # ('catch (e)') no hay nada que resolver: la rama atrapa cualquier cosa.
+    if node.type is not None:
+        node.restype = resolve_type_expr(node.type)
+
+
+def _resolve_enum_item(node: ast.EnumItem) -> None:
+    # el PAYLOAD de una variante son tipos como cualquier otro; sin resolver,
+    # el constructor de la variante no tendria firma que verificar.
+    node.payload_restypes = [resolve_type_expr(t) for t in node.payload]
+
+
 def _resolve_struct_literal(node: ast.StructLiteral) -> None:
     # 'T{...}' produce un valor de tipo nominal T; la validacion de campos
-    # (existencia, tipos) es de la Semantica.
-    node.restype = nominal(node.type_name)
+    # (existencia, tipos) es de la Semantica. 'Caja<int>{...}' produce el
+    # nominal CON sus argumentos: es lo que hace que el literal de un
+    # generico sea del mismo tipo que la anotacion que lo recibe.
+    node.restype = nominal(node.type_name,
+                           tuple(resolve_type_expr(a) for a in node.type_args))
 
 
 # despacho O(1) por clase (mismo patron que el resto del frontend)
@@ -139,10 +152,11 @@ _RESOLVERS = {
     ast.TraitMethod: _resolve_trait_method,
     ast.Literal: _resolve_literal,
     ast.InterpolatedString: _resolve_interp,
-    ast.MakeExpr: _resolve_ptr_of_type,
     ast.SizeofExpr: _resolve_sizeof,
     ast.CastExpr: _resolve_cast,
     ast.StructLiteral: _resolve_struct_literal,
+    ast.EnumItem: _resolve_enum_item,
+    ast.CatchClause: _resolve_catch,
 }
 
 

@@ -127,7 +127,7 @@ def test_mutable_no_califica_variables():
 
 
 def test_make_ya_no_es_construccion():
-    """RBMM fuera del lenguaje v1: 'make T in r' ya no es una expresión...."""
+    """El modelo por regiones se retiró: 'make T in r' ya no es una expresión..."""
     assert _codes("fn f() -> void { var int ptr y = make int in scratch; };")
 
 

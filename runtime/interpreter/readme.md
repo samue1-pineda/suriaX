@@ -30,14 +30,14 @@ python runtime/interpreter/main.py dumps/x.phir --exec --trace-memory  # + traza
 |---|---|
 | [`loader.py`](loader.py) | carga + validación fail-fast + **module linker** (liga main + N `.phir` de librerías, transitivo) |
 | [`evaluator.py`](evaluator.py) | tree-walk: expresiones, control de flujo, llamadas, f-strings, `cast` (nativo + tabla `__cast__`) |
-| [`memory/pointer.py`](memory/pointer.py) | **instrucciones de memoria**: celdas con estado (LIVE/MOVED/FREED), `&`, deref implícito, `move` (RT001/RT002), `free` (RT003) — RBMM llega con HIR v2 |
+| [`memory/pointer.py`](memory/pointer.py) | **instrucciones de memoria**: celdas con estado (LIVE/MOVED/FREED), `&`, deref implícito, `move` (RT001/RT002), `free` (RT003) — el drop automático de ámbito está pendiente |
 | [`enviroment/environment.py`](enviroment/environment.py) | cadena de frames nombre→Cell |
 | [`hook/dispatch.py`](hook/dispatch.py) | índices O(1): hooks (owner,kind) y conversiones (origen,destino) |
 | [`intrinsics.py`](intrinsics.py) | interfaz del host: `suriax_write` → stdout (IO imprime sin `#extern`) |
 | [`interpreter.py`](interpreter.py) | orquestador: globales por unidad, nivel de módulo, entrada, exit code |
 | [`errors.py`](errors.py) | errores de runtime `RTxxx` con posición |
 
-Pendiente del plan: arenas por región (RBMM, HIR v2), structs ejecutables
+Pendiente del plan: drop automático, arenas como librería, structs ejecutables
 (`__make__`), vectores, `match` con patrones más ricos.
 
 Puntos clave:
@@ -48,12 +48,12 @@ Puntos clave:
   Python. `#extern` es del backend LLVM. La interfaz del host es la **costura
   de desacople** que ambos consumidores del HIR implementan a su manera.
 - **No re-decide semántica.** Ejecuta lo que el HIR ya trae resuelto (despacho
-  de hooks, regiones, move); no reimplementa las reglas de la Semántica.
+  de hooks, propiedad, move); no reimplementa las reglas de la Semántica.
 - Selección de target: `target: interp` en `.suriaX_config.yaml` (o
   `python V0/main.py archivo.srcx --run`). `compilerconfig` conserva su rol de
   elegir la ruta; los knobs del intérprete viven en la sección `interpreter:`.
 - Esqueleto ya presente: `enviroment/` (scopes), `hook/` (despacho de dunder),
-  `memory/` (regiones/punteros/move).
+  `memory/` (celdas/punteros/move).
 
 Relación con [`V0/src/intepreter/`](../../V0/src/intepreter/) (readme: "tree-walk
 sobre el HIR"): esa nota reflejaba esta misma intención; la implementación vive

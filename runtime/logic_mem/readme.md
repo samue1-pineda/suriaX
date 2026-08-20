@@ -30,7 +30,7 @@ Aquí vive la LÓGICA de memoria; los consumidores solo la invocan.
      `USE_AFTER_FREE`, `DOUBLE_MOVE`, `DOUBLE_FREE`.
    - Handles **monotónicos** dentro de un run (imposible un *stale handle*);
      `reset()` recicla entre runs. La reclamación fina por celda llegará con
-     las **regiones** (su propósito es liberar en bloque).
+     el **drop automático** al cerrar el ámbito.
 
 2. **Binding pybind11** — [`cxx_entry.cpp`](cxx_entry.cpp): el ADAPTADOR de
    Python. Expone la clase `Memory`, convierte objetos de Python ↔ `Value` y
@@ -75,9 +75,9 @@ El `.so` sigue quedando en `runtime/logic_mem/build/`, que es donde lo busca
 ## Alcance actual
 
 Punteros, `&` y **move-semantics** funcionan de punta a punta por este backend
-(361 tests verde con el nativo por defecto). Las **regiones (RBMM)** se
-construyen ENCIMA de estas primitivas — es el siguiente paso, deliberadamente
-después de validar que los punteros son reales y manejables.
+(361 tests verde con el nativo por defecto). El **drop automático** y las
+**arenas** se construyen ENCIMA de estas primitivas — es el siguiente paso,
+deliberadamente después de validar que los punteros son reales y manejables.
 
 > Mapa de visibilidad (mismo modelo que el lenguaje): archivo = `private`,
 > módulo = `internal`, API pública = `public`.

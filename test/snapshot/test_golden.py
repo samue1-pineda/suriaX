@@ -116,7 +116,7 @@ def test_esquema_hir_compila_y_su_version_es_estable():
     except ImportError:
         return
     from src.HIR.emmit_IR import SCHEMA_VERSION
-    assert SCHEMA_VERSION == 1, (
+    assert SCHEMA_VERSION == 2, (
         f"schema_version cambió a {SCHEMA_VERSION}: actualiza los lectores "
         "(runtime/interpreter/loader.SUPPORTED_SCHEMA_VERSIONS y el lector C++)"
     )

@@ -102,6 +102,180 @@ def test_use_after_move_campo_por_mover_la_variable():
     )
 
 
+# --- propiedad: 'free' termina la propiedad igual que 'move' ---------------- #
+# La misma pasada lineal rastrea las dos, porque son las dos formas que tiene
+# el lenguaje de terminar una propiedad. Lo que cambia es el MOTIVO, y el
+# motivo decide el diagnóstico: recuperarse de un 'move' es posible (el valor
+# vive en el nuevo dueño), de un 'free' no.
+
+def test_use_after_free():
+    assert_has_code(
+        "fn f() -> void { var int x = 1; var int ptr p = &x; free p; "
+        "var int ptr q = p; };",
+        "SEM023",
+    )
+
+
+def test_double_free():
+    assert_has_code(
+        "fn f() -> void { var int x = 1; var int ptr p = &x; free p; free p; };",
+        "SEM024",
+    )
+
+
+def test_free_de_algo_ya_movido_es_use_after_move():
+    """El motivo manda sobre la operación: 'p' se movió, así que ya no es suyo
+    para liberarlo — lo liberará su nuevo dueño. No es un doble free."""
+    assert_has_code(
+        "fn f() -> void { var int x = 1; var int ptr p = &x; move p; free p; };",
+        "SEM004",
+    )
+
+
+def test_move_de_algo_ya_liberado_es_use_after_free():
+    """Y al revés: mover algo destruido es usarlo, no un doble move."""
+    assert_has_code(
+        "fn f() -> void { var int x = 1; var int ptr p = &x; free p; move p; };",
+        "SEM023",
+    )
+
+
+def test_free_en_una_rama_invalida_despues_del_if():
+    """Unión conservadora, igual que 'move': liberado en ALGUNA rama significa
+    liberado después. Prefiere el falso positivo cero al falso negativo."""
+    assert_has_code(
+        "fn f(bool c) -> void { var int x = 1; var int ptr p = &x; "
+        "if (c) { free p; }; var int ptr q = p; };",
+        "SEM023",
+    )
+
+
+def test_liberar_un_campo_no_toca_al_hermano():
+    """'free o.a' invalida ese campo y lo que cuelga de él, nunca al padre ni
+    a sus hermanos (mismo criterio que 'move')."""
+    assert_ok(
+        "struct { int ptr a; int ptr b; } P;\n"
+        "fn f() -> void { var int n = 1; var P p = P{ a: &n, b: &n }; "
+        "free p.a; var int ptr x = p.b; };"
+    )
+
+
+def test_reasignar_revive_un_valor_liberado():
+    """Un valor NUEVO en el mismo nombre no está liberado: el binding revive,
+    igual que tras un 'move'."""
+    assert_ok(
+        "fn f() -> void { var int x = 1; var int ptr p = &x; free p; "
+        "p = &x; var int ptr q = p; };"
+    )
+
+
+# --- consolidación del struct: lo que un tipo NO puede ser ------------------ #
+
+def test_un_struct_no_puede_contenerse_por_valor():
+    """``struct { S s; } S;`` no cabe en ninguna cantidad de memoria."""
+    assert_has_code("struct { S s; int n; } S;", "SEM026")
+
+
+def test_la_recursion_mutua_por_valor_tambien_es_infinita():
+    assert_has_code("struct { B b; } A;\nstruct { A a; } B;", "SEM026")
+
+
+def test_un_ciclo_de_tres_structs_se_detecta():
+    assert_has_code("struct { B b; } A;\nstruct { C c; } B;\n"
+                    "struct { A a; } C;", "SEM026")
+
+
+def test_un_nullable_de_si_mismo_tambien_es_infinito():
+    """``S?`` guarda una ``S`` por valor: el envoltorio no cambia el tamaño."""
+    assert_has_code("struct { S? sig; int v; } S;", "SEM026")
+
+
+def test_un_puntero_a_si_mismo_es_valido():
+    """La recursión legítima se escribe con un puntero: se REFIERE en vez de
+    contener, y ahí sí hay tamaño conocido. Es la misma distinción que decide
+    la propiedad."""
+    assert_ok("struct { S ptr sig; int v; } S;")
+
+
+def test_void_no_puede_ser_el_tipo_de_un_campo():
+    assert_has_code("struct { void v; } S;", "SEM025")
+
+
+def test_void_no_puede_ser_el_tipo_de_una_variable():
+    assert_has_code("fn f() -> void { var void x; };", "SEM025")
+
+
+def test_void_no_puede_ser_el_tipo_de_un_parametro():
+    """Las tres posiciones de valor se comprueban en un solo punto
+    (``TypeBinder.bind``), y por eso ninguna se queda sin cubrir."""
+    assert_has_code("fn f(void x) -> void { };", "SEM025")
+
+
+def test_void_si_es_valido_como_retorno():
+    assert_ok("fn f() -> void { };")
+
+
+def test_un_puntero_a_void_es_valido():
+    """``void ptr`` es una dirección sin tipo, no un valor de tipo ``void``."""
+    assert_ok("struct { void ptr p; } S;")
+
+
+def test_un_literal_incompleto_se_rechaza():
+    """Sin valores por defecto, un campo que el literal no escribe no existe
+    en el valor: leerlo reventaba en runtime, lejos de la causa."""
+    assert_has_code("struct { int a; int b; } P;\n"
+                    "fn f() -> void { var P p = P{ a: 1 }; };", "SEM028")
+
+
+def test_un_literal_completo_no_reporta_nada():
+    assert_ok("struct { int a; int b; } P;\n"
+              "fn f() -> void { var P p = P{ a: 1, b: 2 }; };")
+
+
+def test_el_valor_de_un_campo_tiene_que_ser_de_su_tipo():
+    assert_has_code("struct { int a; } P;\n"
+                    "fn f() -> void { var P p = P{ a: \"x\" }; };", "AST006")
+
+
+def test_null_en_un_campo_no_nullable_se_rechaza():
+    assert_has_code("struct { int ptr p; } S;\n"
+                    "fn f() -> void { var S s = S{ p: null }; };", "AST006")
+
+
+def test_null_en_un_campo_nullable_si_pasa():
+    assert_ok("struct { int ptr? p; } S;\n"
+              "fn f() -> void { var S s = S{ p: null }; };")
+
+
+def test_escribir_un_campo_con_otro_tipo_se_rechaza():
+    """``p.x = "a"`` cruzaba el frontend entero: la rama del ``Identifier``
+    comprobaba el tipo del valor y la del campo no."""
+    assert_has_code("struct { int x; } P;\n"
+                    "fn f(P ptr mutable p) -> void { p.x = \"a\"; };", "AST006")
+
+
+def test_escribir_un_elemento_con_otro_tipo_se_rechaza():
+    """El tipo admitido lo dice ``__index_set__``, no ``__index__``."""
+    assert_has_code(
+        "struct { int n; } V;\n"
+        "hook fn __index_set__(V ptr mutable v, int i, int x) -> void { };\n"
+        "fn f(V ptr mutable v) -> void { v[0] = \"a\"; };", "AST006")
+
+
+def test_escribir_un_elemento_de_su_tipo_si_pasa():
+    assert_ok("struct { int n; } V;\n"
+              "hook fn __index_set__(V ptr mutable v, int i, int x) -> void { };\n"
+              "fn f(V ptr mutable v) -> void { v[0] = 1; };")
+
+
+def test_un_enum_inicializa_un_int():
+    """Los items de un enum son enteros (estilo C). Pasarlo como ARGUMENTO ya
+    valía; inicializar y asignar no — la misma pregunta con tres respuestas
+    distintas. Ahora las cuatro posiciones comparten predicado."""
+    assert_ok("enum Color { ROJO, VERDE };\n"
+              "fn f() -> void { var int n = Color.VERDE; n = Color.ROJO; };")
+
+
 def test_addr_of_sobre_temporal():
     assert_has_code(
         "fn f() -> void { var int a = 1; var int ptr p = &(a + 1); };", "SEM013",
@@ -170,7 +344,20 @@ def test_argumento_nominal_incorrecto():
 
 
 def test_cast_sin_conversion_nativa():
-    assert_has_code("fn f() -> void { var str s = cast<str>(5); };", "SEM016")
+    """``int -> bool`` no es un par nativo: la vuelta (``bool -> int``) sí,
+    pero decidir qué entero es 'verdadero' es una convención, no una
+    conversión."""
+    assert_has_code("fn f() -> void { var bool b = cast<bool>(5); };", "SEM016")
+
+
+def test_cast_a_str_si_es_nativo():
+    """Todo primitivo tiene forma de texto —la que ya interpolaba un
+    f-string—, así que ``cast<str>`` no puede fallar y no necesita hook."""
+    assert_ok("fn f() -> void {\n"
+              "    var str a = cast<str>(5);\n"
+              "    var str b = cast<str>(1.5);\n"
+              "    var str c = cast<str>(true);\n"
+              "    var str d = cast<str>('z');\n};")
 
 
 def test_cast_a_nominal_sin_hook():
@@ -178,6 +365,39 @@ def test_cast_a_nominal_sin_hook():
         "const type int8;\nfn f() -> void { var int8 b = cast<int8>(1); };",
         "SEM016",
     )
+
+
+# El inicializador de un 'type_decl' NO lo visitaba ninguna pasada: 'ast.TypeDecl'
+# faltaba en el despacho del scope_resolver y 'visit_stmt' ignora en silencio lo
+# que no tiene handler. Un nombre inexistente cruzaba el frontend entero y solo
+# lo veia el runtime (RT006, "brecha del analisis estatico").
+
+def test_inicializador_de_type_decl_resuelve_sus_nombres():
+    assert_has_code("const type Bloque = _no_existe(4);", "SEM001")
+
+
+def test_inicializador_de_type_decl_tambien_dentro_de_una_funcion():
+    """El inicializador de un 'type' ANIDADO tambien pasa por la Semantica."""
+    assert_has_code("fn f() -> void { const type L = _no_existe(1); };", "SEM001")
+
+
+def test_inicializador_de_type_decl_debe_producir_un_tipo():
+    """'type' es un metatipo: inicializarlo con un valor normal es AST006."""
+    assert_has_code("const type Malo = 5;", "AST006")
+
+
+def test_type_decl_con_inicializador_valido_compila_limpio():
+    """El otro lado del contrato: una 'fn ... -> type' SI es un inicializador
+    valido, y el arreglo no puede convertirlo en un falso positivo."""
+    assert_ok("fn entero_de(int bits) -> type;\nconst type int8 = entero_de(8);")
+
+
+def test_type_decl_sin_inicializador_sigue_limpio():
+    assert_ok("const type int8;")
+
+
+def test_un_type_en_el_nivel_superior_sigue_siendo_valido():
+    assert_ok("const type int8;\nfn f() -> void { const int8 x; };")
 
 
 # --------------------------------------------------------------------------- #
@@ -396,37 +616,29 @@ def test_visibilidad_en_declaraciones_top_level_es_valida():
 
 
 # --------------------------------------------------------------------------- #
-# regiones (modelo híbrido): resolución y vida
+# memoria: las construcciones de región ya no son del lenguaje (v0.2.0)
 # --------------------------------------------------------------------------- #
 
-def test_delete_sin_argumento_fuera_de_region():
-    assert_has_code("fn f() -> void { delete(); };", "SEM020")
+def test_un_bloque_de_region_ya_no_parsea():
+    """No hay que dejar que 'region r { }' siga COMPILANDO por accidente: si
+    algún día 'region' vuelve a ser una sentencia, tiene que ser a propósito.
+    Hoy es un identificador seguido de un bloque, que no es sintaxis válida."""
+    assert error_codes("fn f() -> void { region r { var int x = 1; }; };"), \
+        "'region r { }' deberia dejar de parsear"
 
 
-def test_delete_sin_argumento_dentro_de_region_es_valido():
-    assert_ok("fn f() -> void { na region r { delete(); }; };")
+def test_las_operaciones_de_region_ya_no_parsean():
+    for fuente in ("new(shrd region c);",
+                   "delete(region c);",
+                   "in region c: return;",
+                   "move region a -> region b;"):
+        assert error_codes(f"fn f() -> void {{ {fuente} }};"), \
+            f"'{fuente}' deberia dejar de parsear"
 
 
-def test_move_region_inexistente():
-    assert_has_code(
-        "fn f() -> void { move region fantasma -> region otra; };", "SEM012")
-
-
-def test_in_region_inexistente():
-    assert_has_code("fn f() -> void { in region fantasma: return; };", "SEM012")
-
-
-def test_na_region_persiste_para_delete_externo():
-    """Una 'na region' NO se auto-libera: su nombre vive tras el bloque."""
-    assert_ok("fn f() -> void { na region r { var int x = 1; }; "
-              "delete(region r); };")
-
-
-def test_region_normal_no_escapa_de_su_bloque():
-    """Una región normal (no 'na') vive solo en su bloque: referenciarla
-    después es 'no declarada' (SEM012)."""
-    assert_has_code("fn f() -> void { region r { var int x = 1; }; "
-                    "delete(region r); };", "SEM012")
+def test_la_colocacion_at_ya_no_parsea():
+    assert error_codes("fn f() -> void { var int x = (1 * 2) at r; };"), \
+        "'expr at r' deberia dejar de parsear"
 
 
 # --------------------------------------------------------------------------- #

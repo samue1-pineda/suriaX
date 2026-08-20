@@ -72,7 +72,7 @@ def _methods_by_owner(table: SymbolTable) -> Dict[str, List[str]]:
     out: Dict[str, List[str]] = {}
     for (owner, _name), sym in table.dunders.items():
         out.setdefault(owner.rsplit(".", 1)[-1], []).append(_method_line(sym))
-    for (owner, _kind), sym in table.hooks.items():
+    for (owner, _kind, _name), sym in table.hooks.items():
         out.setdefault(owner.rsplit(".", 1)[-1], []).append(_method_line(sym))
     return out
 

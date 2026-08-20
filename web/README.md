@@ -83,14 +83,15 @@ codegen, no en runtime:
 | `WEB002` | `ptr T`, `ptr mutable T` | JS no tiene direcciones. |
 | `WEB003` | `&x` | Produce un puntero. |
 | `WEB004` | `free x;` | La memoria la gestiona el runtime de JS. |
-| `WEB005` | `__free__`, `__make__`, `__sizeof__` | Dependen del runtime nativo. |
+| `WEB005` | `__free__`, `__sizeof__` | Dependen del runtime nativo. |
 | `WEB006` | `move x;` | Exige invalidación en runtime, aún no implementada. |
 | `WEB007` | Cualquier librería que no sea `IO` | Ver abajo. |
 | `WEB008` | `sizeof(T)` | Depende del layout nativo. |
 | `WEB900`/`WEB901` | `.phir` ilegible / nodo malformado | Errores del lector. |
 
-RBMM (`region`, `make T in r`, `x at r`) no aparece porque **no llega**: el
-emisor del frontend ya lo rechaza con `HIR005`.
+Las construcciones de región no aparecen porque **ya no existen**: se
+retiraron del lenguaje en la v0.2.0. El target web no conoce el modelo de
+memoria — recibe el HIR ya resuelto.
 
 ### Librerías: solo `IO`
 
@@ -230,7 +231,7 @@ python test/main.py                        # las corre también desde la suite d
 
 Tres niveles, y cada uno cubre lo que los otros no pueden:
 
-1. **`web/test/`** — el lector contra `.phir` reales, la ida y vuelta del
+1. **`test/web/`** — el lector contra `.phir` reales, la ida y vuelta del
    re-serializador, y el codegen **ejecutando** lo que genera (el propio motor
    de WebAssembly es el mejor validador de un binario).
 2. **`test/unit/test_web_backend.py`** — engancha la suite de TS a la del repo

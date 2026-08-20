@@ -26,10 +26,11 @@ from typing import Dict, Tuple
 # el paquete se ejecuta con la raiz del repo y V0/ en sys.path (main.py de
 # este directorio los inserta, igual que V0/main.py).
 from V0.src.HIR.stubs import load_hir_pb2
+from .values import VariantCtor
 
 #: versiones de esquema que este lector sabe interpretar. Un HIR de una
 #: version futura se RECHAZA (fail-fast) en vez de mal-interpretarse.
-SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({1})
+SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({2})
 
 
 class HIRLoadError(RuntimeError):
@@ -64,13 +65,17 @@ def load_module(path: str):
     return module
 
 
-def index_hooks(module) -> Dict[Tuple[str, int], object]:
-    """``Module.symbols.hooks`` -> ``{(owner_type, HookKind): Symbol}``.
+def index_hooks(module) -> Dict[Tuple[str, int, str], object]:
+    """``Module.symbols.hooks`` -> ``{(owner_type, HookKind, nombre): Symbol}``.
 
     El mismo re-enlace O(1) que la Semántica hace en Python y que hará el
-    lector C++: cada ``HookRef`` del árbol se resuelve contra este dict.
+    lector C++: cada ``HookRef`` del árbol se resuelve contra este dict. La
+    clave la construye ``hook/dispatch.hook_key`` — un solo sitio decide qué
+    identifica a un hook (ver allí: el vocabulario ya no es cerrado).
     """
-    return {(h.owner_type, h.kind): h.symbol for h in module.symbols.hooks}
+    from .hook.dispatch import hook_key
+    return {hook_key(h.owner_type, h.kind, h.hook_name): h.symbol
+            for h in module.symbols.hooks}
 
 
 # ---------------------------------------------------------------------- #
@@ -116,15 +121,23 @@ class Unit:
             elif which == "test_decl":
                 self.tests.append(decl.test_decl)
             elif which == "enum_decl":
-                values: Dict[str, int] = {}
+                nombre_enum = decl.enum_decl.name
+                values: Dict[str, object] = {}
                 next_value = 0
                 for item in decl.enum_decl.items:
+                    if item.payload_type_ids:
+                        # variante con PAYLOAD: no es un entero sino algo que
+                        # se invoca. La aridad viene del esquema, asi que el
+                        # interprete no tiene que consultar la declaracion.
+                        values[item.name] = VariantCtor(
+                            nombre_enum, item.name, len(item.payload_type_ids))
+                        continue
                     if item.HasField("value") and \
                             item.value.WhichOneof("node") == "literal":
                         next_value = int(item.value.literal.int_value)
                     values[item.name] = next_value
                     next_value += 1
-                self.enum_values[decl.enum_decl.name] = values
+                self.enum_values[nombre_enum] = values
 
 
 class Image:

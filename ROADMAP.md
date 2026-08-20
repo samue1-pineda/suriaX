@@ -1,7 +1,11 @@
 # Roadmap de suriaX
 
-> Estado global: **V.0.1.4 (Pre-Alpha)**
-> interprete funcional, RBMM incompleto y llamadas a c++(pybind11) para memoria
+> Estado global: **Pre-Alpha — "Dejando las arenas movedizas sin dueño"**
+> (la version publicada es la medalla del [README](README.md), que sale de
+> `version.py`)
+> interprete funcional, modelo de memoria por **ownership** (las regiones se
+> retiraron: ver [el registro de la decisión](documentation/source/memory_decision.rst))
+> y llamadas a c++(pybind11) para memoria
 
 ---
 
@@ -10,7 +14,9 @@
 - Filosofía libsrX (pocos tokens, librerías nativas)[x]
 - Sintaxis base y conjunto de tokens. [x]
 - Gramática EBNF objetivo ([docs/gramar/grammar.ebnf](docs/gramar/grammar.ebnf))[x]
-- Modelo de memoria definido: **region-based + move-semantics** [/]
+- Modelo de memoria definido: **ownership + drop + arenas explícitas** [x]
+  (v0.2.0; reemplaza a *region-based*, retirado por no poder verificarse —
+  ver `documentation/source/memory_decision.rst`)
 - Definicion del ErrorHandler  y version preeliminar de los errores [x] 
 
 
@@ -34,27 +40,36 @@
 
 ## Fase 3: Sistema de tipos  
 
-> **Type-system óptimo para region-based + move-semantics:***`todavia no definido `*
+> **Type-system para ownership + move-semantics:** nominal y estático, sin
+> extensiones especiales. Al retirar las regiones desapareció el requisito que
+> nunca se pudo definir —el polimorfismo de región en las firmas—: la propiedad
+> se verifica sobre el flujo del cuerpo, no sobre el tipo de la función.
 > No se usara Hindley-Milner(HM) debido a la complejidad del sistema de tipado, choques con el futuro manejo de memoria y choque con el enfoque educativo 
 
 ## Fase 4: Semántica y modelo de memoria  
 
 - Resolución de símbolos y scopes [x]
--  Verificación de **regiones**: pertenencia, anidamiento, no-escape de
-  referencias fuera de su región [/] (pertenencia y escape obvio por scopes;
-  escapes inter-función se difieren al MIR — `semantic/ARQUITECTURA.md` secc. 4)
+-  Verificación de **propiedad**: `free` invalida el valor al compilar, doble
+  liberación [x] (`SEM023`/`SEM024`, mismo mecanismo lineal que `move`)
+-  **Drop automático** al cerrar el ámbito (invoca `__free__` del tipo) [x]
+  (`scope_resolver` anota los puntos, viajan en el HIR, el intérprete los
+  ejecuta contra el estado de la celda; incluye el drop de CAMPOS, aplanado
+  por el frontend en rutas concretas)
 -  Verificación de **move-semantics**: uso-tras-move, doble move [/]
   (lineal, intra-función, sin punto fijo — deliberado, ídem secc. 4)
 - Reglas de `mutable`/`const`, `null`/nullable (`?`), punteros (`ptr`/`&`) [x]
-- Hooks de tipo dunder con despacho enlazado: `__free__`/`__make__`/
-  `__sizeof__`/`__print__`/`__len__` [x]
+- Hooks de tipo dunder con despacho enlazado: `__free__`/`__sizeof__`/
+  `__print__`/`__len__`/`__cast__`/`__index__`/`__index_set__`/`__eq__`/
+  `__min__`/`__max__` [x]
 - `#test sem` (visualización de símbolos/diagnósticos) [x]
 
 ## Fase 5: HIR (protobuf)
 
-> Alcance v1 (deliberado): **sin RBMM** — `region`/`shrd`, `make T in r` y
-> `x at r` se RECHAZAN fail-fast (`HIR005`) y sus tags quedan `reserved`
-> para reintroducirlos sin romper el esquema. **move-semantics SÍ viaja**
+> Las construcciones de región (`region`/`shrd`, `make T in r`, `x at r`)
+> nunca viajaron: se rechazaban fail-fast (`HIR005`) y sus tags quedaron
+> `reserved`. Con su retiro en v0.2.0 el rechazo deja de hacer falta —ya no
+> existen en el lenguaje— y los tags siguen reservados por si alguna vez
+> vuelven. **move-semantics SÍ viaja**
 > (`MoveStmt`/`moved_at`: el runtime la hace cumplir). Las **reglas de
 > punteros viajan**: `Type.mut` (`ptr mutable T` vs `ptr T`) y el nodo
 > dedicado `AddrOf` con la mutabilidad resuelta (`var`→mut, `const`→no-mut).
@@ -84,7 +99,7 @@
 ## Fase 5.5: Intérprete tree-walk (consume HIR)
 
 > Ejecuta el **HIR** para ver salidas reales y probar librerías sin el backend
-> C++/LLVM. Consume el mismo contrato que el backend nativo — el HIR es la
+> C++. Consume el mismo contrato que el backend nativo — el HIR es la
 > costura de desacople (regla no negociable de `docs/propuesta_vm_bytecode.md`).
 > Queda como oráculo de *differential testing*. Diseño completo y orden de
 > implementación en
@@ -103,33 +118,39 @@
   → `__cast__` por par origen→destino) (`hook/dispatch.py`) [x]
 - Module linker: ligar N unidades HIR (main + `.libsrx`), transitivo
   (`loader.load_image`) [x]
-- Modelo de memoria en runtime SIN RBMM: celdas, `&`/deref implícito,
+- Modelo de memoria en runtime: celdas, `&`/deref implícito,
   `move` con invalidación (RT001/RT002), `free`/use-after-free (RT003),
   `--trace-memory` (`memory/pointer.py`) [x]
-- Arenas por región (RBMM) — requiere HIR v2 [ ]
+- Drop automático al cerrar el ámbito (llamada a `__free__` del tipo) [x]
+- Arenas como **tipo de librería** (una fábrica normal más `__free__`, sin
+  sintaxis dedicada) — requiere structs ejecutables [ ]
 - Target `interp` en `compilerconfig` + CLI `--run` (V0/main.py llama a
   `runtime/interpreter/main.py --exec` en proceso) [x]
-- Structs ejecutables (`__make__`/instanciación), vectores, `#extern` [ / ]
+- Structs ejecutables (instanciación por fábrica de librería), vectores,
+  `#extern` [ / ]
 
 ## Fase 6: Backend C++ 
 
 - Lector de HIR en C++ [ ]
 - **MIR lowering**: control de flujo explícito; verificación final de
-  regiones/move sobre el MIR [ ]
-- Generación de **LLVM IR** [ ]
+  propiedad y **préstamos** (tiempos de vida de `ptr`) sobre el MIR [ ]
+- **VM de bytecode + JIT**: el target NATIVO estándar (LLVM queda fuera del
+  plan: el MIR ya es un IR de registros con CFG, y meter LLVM en medio añadía
+  una dependencia enorme y un segundo modelo de máquina antes de tener el
+  primero funcionando) [ ]
 - Targets por `compilerconfig`: `IS_WEB`→wASM, `IS_WIN32`→.exe, `IS_LINUX`→.o [ ]
 - **Linker** por plataforma (Linux web y Windows) [ ]
 - Integración del C++ de `#extern cpp{}` vía bindings (pybind11) [ ]
-- `#test mir` / `#test llvm` (volcado de cada IR) [ ]
+- `#test mir` / `#test bytecode` (volcado de cada IR) [ ]
 
 ## Fase 7: Visualizaciones integradas  
 
 >para debugging se desarrollaran algunas visualizaciones pero la version final y pulida espera a la version web
 
-- Volcado por etapa: **tokens, AST, HIR, MIR, LLVM-IR** [ / ]
+- Volcado por etapa: **tokens, AST, HIR, MIR, bytecode** [ / ]
 - Formatos: texto, **JSON** (consumible por herramientas) y **DOT/Graphviz**
   (árboles y CFG) [ / ]
-- Visualización del **CFG** del MIR y del flujo de regiones/move [ ]
+- Visualización del **CFG** del MIR y del flujo de propiedad (`move`/drop) [ ]
 - `suriaX inspect <archivo> --stage <fase>`[x]
 - Vista interactiva paso a paso del pipeline[ ]
 

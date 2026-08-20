@@ -1,8 +1,9 @@
 """Scanner de operadores y delimitadores.
 
 Reconoce simbolos de uno y dos caracteres. Los de dos caracteres
-(``==``, ``!=``, ``<=``, ``>=``, ``->``) requieren mirar el siguiente code point
-antes de decidir el token.
+(``==``, ``!=``, ``<=``, ``>=``, ``->``, ``+=``/``-=``/``*=``/``/=``/``%=``,
+``++``, ``--``) requieren mirar el siguiente code point antes de decidir el
+token, y se prueban ANTES que los de uno.
 
 Los comentarios (``//``, ``/- -/``) NO se manejan aqui: el dispatcher del
 lexer los intercepta antes de llegar a este scanner (ver ``lexer.py``).
@@ -24,6 +25,7 @@ _SINGLE = {
     "-": TokenType.MINUS,
     "*": TokenType.MULTIPLY,
     "/": TokenType.DIVIDE,
+    "%": TokenType.MODULO,
     "(": TokenType.L_PAREN,
     ")": TokenType.R_PAREN,
     "{": TokenType.L_BRACE,
@@ -48,6 +50,18 @@ _DOUBLE = {
     ("<", "="): TokenType.LESS_EQUAL,
     (">", "="): TokenType.GREATER_EQUAL,
     ("-", ">"): TokenType.ARROW,     # -> (tipo de retorno de funcion)
+    # AZUCAR: la asignacion compuesta y el incremento son tokens propios pero
+    # NO llegan al AST — el parser los desazucara ('n += 2' -> 'n = n + 2').
+    # Se reconocen aqui, y no como dos tokens sueltos, porque '+' seguido de
+    # '=' tiene que ser UN operador: si no, '+=' parsearia como '+' aplicado a
+    # una asignacion y el error no diria nada del operador que se escribio.
+    ("+", "="): TokenType.PLUS_ASSIGN,
+    ("-", "="): TokenType.MINUS_ASSIGN,
+    ("*", "="): TokenType.STAR_ASSIGN,
+    ("/", "="): TokenType.SLASH_ASSIGN,
+    ("%", "="): TokenType.PERCENT_ASSIGN,
+    ("+", "+"): TokenType.INCREMENT,
+    ("-", "-"): TokenType.DECREMENT,
 }
 
 

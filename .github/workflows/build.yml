@@ -1,92 +1,173 @@
-name: CI
+name: Binarios
+
+# Construye lo NATIVO y arma el paquete distribuible. Nada más: no publica, no
+# etiqueta, no crea releases — eso es 'release.yml', que llama a este.
+#
+# Está separado de 'release.yml' para que el empaquetado se pruebe en CADA
+# push, y no la primera vez que alguien empuja una etiqueta. Un release que
+# falla al construir es un release que ya no se puede repetir con el mismo
+# número; que falle antes es gratis.
+#
+# 'workflow_call' es lo que evita duplicar estos pasos en el workflow de
+# release: hay UNA definición de cómo se construye suriaX.
 
 on:
   push:
-    branches:
-      - main
-      - master
-    tags:
-      - "v*"
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "CMake/**"
+      - "runtime/**"
+      - "version.py"
+      - ".github/workflows/build.yml"
   pull_request:
+    paths:
+      - "CMakeLists.txt"
+      - "CMake/**"
+      - "runtime/**"
+      - "version.py"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Versión que se está empaquetando (la lee de version.py si se omite)"
+        required: false
+        type: string
+    outputs:
+      version:
+        description: "Versión empaquetada"
+        value: ${{ jobs.empaquetar.outputs.version }}
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-
+  nativo:
+    name: Módulos nativos (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Preparar Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
-          cache: "pip"
-        
-      - name: Install System dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler 
-        
-      - name: Check protoc
-        run: |
-          protoc --version
-      - name: Install dependencies
+          python-version: "3.12"
+
+      - name: Dependencias de compilación
         run: |
           python -m pip install --upgrade pip
-          pip install pyyaml
-          pip install protobuf
+          pip install pybind11
 
-        
+      # El único CMakeLists del repo descubre solo los módulos de runtime/:
+      # añadir uno nuevo no toca este workflow.
+      - name: Configurar
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Smoke test
-        run: |
-          cat > /tmp/smoke.srcx <<'EOF'
-          #test lexer
-          int x = 1;
-          EOF
-          python V0/main.py /tmp/smoke.srcx
+      - name: Construir
+        run: cmake --build build --config Release -j
 
-      - name: Run basic tests
-        run: |
-          python test/main.py 
+      # Que compile no basta: el módulo tiene que poder CARGARSE desde Python,
+      # que es como lo consume 'runtime/cxx_api.py'.
+      - name: El módulo carga
+        run: python -c "from runtime import cxx_api; print(cxx_api.__name__, 'ok')"
 
-      - name: Package preview release
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          mkdir -p dist
-          tar -czf dist/suriax-preview-linux.tar.gz \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='dist' \
-            .
-
-      - name: Upload artifact
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Guardar los módulos
         uses: actions/upload-artifact@v4
         with:
-          name: suriax-preview-linux
-          path: dist/suriax-preview-linux.tar.gz
+          name: nativo-${{ matrix.os }}
+          path: |
+            runtime/**/build/*.so
+            runtime/**/build/*.dylib
+            runtime/**/build/*.pyd
+          if-no-files-found: error
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+  empaquetar:
+    name: Paquete distribuible
+    needs: nativo
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Download artifact
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # La versión sale de 'version.py', su fuente única. El input existe solo
+      # para que el release pueda afirmar cuál cree estar publicando y que
+      # esto lo contradiga si no coinciden.
+      - name: Versión
+        id: version
+        run: |
+          v=$(python -c "import version; print(version.VERSION)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          esperada="${{ inputs.version }}"
+          if [ -n "$esperada" ] && [ "$esperada" != "$v" ]; then
+            echo "la etiqueta dice v$esperada y version.py dice $v" >&2
+            echo "sube la versión en version.py (es la fuente única) antes de etiquetar" >&2
+            exit 1
+          fi
+          echo "empaquetando suriaX $v"
+
+      - name: Recuperar los módulos nativos
         uses: actions/download-artifact@v4
         with:
-          name: suriax-preview-linux
-          path: dist
+          path: nativo
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Armar el paquete
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          raiz="suriax-$v"
+          mkdir -p "dist/$raiz"
+          # Lo que hace falta para COMPILAR Y EJECUTAR, y nada más: ni el
+          # historial, ni las pruebas, ni los volcados de trabajo.
+          for d in V0 runtime lib config htims docs documentation/source; do
+            [ -e "$d" ] && cp -r --parents "$d" "dist/$raiz/"
+          done
+          cp version.py LICENSE README.md README_ES.md FLAGS.md how_to_run.md \
+             ARCHITECTURE.md CMakeLists.txt "dist/$raiz/"
+          cp -r CMake "dist/$raiz/"
+          mkdir -p "dist/$raiz/nativo" && cp -r nativo/* "dist/$raiz/nativo/" || true
+          # Restos de una construccion local: 'runtime/**/build/' son 12 MB de
+          # objetos y .so de OTRA maquina. En un checkout limpio no existen,
+          # pero si el runner reutiliza el arbol viajarian al paquete y
+          # taparian a los modulos nativos que si se construyeron aqui (que
+          # van aparte, en 'nativo/').
+          find "dist/$raiz" \( -name "__pycache__" -o -name "build" \) \
+               -type d -exec rm -rf {} + 2>/dev/null || true
+          tar -czf "dist/$raiz.tar.gz" -C dist "$raiz"
+          (cd dist && sha256sum "$raiz.tar.gz" > "$raiz.tar.gz.sha256")
+          ls -la dist/
+
+      # El paquete tiene que compilar un programa DESDE DENTRO, sin el repo
+      # alrededor. Es la diferencia entre "el tar existe" y "el tar sirve".
+      - name: El paquete funciona por sí solo
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          mkdir -p prueba && tar -xzf "dist/suriax-$v.tar.gz" -C prueba
+          cd "prueba/suriax-$v"
+          cat > hola.srcx <<'EOF'
+          #from io #import stdp
+          stdp.println("hola desde el paquete");
+          EOF
+          python V0/main.py hola.srcx
+          echo "el paquete compila por su cuenta"
+
+      - name: Guardar el paquete
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/suriax-preview-linux.tar.gz
-          draft: false
-          prerelease: true
+          name: paquete
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error

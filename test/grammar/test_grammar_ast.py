@@ -231,6 +231,15 @@ def test_match_case_con_dos_puntos():
     assert len(s.cases) == 1
 
 
+def test_match_case_con_dos_puntos_y_bloque():
+    """'case X: { ... }': la costumbre de C. El ':' sobra con llaves, pero
+    escribirlo no puede caer en 'token inesperado en expresion: L_BRACE' —
+    un bloque no es un 'statement' de la gramatica y ahi terminaba."""
+    s = _body("fn f() -> void { match (c) { case Rojo: { x = 1; }; } };")[0]
+    assert len(s.cases) == 1
+    assert isinstance(s.cases[0].body, ast.Block)
+
+
 def test_return_con_y_sin_valor():
     stmts = _body("fn f() -> void { return 1; };")
     assert isinstance(stmts[0], ast.ReturnStmt) and stmts[0].value is not None
@@ -256,7 +265,21 @@ def test_throw_stmt():
 def test_try_catch():
     s = _body("fn f() -> void { try { throw 1; } catch (e) { }; };")[0]
     assert isinstance(s, ast.TryStmt)
-    assert s.catch_name == "e", "el nombre del catch se liga en su bloque"
+    assert len(s.catches) == 1
+    assert s.catches[0].name == "e", "el nombre del catch se liga en su bloque"
+    assert s.catches[0].type is None, "'catch (e)' no filtra por tipo"
+
+
+def test_try_con_varios_catch_tipados():
+    """``catch (T e)``: cada rama filtra por tipo. El tipo es opcional y se
+    decide con un lookahead de un token — dentro de los paréntesis, un solo
+    nombre es el binding y dos cosas son tipo + binding."""
+    s = _body("fn f() -> void { try { throw 1; } "
+              "catch (Fallo f) { } catch (int n) { } catch (e) { }; };")[0]
+    assert len(s.catches) == 3
+    assert [c.name for c in s.catches] == ["f", "n", "e"]
+    assert s.catches[0].type is not None and s.catches[1].type is not None
+    assert s.catches[2].type is None
 
 
 def test_move_stmt():
@@ -395,7 +418,7 @@ def test_string_normal_no_interpola():
 
 
 # --------------------------------------------------------------------------- #
-# 'make' dejó de ser palabra clave (RBMM fuera del lenguaje v1)
+# 'make' dejó de ser palabra clave (se retiró con el modelo por regiones)
 # --------------------------------------------------------------------------- #
 
 def test_make_es_identificador_corriente():

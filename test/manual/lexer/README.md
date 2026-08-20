@@ -56,11 +56,12 @@ salida en consola
      (multilínea);
    - devuelve una `list[Token]` que termina siempre en un token `EOF`.
 
-3. **`Parser`** (`src/frontend/parser/parser.py`): por ahora *solo* recibe los
-   tokens y orquesta la directiva de prueba. Si el flujo empieza con
-   `#test lexer`, imprime el arreglo completo de tokens usando el `__repr__`
-   de `Token`. El análisis sintáctico real (descenso recursivo + Pratt) aún
-   no está implementado.
+3. **`Parser`** (`src/frontend/parser/parser.py`): aquí se usa *solo* para
+   orquestar la directiva de prueba. Si el flujo empieza con `#test lexer`,
+   imprime el arreglo completo de tokens usando el `__repr__` de `Token`. El
+   parser real (descenso recursivo + Pratt) está completo y es el que usa
+   `V0/main.py`; este script no lo ejercita a propósito, porque su objeto de
+   estudio es el lexer.
 
 ## La directiva `#test lexer`
 
@@ -152,30 +153,35 @@ Al final, `run_lexer.py` los lista:
 Códigos que el lexer puede producir hoy (definidos en
 `error_handler/lex_error.py`):
 
-| Código  | Situación                                              |
-|---------|--------------------------------------------------------|
-| LEX001  | carácter no reconocido                                 |
-| LEX002  | literal de carácter mal formado                        |
-| LEX003  | cadena/carácter sin cerrar                             |
-| LEX004  | comentario multilínea sin cerrar                       |
-| LEX005  | secuencia de escape inválida                           |
-| LEX007  | formato numérico inválido (p. ej. dos puntos)          |
-| LEX008  | byte UTF-8 inválido (en la decodificación)             |
-| LEX010  | directiva `#...` no reconocida                         |
-| LEX012  | literal de carácter vacío o con más de un code point   |
-| LEX013  | decorador `@` sin identificador válido                 |
-| LEX014  | bloque `#extern cpp{ ... }` sin cerrar                  |
+| Código  | Clase                            | Situación                                          |
+|---------|----------------------------------|----------------------------------------------------|
+| LEX001  | `UnexpectedCharacterError`       | Un carácter que no pertenece al alfabeto.          |
+| LEX002  | `InvalidTokenError`              | Una secuencia que no forma ningún token válido.    |
+| LEX003  | `UnterminatedStringError`        | Una cadena que no cierra antes del fin de línea.   |
+| LEX004  | `UnterminatedCommentError`       | Un comentario de bloque sin `-/`.                  |
+| LEX005  | `InvalidEscapeSequenceError`     | Un escape que no existe.                           |
+| LEX006  | `NumericLiteralOverflowError`    | Un número fuera del rango representable.           |
+| LEX007  | `InvalidNumberFormatError`       | Un literal numérico mal formado.                   |
+| LEX008  | `InvalidUnicodeCharacterError`   | Un *code point* no válido.                         |
+| LEX009  | `UnexpectedEOFError`             | El archivo termina a mitad de un token.            |
+| LEX010  | `InvalidDirectiveError`          | Un `#` seguido de algo que no es una directiva.    |
+| LEX011  | `InvalidIdentifierError`         | Un identificador que no cumple las reglas Unicode. |
+| LEX012  | `InvalidCharacterLiteralError`   | Un literal de carácter vacío o con más de uno.     |
+| LEX013  | `InvalidDecoratorError`          | Un `@` sin nombre válido detrás.                   |
+| LEX014  | `UnterminatedExternBlockError`   | Un `#extern cpp{` sin llave de cierre.             |
 
-> **Nota de mantenimiento:** la numeración de `lex_error.py` y la de la
-> documentación (`documentation/source/errors.rst`) **no coinciden** todavía
-> (p. ej. en la doc `LEX002 = UnterminatedString`, pero en el código
-> `LEX002 = InvalidToken`). Ver el apartado *Pendientes* más abajo.
+> Esta tabla y la de [`errors.rst`](../../../documentation/source/errors.rst)
+> salen del mismo `lex_error.py`, y una prueba de la suite comprueba que
+> ningún código del compilador se quede sin documentar.
 
-## Pendientes / decisiones abiertas
+## Volcar otras fases
 
-- **Renumeración de códigos LEX**: alinear `lex_error.py` con `errors.rst`.
-  Requiere decidir el mapeo final antes de tocar nada, porque hay referencias
-  cruzadas en la documentación.
-- **`#test` para otras fases** (`#test parser`, `#test hir`, ...): el
-  orquestador en `Parser.run_test_directive()` ya está preparado para
-  extenderse; hoy solo `lexer` está implementado.
+`#test` acepta hoy `lexer`, `parser`, `ast`, `sem` y `hir`, y lo mismo hace
+`--emit-stage` sin tocar el archivo:
+
+```bash
+python V0/main.py archivo.srcx --emit-stage parser
+```
+
+Este script se queda en el lexer a propósito: es el banco de pruebas de esa
+fase, no un segundo compilador.

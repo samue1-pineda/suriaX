@@ -18,6 +18,7 @@ Ver https://www.sphinx-doc.org/en/master/usage/configuration.html
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sys
@@ -34,8 +35,17 @@ GITHUB_TREE = "https://github.com/samue1-pineda/suriaX/tree/main"
 project = "suriaX"
 copyright = "2026, Samuel Pineda"
 author = "Samuel Pineda"
-release = "0.1.4"
-version = "0.1.4"
+
+# La versión se LEE de 'version.py' (raíz del repo), que es su fuente única.
+# Estaba escrita aquí a mano y en 'CMakeLists.txt' a mano, y los dos números
+# habían dejado de coincidir: el sitio publicado y el artefacto nativo decían
+# cosas distintas del mismo commit.
+_RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _RAIZ not in sys.path:
+    sys.path.insert(0, _RAIZ)
+from version import VERSION as release  # noqa: E402
+
+version = release
 
 # -- Configuración general ---------------------------------------------------
 
@@ -227,9 +237,11 @@ def _normalize(path: str) -> str:
     return "/".join(parts)
 
 
-#: Apéndices técnicos: se publican si su archivo está en el repositorio. El
-#: playground y el backend web viven fuera del control de versiones mientras
-#: cambian de forma, así que su documentación aparece o no según el checkout.
+#: Apéndices técnicos: se publican si su archivo está en el repositorio.
+#: La lista se resuelve contra el checkout en vez de darse por hecha: un
+#: subsistema puede documentarse antes de existir, o quedarse fuera de un
+#: paquete recortado, y ni una cosa ni la otra debe romper la construcción
+#: del sitio.
 APPENDICES: tuple[tuple[str, str], ...] = (
     ("repo/protobuf_bridge", "El puente protobuf en detalle"),
     ("repo/interpreter_internals", "Interioridades del intérprete"),

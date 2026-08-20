@@ -50,11 +50,8 @@ from .control_flow import (
 )
 from .directives import parse_from_dir, parse_import_dir
 from .errors import parse_throw_stmt, parse_try_stmt
-from .memory import (
-    parse_delete_stmt, parse_free_stmt, parse_in_region_stmt, parse_move_stmt,
-    parse_new_stmt, parse_region_stmt, starts_region,
-)
-from .types import parse_type
+from .memory import parse_free_stmt, parse_move_stmt
+from .types import parse_type, parse_type_params
 
 
 def parse_statement(cursor: Cursor, ctx: ParserContext,
@@ -163,6 +160,20 @@ def parse_var_decl(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
         return parse_type_decl(cursor, ctx, start_tok, qualifier)
 
     type_expr = parse_type(cursor, ctx)
+    # 'const a = ...': lo que se leyo como TIPO era en realidad el nombre, y
+    # falta la anotacion. Sin este caso el error hablaba de un nombre que
+    # falta ("se esperaba IDENTIFIER, se encontro ASSIGN") justo despues de
+    # haberse comido el nombre que si estaba — el diagnostico apuntaba al
+    # sintoma y no a la causa.
+    if cursor.check(TokenType.ASSIGN) and isinstance(
+            type_expr, ast.NominalTypeExpr):
+        raise ParseError.MissingTypeAnnotationError(
+            f"falta el tipo de '{type_expr.name}': en suriaX un binding se "
+            f"anota siempre. Escribe '{qualifier or 'var'} <tipo> "
+            f"{type_expr.name} = ...' (no hay inferencia de tipos: el tipo de "
+            "una variable se lee sin ejecutar el compilador en la cabeza)",
+            line=type_expr.ln, column=type_expr.col,
+        )
     name_tok = cursor.expect_name()
 
     value = None
@@ -187,6 +198,7 @@ def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
         start_tok = cursor.peek()
     cursor.expect(TokenType.TYPE)
     name_tok = cursor.expect_name()
+    params = parse_type_params(cursor, ctx)
 
     value = None
     if cursor.match(TokenType.ASSIGN):
@@ -196,7 +208,8 @@ def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
 
     cursor.expect(TokenType.SEMICOLON)
     return ast.TypeDecl(ln=start_tok.ln, col=start_tok.col,
-                        qualifier=qualifier, name=name_tok.lexeme, value=value)
+                        qualifier=qualifier, name=name_tok.lexeme, value=value,
+                        type_params=params)
 
 
 def _looks_like_import_binding(cursor: Cursor) -> bool:
@@ -217,24 +230,33 @@ def _parse_import_binding(cursor: Cursor, ctx: ParserContext, start_tok, qualifi
                               name=name_tok.lexeme, source=source)
 
 
+#: '++' / '--' -> el operador binario que los expande.
+_PASO = {TokenType.INCREMENT: "+", TokenType.DECREMENT: "-"}
+
+
 def parse_expr_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ExprStmt:
     tok = cursor.peek()
     expr = pratt.parse_expression(cursor, ctx)
+    # 'x++;' / 'x--;'. Son SENTENCIA, no expresion: como expresion habria que
+    # decidir si valen el valor viejo o el nuevo, y esa distincion (i++ vs ++i)
+    # es una fuente de bugs que no compra nada — aqui el valor se descarta.
+    paso = _PASO.get(cursor.peek().type)
+    if paso is not None:
+        op_tok = cursor.advance()
+        from ..expressions.led import expandir_compuesta
+        uno = ast.Literal(ln=op_tok.ln, col=op_tok.col, value=1,
+                          literal_kind="int")
+        expr = expandir_compuesta(op_tok, expr, uno, paso)
     cursor.expect(TokenType.SEMICOLON)
     return ast.ExprStmt(ln=tok.ln, col=tok.col, expr=expr)
 
 
-def _parse_mutable_stmt(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
-    """'mutable' arrancando un statement: es valido SOLO como modificador de
-    region ('mutable region r { ... }', en cualquier orden con shrd/na). En
-    cualquier otro caso es el mal uso historico como qualifier de variable."""
-    if starts_region(cursor):
-        return parse_region_stmt(cursor, ctx)
-    return _parse_mutable_misuse(cursor, ctx)
-
-
 def _parse_mutable_misuse(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
-    """'mutable' fuera de una region: error dirigido con la migración."""
+    """'mutable' arrancando un statement: siempre es el mal uso historico como
+    qualifier de variable. Era valido como modificador de region
+    ('mutable region r'), pero las regiones se retiraron en v0.2.0; hoy
+    'mutable' solo califica punteros ('ptr mutable T'). Error dirigido con la
+    migracion."""
     tok = cursor.peek()
     raise ParseError.ExpectedTokenError(
         "'mutable' ya no califica variables: usa 'var' para un binding "
@@ -279,7 +301,7 @@ _STATEMENT_DISPATCH: Dict[TokenType, Callable[[Cursor, ParserContext], ast.State
     TokenType.CONST: parse_var_decl,
     TokenType.VAR: parse_var_decl,
     TokenType.TYPE: parse_type_decl,  # 'type X;' sin qualifier
-    TokenType.MUTABLE: _parse_mutable_stmt,  # 'mutable region r' o mal uso historico
+    TokenType.MUTABLE: _parse_mutable_misuse,  # mal uso historico como qualifier
     TokenType.VOID: parse_var_decl,
     TokenType.BOOL: parse_var_decl,
     TokenType.INT: parse_var_decl,
@@ -290,13 +312,6 @@ _STATEMENT_DISPATCH: Dict[TokenType, Callable[[Cursor, ParserContext], ast.State
     TokenType.THROW: parse_throw_stmt,
     TokenType.TRY: parse_try_stmt,
     TokenType.POINTER: _parse_ptr_prefix_misuse,  # 'ptr' ya no arranca un tipo (es postfijo)
-    # memoria: region-based (formas con bloque, handle y operaciones)
-    TokenType.REGION: parse_region_stmt,
-    TokenType.SHRD: parse_region_stmt,   # 'shrd region r { ... }'
-    TokenType.NA: parse_region_stmt,     # 'na region r { ... }'
-    TokenType.NEW: parse_new_stmt,       # 'new(shrd region r);'
-    TokenType.DELETE: parse_delete_stmt,  # 'delete(region r);' / 'delete();'
-    TokenType.IN: parse_in_region_stmt,  # 'in region r: stmt' / 'in region r { ... }'
     TokenType.IF: parse_if_stmt,
     TokenType.WHILE: parse_while_stmt,
     TokenType.MATCH: parse_match_stmt,

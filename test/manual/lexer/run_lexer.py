@@ -26,7 +26,12 @@ import sys
 
 # permitir ejecutar el script directamente: anadir la raiz del paquete (V0)
 # a sys.path para que 'src', 'include' y 'error_handler' sean importables.
-_V0_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# Se cuenta desde la RAIZ del repositorio, no con saltos relativos: este
+# script vivia en 'V0/test/lexer/' y al mudarse a 'test/manual/lexer/' los
+# '..' apuntaron a 'test/', que no tiene 'src/'.
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+_V0_ROOT = os.path.join(_REPO_ROOT, "V0")
 if _V0_ROOT not in sys.path:
     sys.path.insert(0, _V0_ROOT)
 

@@ -199,28 +199,14 @@ class UnknownDirectiveError(ParseError):
 class InvalidMemoryQualifierError(ParseError):
     """Un cualificador de memoria se usó en una posición sintáctica inválida.
 
-    Cubre los tokens del modelo *region-based + move-semantics*: ``MOVE``,
-    ``IN`` / ``AT`` (asociación a región), ``POINTER`` (``ptr``), ``ADDRESS``
-    (``&``) o ``MAKE`` / ``FREE`` cuando aparecen donde la gramática
-    no los admite. La validación semántica (propiedad, lifetimes de la región,
+    Cubre los tokens del modelo *ownership + move-semantics*: ``MOVE``,
+    ``FREE``, ``POINTER`` (``ptr``) y ``ADDRESS`` (``&``) cuando aparecen donde
+    la gramática no los admite. La validación semántica (propiedad, uso tras
     move) NO ocurre aquí, sino en la fase de semántica / lowering a MIR.
     """
 
     def __init__(self, message: Any = "cualificador de memoria mal ubicado", **kwargs: Any):
         super().__init__(message, code="PAR021", **kwargs)
-
-
-class InvalidRegionDeclarationError(ParseError):
-    """La declaración de una región (``region``) está mal formada.
-
-    Cubre el token ``REGION``: nombre de región ausente, falta del bloque
-    ``{ ... }`` o asociación ``in`` / ``at`` inválida. El modelo *region-based*
-    agrupa las asignaciones por región; su liberación es por región completa,
-    no por objeto.
-    """
-
-    def __init__(self, message: Any = "declaración de región inválida", **kwargs: Any):
-        super().__init__(message, code="PAR022", **kwargs)
 
 
 class MissingTypeAnnotationError(ParseError):
@@ -294,7 +280,6 @@ invalidMatchArm = InvalidMatchArmError
 invalidDecoratorTarget = InvalidDecoratorTargetError
 unknownDirective = UnknownDirectiveError
 invalidMemoryQualifier = InvalidMemoryQualifierError
-invalidRegionDeclaration = InvalidRegionDeclarationError
 missingTypeAnnotation = MissingTypeAnnotationError
 invalidExternBlock = InvalidExternBlockError
 expressionTooDeep = ExpressionTooDeepError
@@ -323,7 +308,6 @@ __all__ = [
     "InvalidDecoratorTargetError",
     "UnknownDirectiveError",
     "InvalidMemoryQualifierError",
-    "InvalidRegionDeclarationError",
     "MissingTypeAnnotationError",
     "InvalidExternBlockError",
     "ExpressionTooDeepError",
@@ -349,7 +333,6 @@ __all__ = [
     "invalidDecoratorTarget",
     "unknownDirective",
     "invalidMemoryQualifier",
-    "invalidRegionDeclaration",
     "missingTypeAnnotation",
     "invalidExternBlock",
     "expressionTooDeep",

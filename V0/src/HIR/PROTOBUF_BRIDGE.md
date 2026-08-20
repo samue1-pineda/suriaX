@@ -8,18 +8,19 @@
 
 ## Alcance de v1 — qué NO viaja (deliberado)
 
-- **RBMM**: `region`/`shrd`, `make T in r` y `x at r` NO se serializan. El
+- **Regiones**: `region`/`shrd`, `make T in r` y `x at r` se RETIRARON del
+  lenguaje en v0.2.0 y nunca se serializaron. El
   emisor los **rechaza fail-fast** (`HIR005`,
   `HIRUnsupportedInstructionError`) con su posición — nunca degradación
   silenciosa (perder semántica de memoria sin avisar contradice el objetivo
   educativo). Sus tags (`Expr` 16/20/21, `Stmt` 12, `Symbol` 7/13,
-  `SymbolKind.REGION` 9) quedan **`reserved`**: reintroducirlos en una
+  `SymbolKind.REGION` 9, `HookKind.MAKE` 2) quedan **`reserved`**: reintroducirlos en una
   versión futura es aditivo, sin romper el esquema.
 - **move-semantics SÍ viaja** (`MoveStmt`, `Symbol.moved_at`): el
   intérprete la hace cumplir EN RUNTIME (los caminos por ramas/iteraciones
   que `memory_check` estático deja pasar a propósito), igual que hará el MIR.
 - **`alloc`**: eliminado del LENGUAJE (no solo del HIR) — la reserva cruda
-  la aporta una librería. Su tag quedó `reserved` junto a los de RBMM.
+  la aporta una librería. Su tag quedó `reserved` junto a los de las regiones.
 
 ## Unidades separadas (Module.libraries)
 
@@ -55,7 +56,11 @@ clave del par es DERIVABLE de la firma (`origen = param_types[0]`,
   target es `ptr T`).
 - El `restype` de **toda expresión** viaja en el contenedor `Expr`: la
   Semántica lo anota en sitio (`scope_resolver.visit_expr`) — costo cero,
-  es información que ya calculaba y descartaba.
+  es información que ya calculaba y descartaba. Desde **v2** viaja como
+  `type_id`, un índice en el POOL `Module.types`, en vez del mensaje `Type`
+  completo: había 21 065 copias de 43 formas distintas (490x), un 20 % del
+  artefacto y un 16 % del tiempo de emisión. La `SymbolTable` conserva sus
+  tipos inline a propósito. Ver [../../../docs/plan_hir_v2.md](../../../docs/plan_hir_v2.md).
 
 ---
 
@@ -72,7 +77,7 @@ anotado en sitio):
 │  validado + hooks   │ ─────────▶ │  → MIR lowering      │
 │  enlazados)         │            │  → verificación      │
 │ SymbolTable         │            │    definitiva de     │
-│  (global + hooks)   │            │    regiones/move     │
+│  (global + hooks)   │            │    propiedad/move    │
 └─────────────────────┘            └──────────────────────┘
 ```
 
@@ -101,8 +106,9 @@ mismo nombre y los mismos campos. Cero traducción conceptual — quien lee
 | `types_ast.Type` (`kind`+`name`+`inner`) | `Type` | espejo 1:1; recursivo para `ptr`/`?` |
 | `symbol_table.Symbol` | `Symbol` | espejo 1:1; `members` es `map<string,Symbol>` (los namespaces ya son `dict` en Python) |
 | `SymbolTable.hooks: dict[(owner,kind)]` | `repeated HookEntry` | protobuf no admite claves compuestas en `map`; una lista de tripletas conserva la clave y el lookup en C++ se reconstruye O(1) en un `unordered_map` |
-| `Expression` (las de v1) | `Expr` con `oneof node` | ver abajo; `MakeExpr`/`Placement` se rechazan (RBMM) |
-| `Statement` (las de v1) | `Stmt` con `oneof node` | idem; `RegionStmt`/`MoveStmt` se rechazan |
+| `Expression` | `Expr` con `oneof node` | ver abajo; un nodo sin handler se rechaza (`HIR005`) |
+| `Statement` | `Stmt` con `oneof node` | idem; `MoveStmt`/`FreeStmt` SÍ viajan |
+| `Block.drops` | `repeated Drop` | destrucciones que el compilador INSERTA al cerrar el bloque; nadie las escribe |
 | `Declaration` (8 clases) | `Decl` con `oneof node` | incluye `FromDirective`; statements sueltos van en `Decl.statement` |
 | `AddrOf` (`&x`) | `AddrOf {operand, mut}` | nodo dedicado con la regla de mutabilidad resuelta (ver arriba) |
 | `CastExpr` (`cast<T>(x)`) | `CastExpr {type, value, hook}` | única vía de conversión; `hook` = `__cast__` (`HookKind.CAST`) si hay nominal involucrado |
@@ -155,9 +161,19 @@ categoría, un solo recorrido O(n).
 
 ## 3. Versionado del esquema
 
-- `Module.schema_version` (uint32) empieza en `1`. El lector C++ compara
-  contra las versiones que soporta y **rechaza** lo demás con error claro
-  (fail-fast; nunca interpretar bytes con un layout que no conoce).
+- `Module.schema_version` (uint32) va por **2** (v1: inicial; v2: pool de
+  tipos). El lector C++ compara contra las versiones que soporta y **rechaza**
+  lo demás con error claro (fail-fast; nunca interpretar bytes con un layout
+  que no conoce). Los lectores vivos hoy son
+  `runtime/interpreter/loader.SUPPORTED_SCHEMA_VERSIONS` y
+  `web/src/hir/decode.SUPPORTED_SCHEMA_VERSIONS`: se actualizan a la vez, y
+  un test del repo lo recuerda si alguien cambia la constante del emisor.
+
+- **Serialización determinista.** El `.phir` se escribe SIEMPRE por
+  `emmit_IR.serialize`, que usa `deterministic=True`. Sin eso el orden de las
+  entradas de un `map<>` lo decide la tabla hash del proceso, y el mismo
+  programa compilado dos veces daba artefactos distintos — lo que invalida
+  golden fixtures, cachés por hash y cualquier diferencial de artefactos.
 - Cambios **aditivos** (campo nuevo con tag nuevo) no rompen: proto3 ignora
   campos desconocidos al leer con un esquema viejo y los deja en default al
   leer datos viejos con esquema nuevo. `schema_version` NO se incrementa.
@@ -170,7 +186,7 @@ categoría, un solo recorrido O(n).
 
 ## 4. Orden de implementación
 
-1. ~~Fijar `hir.proto`~~ **hecho** (v1 con tags `reserved` para RBMM/move).
+1. ~~Fijar `hir.proto`~~ **hecho** (tags `reserved` para las regiones retiradas).
 2. ~~`emmit_IR.py` + `#test hir`~~ **hecho** (`emit`/`emit_text`, más
    `--emit-hir` en `V0/main.py` → binario `.hir` en `./dumps`).
 3. Lector C++ mínimo que valide `schema_version` y reconstruya

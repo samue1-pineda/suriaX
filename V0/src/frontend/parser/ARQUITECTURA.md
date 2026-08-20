@@ -14,7 +14,7 @@ ricas y estructura estática:
 
 | Capa | Técnica | Alcance |
 |------|---------|---------|
-| **Sentencias / declaraciones** | Descenso recursivo **LL(k) predictivo** | Estructura del programa: `fn`, `struct`, `if`, `while`, `region`, directivas… |
+| **Sentencias / declaraciones** | Descenso recursivo **LL(k) predictivo** | Estructura del programa: `fn`, `struct`, `if`, `while`, `move`, directivas… |
 | **Expresiones** | **Pratt** (TDOP / precedence-climbing) | Operadores con precedencia y asociatividad: `+ - * /`, comparaciones, `and/or`, llamadas, acceso, indexado… |
 
 ### Decisión de rendimiento: `k` fija, sin backtracking
@@ -49,7 +49,7 @@ Se adopta **LL(k) predictivo con `k` acotada (k ≤ 2) y sin backtracking**:
   directamente. El parser *no* redefine ni re-empaqueta nodos.
 - **Errores** → [`error_handler/ParseError.py`](../../../error_handler/ParseError.py):
   taxonomía completa `PAR000`–`PAR024` (sintaxis, tipos, funciones, `match`,
-  memoria/regiones, directivas, `extern`…). El parser **lanza** estos errores;
+  memoria, directivas, `extern`…). El parser **lanza** estos errores;
   no crea clases nuevas salvo que aparezca una categoría no cubierta.
 - **Patrón de referencia** → el **lexer**
   ([`lexer/lexer.py`](../lexer/lexer.py) + [`lexer/scanners/`](../lexer/scanners/)):
@@ -87,7 +87,7 @@ V0/src/frontend/parser/
     ├── declarations.py      # const/mutable, fn, struct, enum, type
     ├── statements.py        # bloques, expr-stmt, asignación, return
     ├── control_flow.py      # if/else, while, match/case, break/continue
-    ├── memory.py            # region, in/at, move, make/free, ptr, &, ?
+    ├── memory.py            # move, free
     ├── types.py             # anotaciones de tipo
     ├── patterns.py          # patrones de match/case
     └── directives.py        # #import/#export/#extern/#test/#from, RAW_BLOCK
@@ -126,12 +126,12 @@ LL(k)) dependen de él. Aislar el cursor permite optimizarlo (índices,
 Estado **puramente sintáctico** que las reglas comparten sin pasarse mil
 argumentos:
 - profundidad de bucle (para validar la *posición* de `break`/`continue`);
-- si se está dentro de un cuerpo de `region` / firma de `fn` / cuerpo de `match`;
+- si se está dentro de una firma de `fn` / cuerpo de `match`;
 - modificadores/decoradores pendientes acumulados antes de una declaración
   (`@deco`, `const`, `mutable`).
 
 > Frontera clara: aquí solo vive contexto **sintáctico**. La validación semántica
-> profunda (propiedad/lifetimes de regiones, resolución de nombres, chequeo de
+> profunda (propiedad, resolución de nombres, chequeo de
 > tipos) pertenece a la fase de semántica, no al parser.
 
 #### `recovery.py` — Recuperación de errores
@@ -201,10 +201,10 @@ sentencias dentro de un bloque.
 posición válida de `break`/`continue`.
 
 #### `grammar/memory.py` — Modelo de memoria
-Modelo *region-based + move-semantics*: declaración de `region`, asociación
-`in`/`at`, `move`, `make`/`free`, `ptr`, `&`, `?`. Define la **forma
-sintáctica**; la validación de propiedad/lifetimes es semántica.
-Emite `PAR021`/`PAR022`.
+Modelo *ownership + move-semantics*: `move` y `free`, las dos únicas
+sentencias del modelo (la destrucción por defecto no tiene sintaxis: ocurre al
+cerrar el ámbito). Define la **forma sintáctica**; la validación de propiedad
+es semántica. Emite `PAR021`.
 
 #### `grammar/types.py` — Anotaciones de tipo
 Analiza posiciones de tipo (`name: T`, retorno `-> T`, campos de `struct`):
@@ -245,7 +245,7 @@ inicia una declaración): se anota el matiz.
 | `IF` `ELSE` `WHILE` `RETURN` `BREAK` `CONTINUE` | `grammar/control_flow.py` | sentencias de control |
 | `MATCH` `CASE` | `grammar/control_flow.py` (+ `grammar/patterns.py`) | selección + patrones |
 | `TEST` | `expressions/nud.py` | función nativa `test(...)` (≠ directiva `#test`) |
-| `REGION` `IN` `AT` `MOVE` `FREE` `ALLOC` `MAKE` | `grammar/memory.py` | modelo region-based + move |
+| `MOVE` `FREE` | `grammar/memory.py` | modelo ownership + move |
 | `POINTER` (`ptr`) | `grammar/types.py` · `grammar/memory.py` | tipo puntero / expresión |
 | `ADDRESS` (`&`) | `expressions/nud.py` (memoria) | prefijo address-of |
 | `NULLABLE` (`?`) | `grammar/types.py` · `expressions/led.py` | tipo `T?` / postfijo |
@@ -367,7 +367,7 @@ El EBNF es la fuente de verdad, pero tres construcciones reales del corpus
 Cada ajuste está documentado en el docstring del módulo que lo implementa:
 
 1. **`;` opcional tras un `block`** (decisión de usuario): `fn`/`if`-`else`/
-   `while`/`region`/cuerpos `{ }` de `case` toleran un `;` final opcional
+   `while`/cuerpos `{ }` de `case` toleran un `;` final opcional
    (`grammar/block.py`, un único punto: `parse_block` lo consume). `enum`
    y `struct` lo exigen **siempre** (decisión explícita de usuario para
    `enum`; `struct` ya lo exigía el EBNF).
@@ -427,7 +427,7 @@ real en el archivo tras el re-parseo.
 ### 9.6 Validado contra
 
 - Los 10 bloques `srcx` de `docs/examples/helloworld.md`,
-  `docs/examples/regions.md`, `docs/examples/structs_and_control.md` y
+  `docs/examples/ownership.md`, `docs/examples/structs_and_control.md` y
   `docs/syntax.md` (parsean sin errores).
 - Casos negativos: `break`/`continue` fuera de un bucle (`PAR013`), `enum`
   sin `;` final — ambos recuperan y reportan sin colgarse ni crashear.
@@ -488,7 +488,7 @@ Semántica, y el stress test de rendimiento) sin regresiones.
 
 ---
 
-## 10. Estado de implementación (as-built, 4ª entrega): reservas, hook/dunder y regiones
+## 10. Estado de implementación (as-built): reservas, hook/dunder y memoria
 
 Tres features pedidas por el usuario, todas del lado sintáctico aquí (la
 semántica en `semantic/ARQUITECTURA.md` secc. 15):
@@ -521,28 +521,28 @@ función normal (el usuario puede usar `__` libremente). Con especificador, el
 nombre DEBE tener forma `__x__` (si no → `ParseError`). El campo `dunder`
 (nombre sin guiones) se conserva para la Semántica.
 
-### 10.3 Regiones (modelo híbrido) — `grammar/memory.py`
+### 10.3 Memoria — `grammar/memory.py`
 
-`region_stmt` pasó a `region_mods "region" IDENTIFIER block` con
-`region_mods = { shrd | mutable | na }` de **orden libre** (helper
-`_parse_region_modifiers`, duplicado = error). Se añadieron `new_stmt`
-(handle sin bloque), `delete_stmt` (externa `delete(region r)` / interna
-`delete()`), `in_region_stmt` (`in region r: stmt | block`, espeja `case_arm`)
-y la variante de región de `move_stmt` (`move region a -> region b`, 1 token de
-lookahead). El dispatch de `statements.py` enruta `NA`/`NEW`/`DELETE`/`IN` a sus
-parsers; `MUTABLE` desambigua con `starts_region` (lookahead puro) entre
-`mutable region` y el mal uso histórico como qualifier de variable. Nodos
-nuevos: `NewStmt`/`DeleteStmt`/`InRegionStmt`/`MoveRegionStmt`; `RegionStmt`
-ganó `mutable`/`na` (ya tenía `shared`).
+El módulo pasó de 174 a 49 líneas en la v0.2.0. Tenía la gramática entera del
+modelo por regiones —`region_stmt` con sus tres modificadores de orden libre,
+`new_stmt`, `delete_stmt`, `in_region_stmt` y la variante `move region a ->
+region b`—; hoy tiene `move_stmt` y `free_stmt`, y nada más. La destrucción por
+defecto no pasa por el parser porque no tiene sintaxis: el punto de
+destrucción es la llave que cierra el ámbito.
+
+Como efecto colateral, `MUTABLE` dejó de necesitar desambiguación en el
+dispatch: era válido arrancando una sentencia SOLO como `mutable region r`, así
+que sin regiones cualquier `mutable` en esa posición es el mal uso histórico
+como qualifier de variable, y `_parse_mutable_misuse` lo dice directo sin el
+lookahead que hacía `starts_region`.
 
 ### 10.4 Validado contra
 
-Suite completa **281/281 verde** tras regenerar los golden del AST-tipado y de
-la tabla de símbolos (cambio de contrato aditivo: campos `visibility`/
-`specifier` en el AST y `visibility`/`region_mutable`/`region_na` en `Symbol`).
-`#test parser` sobre las tres features produce el AST esperado; el emisor HIR
-rechaza los nodos de región nuevos con `HIR005` (sin crash), a la espera del
-runtime RBMM.
+Suite completa verde tras regenerar los golden del AST-tipado y de la tabla de
+símbolos. `#test parser` sobre las reservas y `hook`/`dunder` produce el AST
+esperado. Los golden de la tabla de símbolos se regeneraron otra vez en v0.2.0,
+al perder `Symbol` los campos `region`/`shared`/`region_mutable`/`region_na`
+con el retiro de las regiones.
 
 ---
 
@@ -579,5 +579,4 @@ llama `self`, así `self` sigue usable como nombre de variable/parámetro.
 Suite **358/358 verde**. `#test parser` sobre `@trait`/`@impl`/decoradores con
 args produce el AST esperado. Dos crashes de emisión HIR (kinds `SELF` y
 `DUNDER` inexistentes en el `.proto`) se corrigieron excluyéndolos del mapeo de
-enums (son solo-frontend, nunca viajan al HIR v1; mismo tratamiento que
-`REGION`).
+enums (son solo-frontend, nunca viajan al HIR).

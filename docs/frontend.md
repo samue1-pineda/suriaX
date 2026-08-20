@@ -41,5 +41,5 @@ Salida: `list[Token]` terminada en `EOF`. Detalle de tokens en
 - [ ] Parser de descenso recursivo + Pratt (expresiones con precedencia).
 - [ ] Construcción del AST.
 - [ ] Anotación de tipos (AST-tipado) — sistema nominal.
-- [ ] Análisis semántico (símbolos, regiones, move).
+- [ ] Análisis semántico (símbolos, propiedad, move).
 - [ ] Emisión del HIR en protobuf.

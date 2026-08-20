@@ -23,7 +23,8 @@ try:
 except ImportError:  # pragma: no cover - ejecucion directa
     from types_ast import Type, TypeKind  # type: ignore
 
-from .symbol_table import Scope, Symbol, SymbolKind
+from .hooks import HookKind
+from .symbol_table import Scope, Symbol, SymbolKind, SymbolTable
 
 # los tres SymbolKind que nombran un TIPO utilizable en una anotacion.
 # 'TYPE' es el tipo nominal opaco de una libreria ('const type int8;'): para
@@ -104,6 +105,200 @@ def lookup_type_path(name: str, scope: Scope) -> TypeLookupResult:
     return TypeLookupResult(TypeLookup.OK, current)
 
 
+def canonical_name(symbol: Symbol, written: str = "") -> str:
+    """Nombre CANONICO del tipo que declara ``symbol``.
+
+    El usuario escribe ``dt.int8``; la libreria registro sus hooks y sus
+    conversiones bajo el nombre con el que DECLARO el tipo (``int8``). Sin
+    esta traduccion el par no se encuentra y el tipo queda inservible fuera
+    de su libreria.
+
+    Para un struct/enum ``Symbol.type`` ES su nominal, de ahi sale el nombre.
+    Pero un alias ``const type int8`` tiene ``Symbol.type`` = metatipo
+    (``TypeKind.META``), no un nominal: ahi la fuente correcta es
+    ``Symbol.name``, que YA es el nombre declarado. ``written`` solo queda
+    como red de seguridad si el simbolo no trae ninguno de los dos.
+    """
+    t = symbol.type
+    if t is not None and t.kind is TypeKind.NOMINAL:
+        return t.name
+    return symbol.name or written
+
+
+def canonical(t: Optional[Type], scope: Scope) -> Optional[Type]:
+    """Reescribe el NUCLEO nominal de ``t`` con su nombre canonico.
+
+    ``dt.int8 ptr`` -> ``int8 ptr``. Los envoltorios (``ptr``/``?``/``error``)
+    y los argumentos de un generico se conservan. Un tipo sin nucleo nominal
+    cualificado se devuelve TAL CUAL, sin construir nada — el caso comun.
+    """
+    if t is None:
+        return None
+    if t.kind is TypeKind.NOMINAL:
+        if "." not in (t.name or ""):
+            return t
+        result = lookup_type_path(t.name, scope)
+        if result.status is not TypeLookup.OK or result.symbol is None:
+            return t
+        name = canonical_name(result.symbol, t.name)
+        return t if name == t.name else Type(TypeKind.NOMINAL, name=name,
+                                             args=t.args)
+    if t.inner is None:
+        return t
+    inner = canonical(t.inner, scope)
+    if inner is t.inner:
+        return t
+    return Type(t.kind, name=t.name, inner=inner, mut=t.mut)
+
+
+def substitute(t: Optional[Type], mapa: dict) -> Optional[Type]:
+    """Reemplaza los PARAMETROS de tipo de ``t`` por sus argumentos.
+
+    Es lo que convierte la declaracion de un generico en un tipo concreto: el
+    campo ``T ptr mutable`` de un ``Vector<T>``, visto a traves de un
+    ``Vector<int>``, es ``int ptr mutable``. Sin esto los genericos serian
+    sintaxis sin significado — el consumidor escribiria ``Vector<int>`` y el
+    compilador seguiria viendo ``T``.
+
+    Recorre los envoltorios (``ptr``/``?``/``error``) y los argumentos de un
+    generico anidado (``Vector<Vector<T>>``). ``Type`` es frozen, asi que
+    reconstruye solo lo que cambia: si no hay nada que sustituir devuelve el
+    MISMO objeto, que es el caso de casi todos los tipos de un programa.
+    """
+    if t is None or not mapa:
+        return t
+    if t.kind is TypeKind.NOMINAL:
+        if not t.args:
+            reemplazo = mapa.get(t.name)
+            return reemplazo if reemplazo is not None else t
+        args = tuple(substitute(a, mapa) for a in t.args)
+        return t if args == t.args else Type(TypeKind.NOMINAL, name=t.name,
+                                             args=args)
+    if t.inner is None:
+        return t
+    inner = substitute(t.inner, mapa)
+    if inner is t.inner:
+        return t
+    return Type(t.kind, name=t.name, inner=inner, mut=t.mut)
+
+
+def bindings(symbol: Symbol, t: Optional[Type]) -> dict:
+    """Mapa ``parametro -> argumento`` de un uso concreto de un generico.
+
+    Vacio si el tipo no es generico, que es lo que hace que :func:`substitute`
+    salga por el camino rapido en la inmensa mayoria de los casos.
+    """
+    if not symbol.type_params or t is None or not t.args:
+        return {}
+    return dict(zip(symbol.type_params, t.args))
+
+
+def owns_resources(t: Optional[Type], scope: Scope, table: SymbolTable) -> bool:
+    """¿Un valor de tipo ``t`` tiene una obligación de destrucción?
+
+    Es la noción CENTRAL del modelo de memoria (``ownership + drop + arenas``,
+    ver ``documentation/source/memory_model.rst``): responde qué valores el
+    compilador tendrá que destruir al cerrar el ámbito que los posee. Sin esta
+    pregunta el drop automático no se puede escribir — tendría que invocar un
+    destructor sobre todo, o sobre nada.
+
+    Tres reglas, y la primera es la que sostiene a las otras dos:
+
+    1. **Un ``ptr T`` NO posee.** Es un préstamo: apunta a algo cuyo dueño está
+       en otra parte. Destruir un puntero al salir de ámbito destruiría el
+       valor de otro. Esto es también lo que hace que la recursión TERMINE: un
+       ``struct Nodo { Nodo ptr sig; }`` se cierra sobre sí mismo a través de
+       un puntero, y ahí la respuesta es "no" sin mirar más.
+    2. **Un tipo nominal posee si declara ``__free__``.** Es la declaración
+       explícita de que tiene algo que soltar. Vale igual para un tipo OPACO de
+       una librería (``const type T;``): sus campos no se ven, pero su
+       ``__free__`` viaja en la tabla de hooks y es su contrato completo.
+    3. **Un ``struct`` posee si algún campo POR VALOR posee**, aunque él no
+       declare ``__free__``: contener un dueño es ser dueño.
+
+    ``T?`` y ``error T`` son envoltorios: poseen si lo que envuelven posee.
+    Los primitivos nunca poseen.
+
+    Un nombre que no resuelve devuelve ``False``: no se inventa una obligación
+    sobre un tipo que no se pudo ver — el diagnóstico de que el nombre no
+    existe ya lo da quien resolvió el scope.
+    """
+    return _posee(t, scope, table, set())
+
+
+def _posee(t: Optional[Type], scope: Scope, table: SymbolTable,
+           visitados: set) -> bool:
+    if t is None:
+        return False
+    kind = t.kind
+    if kind is TypeKind.POINTER:
+        return False                      # prestamo, no dueno (regla 1)
+    if kind is TypeKind.NULLABLE or kind is TypeKind.ERROR:
+        return _posee(t.inner, scope, table, visitados)
+    if kind is not TypeKind.NOMINAL or t.name is None:
+        return False
+
+    simbolo = lookup_type_path(t.name, scope).symbol
+    if simbolo is None:
+        return False
+    if table.lookup_hook(simbolo.name, HookKind.FREE) is not None:
+        return True                       # lo declara (regla 2)
+    if simbolo.kind is not SymbolKind.STRUCT or not simbolo.members:
+        return False
+
+    # 'visitados' guarda contra un struct que se contenga a si mismo POR VALOR
+    # ('struct { S s; } S;'): es un tipo de tamano infinito y no deberia
+    # existir, pero esta pasada no es quien lo rechaza y no puede colgarse por
+    # ello. La recursion normal (a traves de punteros) ya paro en la regla 1.
+    if simbolo.name in visitados:
+        return False
+    visitados.add(simbolo.name)
+    return any(_posee(campo.type, scope, table, visitados)
+               for campo in simbolo.members.values())
+
+
+def infinite_size_path(name: str, scope: Scope) -> Optional[Tuple[str, ...]]:
+    """El camino de campos que hace de ``name`` un tipo de tamaño INFINITO, o
+    ``None`` si tiene tamaño finito.
+
+    ``struct { S s; } S;`` no cabe en ninguna cantidad de memoria: cada ``S``
+    contendría otro. Lo mismo entre varios (``A`` contiene ``B``, ``B``
+    contiene ``A``).
+
+    La distinción que decide es la MISMA que gobierna la propiedad
+    (:func:`owns_resources`): un puntero **no contiene**, se refiere. Por eso
+    ``struct { S ptr sig; } S;`` es legítimo y es como se escribe una lista.
+    Y por eso este recorrido termina: solo baja por campos POR VALOR.
+
+    Devuelve el camino (``("s",)``, ``("b", "a")``) para que el diagnóstico
+    pueda señalar por dónde se cierra el ciclo, no solo que existe.
+    """
+    return _camino_infinito(name, scope, name, ())
+
+
+def _camino_infinito(actual: str, scope: Scope, objetivo: str,
+                     visitados: Tuple[str, ...]) -> Optional[Tuple[str, ...]]:
+    simbolo = resolve_nominal(actual, scope)
+    if simbolo is None or simbolo.kind is not SymbolKind.STRUCT:
+        return None
+    for campo in (simbolo.members or {}).values():
+        t = campo.type
+        while t is not None and (t.kind is TypeKind.NULLABLE
+                                 or t.kind is TypeKind.ERROR):
+            t = t.inner
+        if t is None or t.kind is not TypeKind.NOMINAL or t.name is None:
+            continue          # primitivo, puntero: tamano conocido
+        if t.name == objetivo:
+            return visitados + (campo.name,)
+        if t.name in visitados:
+            continue          # otro ciclo, ajeno a 'objetivo': lo reporta el suyo
+        hallado = _camino_infinito(t.name, scope, objetivo,
+                                   visitados + (campo.name,))
+        if hallado is not None:
+            return hallado
+    return None
+
+
 def _type_names(members) -> Tuple[str, ...]:
     """Los miembros que nombran un tipo, para el '(disponibles: ...)' del error."""
     return tuple(sorted(
@@ -125,25 +320,68 @@ def _same_nominal(a: Optional[Type], b: Optional[Type]) -> bool:
     declaración, distinguiendo dos ``Point`` de librerías distintas— es cosa
     de la Fase 3; con la resolución solo-por-nombre de hoy, el nombre-hoja es
     la mejor unificación disponible (ver ``types_ast`` cab.).
+
+    Los ARGUMENTOS de un genérico entran en la comparación y lo hacen
+    INVARIANTE: ``Vector<int>`` y ``Vector<str>`` comparten nombre-hoja y aun
+    así son tipos distintos. Sin esta parte el genérico sería decorativo —
+    ``Vector<T>`` daría una garantía que el checker no comprueba.
     """
     return (a is not None and b is not None
             and a.kind is TypeKind.NOMINAL and b.kind is TypeKind.NOMINAL
-            and _leaf(a.name) == _leaf(b.name))
+            and _leaf(a.name) == _leaf(b.name)
+            and len(a.args) == len(b.args)
+            and all(_mismo_tipo(x, y) for x, y in zip(a.args, b.args)))
+
+
+def _mismo_tipo(a: Optional[Type], b: Optional[Type]) -> bool:
+    """Igualdad de tipos módulo calificación de los nominales.
+
+    Un argumento de tipo se compara así y NO con :func:`is_assignable`: los
+    argumentos son INVARIANTES. ``Vector<ptr mutable int>`` no es un
+    ``Vector<ptr int>`` aunque el puntero suelto sí se pueda degradar —
+    leerlo como el segundo permitiría escribir por el primero.
+    """
+    if a is None or b is None:
+        return a is b
+    if a == b:
+        return True
+    if a.kind is not b.kind:
+        return False
+    if a.kind is TypeKind.NOMINAL:
+        return _same_nominal(a, b)
+    return a.mut == b.mut and _mismo_tipo(a.inner, b.inner)
+
+
+def es_desconocido(t: Optional[Type]) -> bool:
+    """¿El tipo ``t`` no dice nada sobre el valor?
+
+    Dos formas significan lo mismo y tienen que tratarse igual:
+
+    * ``None`` — esta fase todavía no infiere ese tipo;
+    * ``error`` SIN envolver — el binding de un ``catch (e)`` y el retorno de
+      un ``fn f() -> error``. ``throw`` acepta cualquier valor, así que lo
+      único que se sabe de ``e`` es que llegó por la vía del error; su tipo
+      es literalmente desconocido. Tratarlo como un tipo CONCRETO que no
+      unifica con nada dejaba el valor capturado inservible: no se podía
+      ligar, ni pasar, ni operar con él — solo interpolarlo. ``error T`` (con
+      inner) sí dice algo y no entra aquí.
+    """
+    return t is None or (t.kind is TypeKind.ERROR and t.inner is None)
 
 
 def is_assignable(target: Optional[Type], value: Optional[Type]) -> bool:
     """¿Un valor de tipo ``value`` puede asignarse a un binding ``target``?
 
-    Conservador: si alguno de los dos tipos NO se conoce (``None``, p. ej.
-    una expresión cuyo tipo aún no se infiere en esta fase), se responde
-    ``True`` — esta fase nunca rechaza un programa por información que no
-    tiene (cero falsos positivos, ver ``ARQUITECTURA.md`` secc. 4.2).
+    Conservador: si alguno de los dos tipos NO se conoce (ver
+    :func:`es_desconocido`), se responde ``True`` — esta fase nunca rechaza un
+    programa por información que no tiene (cero falsos positivos, ver
+    ``ARQUITECTURA.md`` secc. 4.2).
 
     HOY: identidad estructural estricta + unificación nominal por nombre-hoja
     (``point.Point`` = ``Point``) + ``T`` asignable a ``T?``.
     FUTURO (Fase 3): coerciones numéricas, genéricos, unificación fina.
     """
-    if target is None or value is None:
+    if es_desconocido(target) or es_desconocido(value):
         return True
     if target == value or _same_nominal(target, value):
         return True
@@ -186,5 +424,6 @@ def unify_literal_null(target: Optional[Type]) -> bool:
 
 __all__ = [
     "resolve_nominal", "lookup_type_path", "TypeLookup", "TypeLookupResult",
-    "is_assignable", "unify_literal_null",
+    "is_assignable", "unify_literal_null", "es_desconocido",
+    "canonical", "canonical_name",
 ]

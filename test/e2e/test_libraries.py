@@ -375,3 +375,36 @@ def test_metodos_de_un_tipo_de_libreria_cross_modulo():
         ),
     }
     assert_project_output(files, "cur=3\n")
+
+
+def test_todas_las_librerias_del_repositorio_compilan():
+    """Cada ``.libsrx`` de ``lib/`` pasa el frontend sin un solo diagnóstico.
+
+    La librería estándar es lo primero que toca quien prueba el lenguaje, y
+    hasta la 0.1.4 hubo una (``lib/math/basic.libsrx``) que ni siquiera
+    parseaba: el informe público la listaba como error conocido. Los tests de
+    entonces usaban librerías escritas dentro del propio test —aislamiento
+    correcto para probar el LINKER, pero por eso mismo ninguno miraba las
+    reales.
+
+    Se compilan una por una, no importándolas desde un programa: así el
+    fallo dice QUÉ archivo, y una librería que nadie importa todavía no se
+    queda sin comprobar.
+    """
+    import glob
+    import subprocess
+
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    compilador = os.path.join(repo, "V0", "main.py")
+    libs = sorted(glob.glob(os.path.join(repo, "lib", "**", "*.libsrx"),
+                            recursive=True))
+    assert libs, "no se encontró ninguna librería en lib/"
+
+    rotas = []
+    for ruta in libs:
+        proc = subprocess.run([sys.executable, compilador, ruta],
+                              capture_output=True, text=True, cwd=repo,
+                              timeout=120)
+        if proc.returncode != 0:
+            rotas.append(f"{os.path.relpath(ruta, repo)}:\n{proc.stdout}{proc.stderr}")
+    assert not rotas, "librerías del repositorio que no compilan:\n" + "\n".join(rotas)

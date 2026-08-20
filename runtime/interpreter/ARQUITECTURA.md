@@ -23,8 +23,8 @@ target `interp` (`.suriaX_config.yaml`), alternativa al backend C++/LLVM.
 - Ejecutar el HIR de un `.srcx` y sus `.libsrx` importadas de punta a punta.
 - Que `IO.print.print("hola")` **escriba en la terminal** — sin `#extern
   cpp{}` (secc. 3).
-- **Hacer cumplir en runtime** el modelo de memoria (lifetime de regiones,
-  use-after-move): es justo la visualización educativa que busca el lenguaje
+- **Hacer cumplir en runtime** el modelo de memoria (propiedad, use-after-move,
+  use-after-free): es justo la visualización educativa que busca el lenguaje
   y el terreno donde el diseño falla de formas que el análisis estático no ve.
 - Ser un **oráculo de referencia**: correr el mismo HIR aquí y en el backend
   nativo y comparar la salida (*differential testing*).
@@ -37,20 +37,20 @@ implementar `#extern cpp{}`, reimplementar reglas semánticas.
 ## 1. Por qué sobre el HIR (no sobre el AST)
 
 El intérprete consume **HIR, no AST**. Es la regla no negociable de
-[`docs/propuesta_vm_bytecode.md`](../../docs/propuesta_vm_bytecode.md), y las
+`docs/propuesta_vm_bytecode.md`, y las
 razones son estructurales:
 
 1. **El HIR es la costura de desacople.** El MISMO HIR lo ejecuta este
-   intérprete (Python) y lo baja el backend nativo (C++ → MIR → LLVM). Todo lo
+   intérprete (Python) y lo baja el backend nativo (C++ → MIR → VM/JIT). Todo lo
    que el intérprete valide empíricamente sobre el HIR — modelo de memoria,
-   despacho de hooks, semántica de regiones — vale para **ambos** consumidores.
+   despacho de hooks, propiedad — vale para **ambos** consumidores.
    Ejecutar sobre el AST no daría esa garantía.
 2. **Construye el puente que se necesita igual.** Hacer el intérprete sobre el
    HIR *obliga* a terminar el generador AST→HIR (Fase 5), que es trabajo
    necesario para la arquitectura original de todos modos. Sobre el AST, ese
    puente seguiría sin construirse y el trabajo se tiraría al llegar el backend.
 3. **Un solo lugar decide las reglas.** El HIR trae ya resueltas las decisiones
-   de la Semántica (tipos, despacho de hooks vía `HookRef`, regiones). El
+   de la Semántica (tipos, despacho de hooks vía `HookRef`, propiedad). El
    intérprete las **ejecuta**, no las redefine — cero riesgo de divergencia
    semántica entre la ruta interpretada y la nativa (propuesta, costos #2).
 
@@ -58,7 +58,7 @@ razones son estructurales:
 > generador AST→HIR (Fase 5). El orden de implementación (secc. 11) lo asume y
 > lista además las extensiones que el esquema HIR necesita para ejecutarse.
 
-Relación con [`V0/src/intepreter/`](../../V0/src/intepreter/) (readme: "tree-walk
+Relación con [`runtime/interpreter/`](../../runtime/interpreter/) (readme: "tree-walk
 sobre el HIR"): esa nota reflejaba esta misma intención. La implementación vive
 aquí, en `runtime/interpreter/`.
 
@@ -94,7 +94,7 @@ El intérprete consume un **`Module`** protobuf (ver
 - `Module.items` — `repeated Decl`, el `Program` validado en orden.
 - `Module.symbols` — la `SymbolTable` (tipos, valores, `hooks`).
 - Anotaciones ya resueltas que el intérprete **ejecuta sin re-decidir**:
-  - `Call.hook` / `MakeExpr.hook` / `FreeStmt.hook` / `SizeofExpr.hook` son
+  - `Call.hook` / `FreeStmt.hook` / `SizeofExpr.hook` son
     `HookRef` (owner + kind): el intérprete los re-enlaza contra
     `Module.symbols.hooks` en O(1) — el mismo mecanismo que usará el lector
     C++.
@@ -181,8 +181,9 @@ runtime/interpreter/
 ├── hook/                    # [ya existe] despacho de hooks en runtime (secc. 7)
 │   └── dispatch.py          #   re-enlaza HookRef y ejecuta el hook
 │
-├── memory/                  # [ya existe] regiones, punteros, move (secc. 8)
-│   ├── region.py            #   arena por región: enter/exit, make
+├── memory/                  # [ya existe] celdas, punteros, move/free (secc. 8)
+│   ├── block.py             #   bloque de celdas del backend Python puro
+│   ├── native.py            #   puente al backend nativo (SURIAX_NATIVE_MEM)
 │   └── pointer.py           #   Cell, &, deref, move (invalida origen)
 │
 ├── intrinsics.py            # interfaz del host: registro nombre -> fn Python (secc. 3)
@@ -262,7 +263,6 @@ mismo mecanismo del lector C++ — y ejecuta. Cero re-decisión.
 |------------------|-----------|------------------------|
 | `Call` con `hook`=PRINT | `__print__` de `T` | llama al `FunctionDecl` del hook con `&x` |
 | `Call` con `hook`=LEN | `__len__` de `T` | íd., devuelve el `int` |
-| `MakeExpr.hook`=MAKE | `__make__` de `T` | si hay hook, lo llama; si no, construye el struct por defecto en la región |
 | `FreeStmt.hook`=FREE | `__free__` de `T` | llama al hook (si hay) y libera la celda |
 | `SizeofExpr.hook`=SIZEOF | `__sizeof__` de `T` | si hay hook lo llama; si no, un tamaño por defecto del modelo |
 
@@ -276,28 +276,48 @@ una función normal (no hook) que llama a `__write__`.
 
 ## 8. Modelo de memoria en runtime (`memory/`) — el núcleo educativo
 
-Aquí es donde el intérprete gana su sueldo: **ejecuta** `region` +
-move-semantics y falla en runtime cuando el programa las viola. La Semántica ya
-rechazó lo que pudo estáticamente; esto es la red de la que caen los casos que
-solo se ven ejecutando.
+Aquí es donde el intérprete gana su sueldo: **ejecuta** la propiedad —`move`,
+`free`, préstamos— y falla en runtime cuando el programa la viola. La Semántica
+ya rechazó lo que pudo estáticamente; esto es la red de la que caen los casos
+que solo se ven ejecutando.
 
-### 8.1 Regiones como arenas
+### 8.1 Celdas con estado
 
-Una `RegionStmt` es un **arena**: un contenedor de celdas con nombre. El
-intérprete mantiene una **pila de arenas**.
+No hay pila de arenas ni contenedores con nombre: el modelo por regiones se
+retiró en v0.2.0 (ver `documentation/source/memory_decision.rst`). Lo que el
+intérprete mantiene es una **celda por binding**, y la celda tiene estado:
 
-- **entrar** a la región: push de un arena vacío con su nombre.
-- `MakeExpr` (`make T in r`): construye el valor y lo ubica en el arena `r`;
-  devuelve un `Pointer` a su celda. (`alloc` dejó de ser parte del lenguaje:
-  la reserva cruda la aporta una librería.)
-- `Placement` (`x at r`): ubica el resultado de `x` en el arena `r`.
-- **salir** de la región: se libera el arena **entero** de una vez (semántica
-  region-based). Todo `Pointer` a una celda de ese arena queda **colgante**;
-  desreferenciarlo después es un error de runtime.
+| Estado  | Se llega por                | Leerla        | Volver a operarla |
+|---------|-----------------------------|---------------|-------------------|
+| `LIVE`  | declarar / asignar          | ✅            | ✅                |
+| `MOVED` | `move x`                    | ⛔ `RT001`    | ⛔ `RT002`        |
+| `FREED` | `free x`                    | ⛔ `RT003`    | ⛔ `RT005`        |
 
-`RegionStmt.shared` (`shrd region`): su arena puede sobrevivir al bloque. El
-intérprete no lo libera al salir (la verificación profunda es del MIR; aquí
-basta con no liberarlo).
+Que el estado viva en la celda —y no en una tabla aparte— es lo que hace que un
+`Pointer` hacia ella vea la invalidación: un puntero a una celda liberada es
+colgante y desreferenciarlo es `RT003`, sin que haga falta rastrear quién
+apuntaba a qué.
+
+**Drop automático**: al cerrar un bloque, `_exec_block` recorre `Block.drops`
+—la lista que la Semántica decidió y el HIR transporta— y destruye lo que siga
+`LIVE`. El reparto es deliberado: **qué** puede necesitar destruirse lo dice el
+TIPO (estático, lo sabe el compilador); **si** hace falta lo dice el ESTADO de
+la celda (dinámico, ya lo llevaba). Por eso un `move` dentro de un `if` sale
+correcto sin análisis de flujo en el frontend ni un bit nuevo aquí.
+
+Va en un `finally`: el bloque también se cierra por `return`, `break`,
+`continue` y `throw`, y un drop que solo corriera en la salida normal sería una
+fuga en cuanto hubiera un `return` temprano. Los bloques sin drops —la inmensa
+mayoría— toman un camino rápido que no paga ni el `try`.
+
+Devolver un nombre LOCAL transfiere su propiedad (la celda queda `MOVED`), o el
+drop destruiría lo que el llamador acaba de recibir. Una global devuelta no se
+toca: se presta, no se entrega.
+
+**Arenas**: liberar mucho de una vez sigue siendo posible, pero como **tipo de
+librería** —un valor con dueño que reserva un bloque y lo devuelve entero al
+destruirse—, no como construcción del intérprete. No requiere nada nuevo aquí:
+requiere structs ejecutables.
 
 ### 8.2 Punteros (`pointer.py`)
 
@@ -334,12 +354,13 @@ basta con no liberarlo).
 `type` es un tipo de primera clase (`const type int8;`, `fn f() -> type`); un
 valor de tipo `type` es un `TypeValue` que envuelve un `Type`.
 
-**Bloqueo actual**: el esquema HIR v0 no representa ni `TypeDecl`
-(`const type int8;`) ni el metatipo (`MetaTypeExpr`) ni marca los prototipos.
-El frontend ya los produce (ver `t_types.md`), pero no cruzan el HIR todavía.
-Ejecutarlos requiere **extender el esquema** primero (secc. 11, prerequisito).
-Un tipo opaco sin `__make__`/`__sizeof__` es un valor inerte: se pasa y
-devuelve, pero construir una instancia requiere sus hooks.
+El esquema v2 ya los cruza: `TypeDecl` viaja como declaración propia
+(`Decl.type_decl`), el metatipo es `TypeKind.META` y el símbolo del tipo
+opaco es `SymbolKind.TYPE`. Es lo que hace ejecutables a los tipos de
+`lib/d_types` (`dt.int8`, `dt.int16`...).
+
+Un tipo opaco sin `__sizeof__` sigue siendo un valor inerte para el modelo
+de memoria: se pasa y se devuelve, pero no se puede medir.
 
 ---
 
@@ -433,9 +454,9 @@ verificable**:
 5. **Module linker.** Ligar N unidades HIR (main + `IO`); resolver
    `IO.print.*` en el frame global (secc. 10.1). *Test*: `#import IO;` +
    `IO.print.println("hola mundo")` **imprime**.
-6. **Memoria.** `memory/` completo: arenas por región, `&`/deref,
-   `make`/`free`, `move` con invalidación. *Test*: los ejemplos de
-   [`docs/examples/regions.md`](../../docs/examples/regions.md) corren; un
+6. **Memoria.** `memory/` completo: celdas con estado, `&`/deref,
+   `free`, `move` con invalidación. *Test*: los ejemplos de
+   [`docs/examples/ownership.md`](../../docs/examples/ownership.md) corren; un
    use-after-move a través de una rama lanza error de runtime.
 7. **CLI + config.** `target: interp` / `--run` en `main.py` (secc. 10.2).
    *Test*: `python V0/main.py test.srcx --run`.
@@ -460,7 +481,7 @@ real con hooks; **fase 5** lo da desde la librería `IO` de verdad.
   depuración/visualización (propuesta, "la vuelta a la arquitectura original").
 - **Reimplementar reglas semánticas.** Todo lo que valida ya lo decidió la
   Semántica y viaja resuelto en el HIR; aquí solo se ejecuta (secc. 1, 7, 8).
-- **Concurrencia, FFI real, GC sofisticado.** Fuera de alcance; regiones + move
+- **Concurrencia, FFI real, GC sofisticado.** Fuera de alcance; ownership + move
   es determinista y no los necesita para el objetivo de prueba.
 
 ---
@@ -471,9 +492,9 @@ real con hooks; **fase 5** lo da desde la librería `IO` de verdad.
 |---|----------|--------|
 | D1 | Consume **HIR** (`Module` protobuf), no AST | El HIR es la costura de desacople: mismo contrato para el intérprete y el backend nativo. Construirlo sobre HIR termina el puente Fase 5 que se necesita igual (secc. 1). |
 | D2 | `print` sin `#extern`, vía **intrínseco** `__write__` (prototipo + registro del host) | `#extern` es del backend LLVM; el intérprete provee la primitiva en Python. Es la "host interface" que ambos consumidores del HIR implementan (secc. 3). |
-| D3 | **Ejecuta** las anotaciones del HIR (`HookRef`, regiones), no las re-decide | Cero divergencia semántica entre la ruta interpretada y la nativa (secc. 7). |
+| D3 | **Ejecuta** las anotaciones del HIR (`HookRef`, propiedad), no las re-decide | Cero divergencia semántica entre la ruta interpretada y la nativa (secc. 7). |
 | D4 | Variables y campos son **celdas** (`Cell`), no valores pelados | Habilita `&`, deref y `move` con invalidación (secc. 8). |
-| D5 | Regiones = **arenas** liberadas enteras al salir | Ejecuta la semántica region-based y expone punteros colgantes en runtime (secc. 8.1). |
+| D5 | Celdas con estado (`LIVE`/`MOVED`/`FREED`) | Ejecuta la propiedad y expone los punteros colgantes en runtime, sin rastrear quién apunta a qué (secc. 8.1). |
 | D6 | Vive en `runtime/interpreter/` (realiza la intención "sobre el HIR" de `V0/src/intepreter/`) | Una sola implementación; el esqueleto `enviroment`/`hook`/`memory` ya está aquí (secc. 1, 4). |
 | D7 | **Module linker** liga N unidades HIR (main + `.libsrx`) | Cada unidad compila a su propio `Module`; ejecutar el programa entero necesita ligarlas (secc. 10.1). |
 | D8 | Target seleccionable `interp` en `compilerconfig` (+ `--run`) | Sin romper `native`/`wasm`: los tres parten del mismo HIR; el campo `target` elige la ruta (secc. 10.2). |

@@ -34,7 +34,11 @@ _CHILD_FIELDS: Dict[type, Tuple[str, ...]] = {}
 # campos que NUNCA contienen nodos AST: posiciones, tipos resueltos
 # (``Type`` es un dataclass frozen SIN hijos AST) y strings estructurales.
 _LEAF_FIELDS = frozenset({"ln", "col", "restype", "return_restype", "hook",
-                          "param_restypes"})
+                          "param_restypes",
+                          # 'drops' son ANOTACIONES (ast.Drop), no hijos: no
+                          # heredan de ASTNode y recorrerlas seria escanear una
+                          # lista por bloque para descartarla entera.
+                          "drops", "temp_drop", "transfers"})
 
 
 def child_fields(cls: type) -> Tuple[str, ...]:

@@ -1,7 +1,8 @@
 """Modelo de memoria en runtime (secc. 8): celdas, punteros, move y free.
 
-v1: solo :mod:`pointer` (RBMM/arenas por región llega con la versión del
-esquema HIR que las transporte — ``region.py`` vive en el plan, no aquí).
+Solo :mod:`pointer`: no hay arenas aquí. El modelo por regiones se retiró en
+v0.2.0 y las arenas del modelo nuevo son un TIPO DE LIBRERÍA, no una
+construcción del intérprete — no necesitan un módulo propio.
 """
 
 from .pointer import Cell, CellState, Pointer

@@ -1,0 +1,57 @@
+name: Ejemplos de la documentación
+
+# Separado del CI a proposito. Un ejemplo que se queda viejo es un problema de
+# DOCUMENTACION, no del compilador: mezclarlo con la suite haria que una
+# correccion de texto pudiera poner en rojo la señal de que el lenguaje
+# funciona, y que quien mira el CI ya no supiera cual de las dos cosas fallo.
+# Este workflow responde una sola pregunta: ¿lo que la documentacion enseña
+# sigue compilando y ejecutando?
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "documentation/**"
+      - "test/docs_examples.py"
+      - "lib/**"
+      - ".github/workflows/docs-examples.yml"
+  pull_request:
+    paths:
+      - "documentation/**"
+      - "test/docs_examples.py"
+      - "lib/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ejemplos:
+    name: Compilar y ejecutar cada ejemplo
+    runs-on: ubuntu-latest
+    # Son ~100 compilaciones en subproceso: tarda menos de un minuto, y si
+    # pasa de esto es que algo se colgo.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      # 'protoc' y 'protobuf' hacen falta para EJECUTAR (--run). Sin ellos el
+      # informe solo podria compilar, y la mitad del valor esta en la ejecucion.
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          python -m pip install --upgrade pip
+          pip install protobuf pyyaml
+
+      # El informe legible, no el test: en un fallo el log del job ya trae el
+      # documento, la linea y el diagnostico, sin tener que reproducirlo local.
+      - name: Verificar los ejemplos
+        run: python test/docs_examples.py

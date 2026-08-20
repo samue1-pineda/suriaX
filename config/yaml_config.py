@@ -17,11 +17,24 @@ las librerías. La configuración cargada lleva ``_root`` con esa raíz;
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import List, Optional
 
 from . import dependencies as deps
+from .errors import CFG001, CFG002, CFG007, ConfigError
+from .validate import validate
 
 CONFIG_FNAME = ".suriaX_config.yaml"
+
+
+#: clave donde viajan los diagnosticos de la carga. Guion bajo = valor
+#: resuelto en memoria, no parte del yaml que el usuario escribe (misma
+#: convencion que ``_root`` y ``_extensions``).
+ERRORS_KEY = "_errors"
+
+
+def errors_of(config: Optional[dict]) -> List[ConfigError]:
+    """Diagnosticos que dejo la carga de ``config`` (lista vacia si ninguno)."""
+    return list((config or {}).get(ERRORS_KEY) or [])
 
 
 def default_config() -> dict:
@@ -33,7 +46,7 @@ def default_config() -> dict:
         "version": 2,
         # target de ejecución. Todos parten del MISMO HIR (el contrato que
         # desacopla el frontend de sus consumidores, ver ARCHITECTURE.md):
-        #   native  -> HIR -> MIR -> LLVM IR -> objeto/ejecutable (backend C++)
+        #   native  -> HIR -> MIR -> VM bytecode/JIT -> objeto/ejecutable
         #   wasm    -> íd., artefacto .wasm
         #   interp  -> HIR -> intérprete tree-walk en Python (runtime/interpreter/)
         # El target PRINCIPAL del proyecto es 'interp' (Pre-Alpha: única ruta
@@ -52,12 +65,11 @@ def default_config() -> dict:
         ),
         "optimization": "O0",  # O0 | O1 | O2 | O3
 
-        # --- toolchain: rutas que el backend C++ usa para compilar/enlazar ---
+        # --- toolchain: rutas que el backend nativo usa para enlazar ---
+        # El target nativo es la VM de bytecode con JIT; LLVM no esta en la
+        # ruta de generacion de codigo (ver ARCHITECTURE.md), asi que aqui no
+        # hay nada suyo que configurar.
         "toolchain": {
-            "llvm_required_major": deps.REQUIRED_LLVM_MAJOR,
-            "llvm_path": os.environ.get("LLVM_PATH", ""),
-            "llvm_config": deps.find_llvm_config() or "",
-            "llvm_include": deps.default_llvm_include_path(),
             "linker": deps.detect_linker(),
             "sysroot": os.environ.get("SURIAX_SYSROOT", ""),
         },
@@ -100,7 +112,7 @@ def default_config() -> dict:
 
         # --- visualización: qué etapas volcar (objetivo educativo) ---
         "visualization": {
-            "stages": [],        # p.ej. ["tokens", "ast", "hir", "mir", "llvm-ir"]
+            "stages": [],        # p.ej. ["tokens", "ast", "hir", "mir", "bytecode"]
             "format": "text",    # text | json | dot
         },
 
@@ -112,6 +124,21 @@ def default_config() -> dict:
             "extern_cpp_include": [],   # headers C++ para '#extern cpp{}'
             "bindings": [],             # módulos pybind11 a enlazar
         },
+
+        # --- extensiones del proyecto (HTIMS) -------------------------------
+        # Las declara 'extends.srcx' (manifiesto en la raíz: logic_dir C++ /
+        # calls_dir Python) o se escriben a mano aquí:
+        #
+        #   project: "MiJuego"
+        #   extensions:
+        #     - path: "plugins/physics.py"
+        #
+        # 'project' lo DECLARA la extensión ('PROJECT = "MiJuego"' en su .py,
+        # no el nombre de los archivos); escribirlo a mano solo tiene efecto
+        # en un proyecto que no declara ninguna. El descubrimiento corre ANTES
+        # del léxico y vive en 'htims/' — este paquete solo define el esquema.
+        "project": "",
+        "extensions": [],
 
         "paths": {
             "input": "",
@@ -167,26 +194,62 @@ def reload_config(path: Optional[str] = None, *, start_dir: Optional[str] = None
     if target is None or not os.path.isfile(target):
         config = default_config()
         config["_root"] = os.path.abspath(start_dir or os.getcwd())
+        config[ERRORS_KEY] = []
         return config
 
     root = os.path.dirname(os.path.abspath(target))
     config = default_config()
-    # sin pyyaml (o con un yaml malformado) NO se aborta ni se pierde el
-    # ancla: encontrar el archivo ya define la raiz del proyecto — los
-    # valores personalizados simplemente no se aplican. (Causa real de la
-    # busqueda "extraña" de rutas: la config fallaba en silencio y todo se
-    # resolvia contra el CWD del proceso.)
+    errores: List[ConfigError] = []
+    # Encontrar el archivo ya define la raiz del proyecto, pase lo que pase al
+    # leerlo: perderla mandaria la resolucion de rutas al CWD del proceso.
+    # Lo que ya NO se hace es seguir en silencio — una config que no dice lo
+    # que su autor cree es peor que no tenerla, y el sintoma aparecia lejos
+    # ("no se encontro la libreria X") sin pista del origen.
+    data = None
     try:
         import yaml
-        with open(target, "r", encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        # mezcla superficial sobre los defaults para tolerar archivos parciales.
-        config.update(data)
     except ImportError:
-        pass
-    except Exception:
-        pass  # yaml corrupto: defaults + raiz correcta; el error real se ve con --check
+        # ADVERTENCIA, no error: el frontend completo corre con la libreria
+        # estandar (contrato de how_to_run.md), asi que no tener el lector de
+        # yaml no puede impedir compilar. Pero callarlo es peor: el usuario
+        # cree que su config se aplica y esta usando los valores por defecto.
+        errores.append(ConfigError(
+            CFG007,
+            "hay un '.suriaX_config.yaml' pero falta 'pyyaml' para leerlo: la "
+            "configuracion NO se esta aplicando y todo usa los valores por "
+            "defecto -> pip install pyyaml",
+            file=target, severity="warning",
+        ))
+    else:
+        try:
+            with open(target, "r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh)
+        except OSError as exc:
+            errores.append(ConfigError(
+                CFG001, f"no se pudo leer la configuracion: {exc}", file=target))
+        except UnicodeDecodeError as exc:
+            errores.append(ConfigError(
+                CFG001, f"la configuracion no es UTF-8 valido: {exc}", file=target))
+        except yaml.YAMLError as exc:
+            marca = getattr(exc, "problem_mark", None)
+            errores.append(ConfigError(
+                CFG002,
+                f"YAML malformado: {getattr(exc, 'problem', None) or exc}",
+                file=target,
+                line=(marca.line + 1) if marca else 1,
+                column=(marca.column + 1) if marca else 1,
+            ))
+
+    if data is not None:
+        errores.extend(validate(data, default_config(), archivo=target))
+        # mezcla superficial sobre los defaults para tolerar archivos parciales.
+        # Solo se aplica lo que VALIDA: aplicar un valor que ya se reporto como
+        # erroneo haria que el compilador trabajara con datos que acaba de
+        # rechazar.
+        if not errores and isinstance(data, dict):
+            config.update(data)
     config["_root"] = root
+    config[ERRORS_KEY] = errores
     return config
 
 
@@ -213,6 +276,6 @@ def resolve_path(config: Optional[dict], path: str) -> str:
 
 
 __all__ = [
-    "CONFIG_FNAME", "default_config", "generate_config", "reload_config",
-    "project_root", "resolve_path",
+    "CONFIG_FNAME", "ERRORS_KEY", "default_config", "generate_config",
+    "reload_config", "errors_of", "project_root", "resolve_path",
 ]

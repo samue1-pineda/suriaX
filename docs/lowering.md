@@ -11,11 +11,12 @@ Documenta las **bajadas (lowering)** entre representaciones: de AST a HIR
 |----------------|--------|-----------------|
 | AST → HIR      | Python | Serializa a protobuf con tipos/símbolos resueltos. |
 | HIR → MIR      | C++    | Control de flujo explícito; verificación de memoria. |
-| MIR → LLVM IR  | C++    | Generación de código (ver [llvm_backend.md](llvm_backend.md)). |
+| MIR → bytecode | C++    | Generación de código para la VM con JIT. |
+| HIR → WIR      | TypeScript | El target web, ya funcional (ver [ARCHITECTURE.md](../ARCHITECTURE.md)). |
 
 ## TODO
 
 - [ ] Reglas de lowering AST → HIR.
 - [ ] Reglas de lowering HIR → MIR.
-- [ ] Tratamiento de `region`/`make in`/`at`/`move` en cada bajada.
-- [ ] (Idea) añadir un pass de LLVM IR para el manejo de memoria.
+- [ ] Tratamiento de `move`/`free` y del drop de ámbito en cada bajada.
+- [ ] Generación de bytecode y diseño del conjunto de instrucciones.

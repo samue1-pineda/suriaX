@@ -3,11 +3,15 @@
 Módulo del paquete ``config/`` (ver ``config/readme.md``). Responsabilidades:
 
  - **detección de plataforma** (Windows / Linux / macOS / web-playground);
- - **verificación de dependencias** del core (LLVM-22, protobuf, pybind11,
-   pyyaml) con mensajes claros y, si falta algo, aborto controlado;
- - **detección robusta de LLVM-22** via ``llvm-config`` (con fallback a
-   ``LLVM_PATH`` / rutas estándar) y estimación de toolchain (triple,
-   linker, artefacto) que consume ``yaml_config.py``.
+ - **verificación de dependencias** del core (protobuf, pybind11, pyyaml)
+   con mensajes claros y, si falta algo, aborto controlado;
+ - **estimación de toolchain** (triple, linker, artefacto) que consume
+   ``yaml_config.py``.
+
+LLVM ya NO se detecta: el target nativo es la VM de bytecode con JIT y LLVM
+no está en la ruta de generación de código (ver ``ARCHITECTURE.md``).
+Comprobar una dependencia que nada usa solo servía para que ``--check``
+saliera en rojo en una máquina perfectamente capaz de compilar.
 
 Nota de filosofía: el usuario final no necesita estas dependencias; el
 binario distribuido las trae resueltas. Esto importa al construir/ejecutar
@@ -18,9 +22,7 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import shutil
-import subprocess
 import sys
 from typing import Optional
 
@@ -37,11 +39,8 @@ IS_WEB = False
 Algunas funciones, flags y métodos no deben activarse si ``IS_WEB`` es
 verdadero (p. ej. el acceso al sistema de archivos local o la invocación de
 toolchains nativos). En la build del playground este flag pasa a ``True`` y
-el target por defecto es ``wasm`` (LLVM IR -> WebAssembly).
+el target por defecto es ``wasm``.
 """
-
-# versión de LLVM requerida por el proyecto.
-REQUIRED_LLVM_MAJOR = 22
 
 
 # --------------------------------------------------------------------------- #
@@ -60,61 +59,6 @@ def _check_python_module(module: str) -> Optional[str]:
     return getattr(mod, "__version__", "desconocida")
 
 
-def find_llvm_config() -> Optional[str]:
-    """Localiza el ejecutable ``llvm-config`` (preferentemente el de la
-    versión requerida).
-
-    Orden de búsqueda:
-      1. ``LLVM_PATH``/bin/llvm-config (si la env var está definida);
-      2. ``llvm-config-<REQUIRED_LLVM_MAJOR>`` en el PATH;
-      3. ``llvm-config`` genérico en el PATH.
-    """
-    llvm_path = os.environ.get("LLVM_PATH")
-    if llvm_path:
-        candidate = os.path.join(
-            llvm_path, "bin", "llvm-config.exe" if IS_WIN32 else "llvm-config"
-        )
-        if os.path.isfile(candidate):
-            return candidate
-
-    for name in (f"llvm-config-{REQUIRED_LLVM_MAJOR}", "llvm-config"):
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
-
-
-def detect_llvm_version() -> Optional[str]:
-    """Versión completa de LLVM detectada (p. ej. ``22.1.0``) o ``None``.
-
-    Usa ``llvm-config --version`` como fuente de verdad.
-    """
-    cfg = find_llvm_config()
-    if cfg is None:
-        return None
-    try:
-        out = subprocess.run(
-            [cfg, "--version"],
-            capture_output=True, text=True, timeout=10, check=True,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return None
-    version = out.stdout.strip()
-    return version or None
-
-
-def _llvm_status() -> tuple[bool, str]:
-    """(ok, detalle) sobre la disponibilidad de LLVM (versión requerida)."""
-    version = detect_llvm_version()
-    if version is None:
-        return False, "no se encontro 'llvm-config' (LLVM no instalado o fuera del PATH)"
-    match = re.match(r"(\d+)", version)
-    major = int(match.group(1)) if match else -1
-    if major != REQUIRED_LLVM_MAJOR:
-        return False, f"se requiere LLVM {REQUIRED_LLVM_MAJOR}, detectado {version}"
-    return True, version
-
-
 def check_dependencies() -> dict[str, dict]:
     """Verifica todas las dependencias del core y devuelve un reporte.
 
@@ -122,14 +66,6 @@ def check_dependencies() -> dict[str, dict]:
     No aborta: solo informa. Para abortar usar :func:`ensure_dependencies`.
     """
     report: dict[str, dict] = {}
-
-    llvm_ok, llvm_detail = _llvm_status()
-    report["llvm"] = {
-        "ok": llvm_ok,
-        "detail": llvm_detail,
-        "install": f"instala LLVM-{REQUIRED_LLVM_MAJOR} con tu gestor de "
-        "paquetes (apt/pacman/brew) o define LLVM_PATH",
-    }
 
     for mod, pip_name in (
         ("google.protobuf", "protobuf"),
@@ -149,9 +85,9 @@ def check_dependencies() -> dict[str, dict]:
 def ensure_dependencies(*, required: Optional[set[str]] = None) -> None:
     """Verifica las dependencias y **aborta** con mensaje claro si falta alguna.
 
-    :param required: subconjunto a exigir (por nombre pip: ``llvm``,
-        ``protobuf``, ``pybind11``, ``pyyaml``). ``None`` = todas. Útil para
-        fases que no necesitan todo el toolchain (el frontend no necesita LLVM).
+    :param required: subconjunto a exigir (por nombre pip: ``protobuf``,
+        ``pybind11``, ``pyyaml``). ``None`` = todas. Útil para las fases que
+        no necesitan todo (el frontend solo necesita la librería estándar).
     """
     report = check_dependencies()
     if required is not None:
@@ -172,48 +108,16 @@ def ensure_dependencies(*, required: Optional[set[str]] = None) -> None:
 # --------------------------------------------------------------------------- #
 # rutas y estimaciones de toolchain (consumidas por yaml_config.py)
 # --------------------------------------------------------------------------- #
-def default_llvm_include_path() -> str:
-    """Mejor estimación de la ruta de headers de LLVM según la plataforma."""
-    llvm_path = os.environ.get("LLVM_PATH")
-    if llvm_path:
-        return os.path.join(llvm_path, "include")
-
-    cfg = find_llvm_config()
-    if cfg is not None:
-        try:
-            out = subprocess.run(
-                [cfg, "--includedir"],
-                capture_output=True, text=True, timeout=10, check=True,
-            )
-            path = out.stdout.strip()
-            if path:
-                return path
-        except (subprocess.SubprocessError, OSError):
-            pass
-
-    if IS_WIN32:
-        return "llvm_include_not_found"
-    if IS_MACOS:
-        return os.path.join(os.sep, "opt", "homebrew", "opt", "llvm", "include")
-    return os.path.join(os.sep, "usr", "lib", f"llvm-{REQUIRED_LLVM_MAJOR}", "include")
-
-
 def detect_target_triple() -> str:
-    """Mejor estimación del target-triple via ``llvm-config --host-target``."""
+    """Mejor estimación del target-triple de la máquina actual.
+
+    Se deduce de la plataforma y la arquitectura, sin preguntarle a ningún
+    toolchain externo: el triple solo describe para qué máquina se compila, y
+    arrancar un subproceso para averiguarlo era el único motivo por el que
+    cargar la configuración tocaba el disco fuera del proyecto.
+    """
     if IS_WEB:
         return "wasm32-unknown-unknown"
-    cfg = find_llvm_config()
-    if cfg is not None:
-        try:
-            out = subprocess.run(
-                [cfg, "--host-target"],
-                capture_output=True, text=True, timeout=10, check=True,
-            )
-            triple = out.stdout.strip()
-            if triple:
-                return triple
-        except (subprocess.SubprocessError, OSError):
-            pass
     if IS_WIN32:
         return "x86_64-pc-windows-msvc"
     if IS_MACOS:
@@ -246,8 +150,7 @@ def machine_arch() -> str:
 
 
 __all__ = [
-    "IS_WIN32", "IS_LINUX", "IS_MACOS", "IS_WEB", "REQUIRED_LLVM_MAJOR",
+    "IS_WIN32", "IS_LINUX", "IS_MACOS", "IS_WEB",
     "DependencyError", "check_dependencies", "ensure_dependencies",
-    "find_llvm_config", "detect_llvm_version", "default_llvm_include_path",
     "detect_target_triple", "default_artifact", "detect_linker", "machine_arch",
 ]

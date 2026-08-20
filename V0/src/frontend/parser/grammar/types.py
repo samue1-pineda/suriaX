@@ -114,8 +114,13 @@ def _parse_base_type(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
         # Cursor.expect_name) tambien debe poder REFERENCIARSE como tipo
         # (p. ej. '__opaque__ ptr'), no solo declararse.
         cursor.advance()
-        return ast.NominalTypeExpr(ln=tok.ln, col=tok.col,
-                                    name=_qualified_name(cursor, tok.lexeme))
+        name = _qualified_name(cursor, tok.lexeme)
+        # ARGUMENTOS DE TIPO ('Vector<int>'). Aqui '<' no puede ser una
+        # comparacion —estamos en posicion de TIPO, no de expresion—, asi que
+        # no hay ambiguedad estilo C++ que resolver: si sigue un '<', son
+        # argumentos. Reusa la misma regla que 'cast<T>(x)'.
+        args = parse_type_args(cursor, ctx) if cursor.check(TokenType.LESS) else []
+        return ast.NominalTypeExpr(ln=tok.ln, col=tok.col, name=name, args=args)
 
     if tok.type is TokenType.POINTER:
         # forma prefija ('ptr char') retirada: 'ptr' es sufijo postfijo.
@@ -149,6 +154,39 @@ def _parse_error_inner(cursor: Cursor, ctx: ParserContext):
     if cursor.peek().type in _TYPE_STARTERS:
         return parse_type(cursor, ctx)
     return None
+
+
+def parse_type_params(cursor: Cursor, ctx: ParserContext) -> list[str]:
+    """``type_params = [ "<" IDENTIFIER { "," IDENTIFIER } ">" ]`` -- los
+    PARAMETROS de un tipo generico, pegados a su nombre
+    (``struct { ... } Vector<T>;``).
+
+    Espeja a :func:`parse_type_args` pero admite solo NOMBRES: un parametro
+    es un nombre que se va a ligar, no un tipo ya escrito. Escribir
+    ``Vector<int>`` en una DECLARACION seria declarar un parametro llamado
+    'int', que no significa nada; se rechaza con un mensaje que lo dice.
+    """
+    if not cursor.check(TokenType.LESS):
+        return []
+    cursor.advance()
+    params: list[str] = [_parametro(cursor)]
+    while cursor.match(TokenType.COMMA):
+        params.append(_parametro(cursor))
+    cursor.expect(TokenType.GREATER)
+    return params
+
+
+def _parametro(cursor: Cursor) -> str:
+    tok = cursor.peek()
+    if tok.type is not TokenType.IDENTIFIER:
+        raise ParseError.MissingTypeAnnotationError(
+            f"un parametro de tipo es un NOMBRE por ligar, no un tipo ya "
+            f"escrito: '{tok.lexeme}' no sirve. Escribe 'Vector<T>' para "
+            f"declarar el generico y 'Vector<int>' para usarlo",
+            line=tok.ln, column=tok.col,
+        )
+    cursor.advance()
+    return tok.lexeme
 
 
 def parse_type_args(cursor: Cursor, ctx: ParserContext) -> list[ast.TypeExpr]:

@@ -9,7 +9,7 @@ que se llaman entre si.
 
 ``PRIMARY_HANDLERS`` es la tabla de despacho ``TokenType -> constructor``
 para la regla ``primary``: agregar una forma primaria nueva es agregar una
-entrada aqui, sin tocar ``parse_unary``/``parse_placement``/``parse_postfix``.
+entrada aqui, sin tocar ``parse_unary``/``parse_postfix``.
 """
 
 from __future__ import annotations
@@ -50,17 +50,7 @@ def parse_unary(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
         cursor.advance()
         operand = parse_unary(cursor, ctx)  # right-recursivo: '- - x' es valido
         return ast.UnaryOp(ln=tok.ln, col=tok.col, operator=operator, operand=operand)
-    return parse_placement(cursor, ctx)
-
-
-def parse_placement(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
-    """``placement = postfix [ "at" IDENTIFIER ]`` -- asociacion a region."""
-    expr = parse_postfix(cursor, ctx)
-    if cursor.check(TokenType.AT):
-        cursor.advance()
-        region_tok = cursor.expect_name()
-        expr = ast.Placement(ln=expr.ln, col=expr.col, expr=expr, region=region_tok.lexeme)
-    return expr
+    return parse_postfix(cursor, ctx)
 
 
 def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
@@ -81,6 +71,18 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
         if tok.type is TokenType.L_BRACE and dotted is not None \
                 and not ctx.no_struct_literal:
             expr = _struct_literal(cursor, ctx, expr, dotted)
+            dotted = None
+        elif tok.type is TokenType.LESS and dotted is not None \
+                and not ctx.no_struct_literal:
+            # posible literal de un GENERICO ('Caja<int>{ v: 1 }'). Es la
+            # unica posicion del lenguaje donde '<' es ambiguo (comparacion
+            # vs argumentos de tipo), y se resuelve MIRANDO: solo son
+            # argumentos si tras el '>' viene un '{'. Si no, se retrocede y
+            # el '<' vuelve a ser el operador que siempre fue.
+            type_args = _type_args_de_literal(cursor, ctx)
+            if type_args is None:
+                return expr
+            expr = _struct_literal(cursor, ctx, expr, dotted, type_args)
             dotted = None
         elif tok.type is TokenType.DOT:
             cursor.advance()
@@ -106,9 +108,32 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
             return expr
 
 
+def _type_args_de_literal(cursor: Cursor, ctx: ParserContext):
+    """``"<" type { "," type } ">"`` SI y solo si le sigue un ``"{"``.
+
+    Devuelve los argumentos, o ``None`` si lo que hay no es esa forma — en
+    cuyo caso el cursor queda EXACTAMENTE donde estaba y el ``<`` lo recoge
+    el motor Pratt como comparacion. Es el unico retroceso del parser, y
+    esta acotado: nunca cruza el ``>``, y ningun error llega a ``ctx``
+    porque ``parse_type_args`` senala lanzando, no registrando.
+    """
+    inicio = cursor.pos
+    from ..grammar.types import parse_type_args
+    try:
+        args = parse_type_args(cursor, ctx)
+    except ParseError.ParseError:
+        cursor.pos = inicio
+        return None
+    if not cursor.check(TokenType.L_BRACE):
+        cursor.pos = inicio
+        return None
+    return args
+
+
 def _struct_literal(cursor: Cursor, ctx: ParserContext,
-                    name_expr: ast.Expression, type_name: str) -> ast.Expression:
-    """``IDENTIFIER { "." IDENTIFIER } "{" [ IDENTIFIER ":" expression { "," ... } ] "}"``.
+                    name_expr: ast.Expression, type_name: str,
+                    type_args=None) -> ast.Expression:
+    """``IDENTIFIER { "." IDENTIFIER } [ type_args ] "{" [ IDENTIFIER ":" expression { "," ... } ] "}"``.
 
     Instancia un struct nominal (``type_name`` es el tipo, ya sea desnudo o
     cualificado por su modulo). Coma final tolerada; campos en el orden
@@ -128,7 +153,7 @@ def _struct_literal(cursor: Cursor, ctx: ParserContext,
     cursor.expect(TokenType.R_BRACE)
     return ast.StructLiteral(ln=name_expr.ln, col=name_expr.col,
                              type_name=type_name, field_names=names,
-                             values=values)
+                             values=values, type_args=type_args or [])
 
 
 @contextmanager
@@ -321,12 +346,11 @@ PRIMARY_HANDLERS: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Expressi
     TokenType.L_PAREN: _grouping,
     TokenType.SIZEOF: _sizeof,
     TokenType.CAST: _cast,
-    # TokenType.MAKE: retirado con RBMM (ver KEYWORDS en include/t_types.py).
     # 'make' vuelve a ser un IDENTIFIER corriente.
 }
 
 
 __all__ = [
-    "parse_unary", "parse_placement", "parse_postfix", "parse_primary",
+    "parse_unary", "parse_postfix", "parse_primary",
     "PRIMARY_HANDLERS",
 ]

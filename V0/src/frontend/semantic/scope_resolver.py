@@ -1,7 +1,7 @@
 """Pasada 3 — Resolución de scopes, nombres, mutabilidad y llamadas.
 
 Recorre el cuerpo de cada función (y los statements de nivel superior) UNA
-sola vez: scope ``BLOCK`` por bloque, ``REGION`` por región. En el MISMO
+sola vez: un scope ``BLOCK`` por bloque. En el MISMO
 punto donde se resuelve cada símbolo se validan (cero recorridos extra, ver
 ``ARQUITECTURA.md`` secc. 7):
 
@@ -11,12 +11,10 @@ punto donde se resuelve cada símbolo se validan (cero recorridos extra, ver
    su parámetro (``TypeMismatchError``, sin coerciones implícitas),
  - miembros de librerías importadas (``IO.printf`` -> exports reales del
    ``.libsrx``; ``UnknownLibraryMemberError``),
- - existencia de regiones (``make T in r`` / ``x at r`` ->
-   ``UndefinedRegionError``),
  - compatibilidad de tipos donde ya se conocen ambos lados (vía
    ``type_service`` — nunca comparando ``Type`` a mano),
  - y el DESPACHO de hooks de tipo: ``free x;`` -> ``__free__`` del tipo de
-   ``x``; ``make T in r`` -> ``__make__`` de T; ``print(x)``/``x.print()``
+   ``x``; ``print(x)``/``x.print()``
    -> ``__print__``; ``len(x)``/``x.len()`` -> ``__len__``. El enlace queda
    anotado en el nodo (``.hook``) listo para el HIR.
 
@@ -29,19 +27,22 @@ principio que ``memory_check``, secc. 4.2).
 
 from __future__ import annotations
 
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 try:
     from include import ast_nodes as ast
-    from include.types_ast import PRIMITIVE_TYPES, Type, TypeKind, pointer_of
+    from include.types_ast import (META_TYPE, PRIMITIVE_TYPES, Type, TypeKind,
+                                   is_meta, nominal, pointer_of)
     from error_handler import ASTError, SemanticError
 except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
-    from types_ast import PRIMITIVE_TYPES, Type, TypeKind, pointer_of  # type: ignore
+    from types_ast import (META_TYPE, PRIMITIVE_TYPES, Type,  # type: ignore
+                           TypeKind, is_meta, nominal, pointer_of)
     import ASTError  # type: ignore
     import SemanticError  # type: ignore
 
 from . import collect, type_service
+from .type_resolver import TypeBinder
 from .context import SemanticContext
 from .hooks import CALL_HOOKS, HookKind
 from .symbol_table import ScopeKind, Symbol, SymbolKind
@@ -62,6 +63,13 @@ _NATIVE_CASTS = frozenset({
     (TypeKind.INT, TypeKind.FLOAT), (TypeKind.FLOAT, TypeKind.INT),
     (TypeKind.INT, TypeKind.CHAR), (TypeKind.CHAR, TypeKind.INT),
     (TypeKind.BOOL, TypeKind.INT),
+    # cualquier primitivo -> 'str': total y SIN perdida, la unica conversion de
+    # la que eso se puede decir. La sabia hacer el interpolador de f-strings y
+    # no habia forma de pedirla: sin ella, imprimir algo que no fuera ya una
+    # cadena obligaba a envolverlo en un f-string. La vuelta ('str' -> int) NO
+    # es nativa: puede fallar, y una conversion que falla necesita decir como.
+    (TypeKind.INT, TypeKind.STR), (TypeKind.FLOAT, TypeKind.STR),
+    (TypeKind.BOOL, TypeKind.STR), (TypeKind.CHAR, TypeKind.STR),
 })
 
 
@@ -74,28 +82,32 @@ def run(program: ast.Program, ctx: SemanticContext) -> None:
             resolver.resolve_function(item)
         elif isinstance(item, ast.TestDecl):
             resolver.resolve_test(item)
+        elif isinstance(item, ast.StructDecl):
+            resolver.bind_struct(item)
+        elif isinstance(item, ast.EnumDecl):
+            resolver.bind_enum(item)
         elif isinstance(item, ast.Statement):
             resolver.visit_top_level_stmt(item)
-        # struct/enum/directivas: sin cuerpos que resolver aqui
+        # enum/directivas: sus items no llevan tipos escritos por el usuario
 
 
 class _ScopeResolver:
-    __slots__ = ("ctx", "locals", "_stmt_dispatch", "_expr_dispatch")
+    __slots__ = ("ctx", "locals", "types", "_stmt_dispatch", "_expr_dispatch")
 
     def __init__(self, ctx: SemanticContext) -> None:
         self.ctx = ctx
+        # enlace de tipos nominales: era la pasada 2, y ahora se invoca en el
+        # punto donde cada anotacion entra en juego. Asi VE el scope, que es
+        # lo que permite que un 'type' declarado dentro de una funcion exista.
+        self.types = TypeBinder(ctx)
         # mapa nombre -> Symbol de los locales de la funcion EN CURSO
         # (se publica en ctx.fn_locals para memory_check, pasada 4).
         self.locals: Optional[Dict[str, Symbol]] = None
         self._stmt_dispatch: Dict[type, Callable] = {
             ast.Block: self._stmt_block,
             ast.VarDecl: self._stmt_var_decl,
+            ast.TypeDecl: self._stmt_type_decl,
             ast.ImportBinding: self._stmt_import_binding,
-            ast.RegionStmt: self._stmt_region,
-            ast.NewStmt: self._stmt_new,
-            ast.DeleteStmt: self._stmt_delete,
-            ast.InRegionStmt: self._stmt_in_region,
-            ast.MoveRegionStmt: self._stmt_move_region,
             ast.IfStmt: self._stmt_if,
             ast.WhileStmt: self._stmt_while,
             ast.MatchStmt: self._stmt_match,
@@ -117,12 +129,10 @@ class _ScopeResolver:
             ast.AddrOf: self._expr_addrof,
             ast.BinaryOp: self._expr_binary,
             ast.Assignment: self._expr_assignment,
-            ast.Placement: self._expr_placement,
             ast.Call: self._expr_call,
             ast.Index: self._expr_index,
             ast.MemberAccess: self._expr_member,
-            ast.MakeExpr: self._expr_make,
-            ast.SizeofExpr: self._expr_restype,
+            ast.SizeofExpr: self._expr_sizeof,
             ast.CastExpr: self._expr_cast,
             ast.StructLiteral: self._expr_struct_literal,
         }
@@ -131,8 +141,13 @@ class _ScopeResolver:
     # funciones y statements
     # ------------------------------------------------------------------ #
     def resolve_function(self, fn: ast.FunctionDecl) -> None:
-        # prototipo (sin cuerpo): no hay statements que resolver. La firma ya
-        # la valido collect (simbolo) y type_resolver (tipos de params/retorno).
+        # la FIRMA se valida siempre, cuerpo o no: un prototipo con un tipo
+        # inexistente en sus parametros es igual de erroneo, y es la forma en
+        # que una libreria declara lo que el host implementa.
+        for p in fn.params:
+            self.types.bind(p)
+        self.types.bind_return(fn)
+        # prototipo (sin cuerpo): no hay statements que resolver.
         if fn.body is None:
             return
         ctx = self.ctx
@@ -154,10 +169,87 @@ class _ScopeResolver:
         # cada '{}' interno anida su propio BLOCK.
         for stmt in fn.body.statements:
             self.visit_stmt(stmt)
-        ctx.pop_scope()
+        # el cuerpo comparte el scope FUNCTION, asi que sus drops se anotan
+        # aqui y no en '_stmt_block' (que nunca lo visita).
+        self._anotar_drops(fn.body)
+        self._pop_scope()
 
         ctx.current_fn = None
         self.locals = None
+
+    def bind_struct(self, node: ast.StructDecl) -> None:
+        """Valida los tipos de los campos de un ``struct``.
+
+        No hay cuerpo que recorrer, pero sus campos SI llevan anotaciones del
+        usuario; cuando esto era una pasada aparte las alcanzaba su recorrido
+        plano.
+        """
+        for field in node.fields:
+            self.types.bind(field)
+        # TAMANO FINITO. Se comprueba aqui y no en 'collect' porque la
+        # recursion mutua ('A' contiene 'B', 'B' contiene 'A') exige que los
+        # dos esten ya declarados, y eso lo garantiza la pasada anterior.
+        ciclo = type_service.infinite_size_path(node.name, self.ctx.scope)
+        if ciclo is not None:
+            camino = f"{node.name}." + ".".join(ciclo)
+            self.ctx.error(SemanticError.InfiniteSizeTypeError(
+                f"'{node.name}' se contiene a si mismo por valor "
+                f"({camino}): no tiene tamano finito. Para una estructura "
+                f"recursiva usa un puntero ('{node.name} ptr'), que se refiere "
+                f"en vez de contener",
+                line=node.ln, column=node.col,
+            ))
+
+    def bind_enum(self, node: ast.EnumDecl) -> None:
+        """Valida el PAYLOAD de las variantes de un ``enum``.
+
+        Un enum de solo variantes unidad no tiene nada que validar aqui —son
+        enteros— y por eso esta pasada no lo miraba. Con payload si: sus tipos
+        los escribe el usuario, y valen las mismas reglas que un campo de
+        struct.
+        """
+        for item in node.items:
+            for indice, tipo in enumerate(item.payload_restypes):
+                self._bind_payload(node, item, indice, tipo)
+
+    def _bind_payload(self, node: ast.EnumDecl, item: ast.EnumItem,
+                      indice: int, tipo: Type) -> None:
+        donde = f"el valor {indice + 1} de '{node.name}.{item.name}'"
+        canonico = self.types.check_type(tipo, item.ln, item.col)
+        if canonico is not None:
+            item.payload_restypes[indice] = canonico
+            tipo = canonico
+        if tipo is not None and tipo.kind is TypeKind.VOID:
+            self.ctx.error(SemanticError.InvalidValueTypeError(
+                f"'void' significa \"no hay valor\": no puede ser {donde}",
+                line=item.ln, column=item.col,
+            ))
+            return
+        # TAMANO FINITO: 'enum E { V(E) }' se contiene a si mismo por valor,
+        # igual que un campo de struct. La recursion legitima va por puntero
+        # ('V(E ptr)'), que es como se escribe un arbol.
+        if tipo is not None and tipo.kind is TypeKind.NOMINAL \
+                and _leaf_igual(tipo.name, node.name):
+            self.ctx.error(SemanticError.InfiniteSizeTypeError(
+                f"'{node.name}' se contiene a si mismo por valor en "
+                f"'{item.name}': no tiene tamano finito. Usa un puntero "
+                f"('{item.name}({node.name} ptr)'), que se refiere en vez de "
+                "contener",
+                line=item.ln, column=item.col,
+            ))
+            return
+        # PROPIEDAD: un payload con destructor exigiria destruirlo al morir el
+        # valor, y para eso el drop tendria que saber QUE variante es en
+        # ejecucion. Eso no existe todavia, asi que se rechaza en vez de
+        # filtrarse en silencio (ver documentation/source/memory_model.rst).
+        if type_service.owns_resources(tipo, self.ctx.scope, self.ctx.table):
+            self.ctx.error(SemanticError.UnsupportedPayloadError(
+                f"{donde} es de tipo '{tipo!r}', que posee recursos: una "
+                "variante todavia no puede llevar un valor con destructor "
+                "(el drop tendria que decidir en ejecucion que variante "
+                f"destruir). Pasa un puntero ('{tipo!r} ptr'), que no posee",
+                line=item.ln, column=item.col,
+            ))
 
     def resolve_test(self, test: ast.TestDecl) -> None:
         """Cuerpo de un ``test "..." { }``: se valida como un scope propio
@@ -170,9 +262,23 @@ class _ScopeResolver:
         ctx.push_scope(ScopeKind.FUNCTION)
         for stmt in test.body.statements:
             self.visit_stmt(stmt)
-        ctx.pop_scope()
+        self._pop_scope()
         ctx.current_fn = prev_fn
         self.locals = None
+
+    def _pop_scope(self) -> None:
+        """Cierra el scope actual, invalidando la cache de tipos si hacia falta.
+
+        Un tipo declarado dentro de un bloque deja de existir al salir, pero la
+        cache del binder recuerda nombre -> Symbol: sin vaciarla, ese tipo
+        seguiria resolviendo en el resto del archivo y sombrearia al global.
+        Seria el error mas silencioso posible — el programa compilaria, con el
+        tipo equivocado. Solo se paga cuando el scope declaro tipos, que es el
+        caso raro.
+        """
+        if self.ctx.scope.types:
+            self.types.invalidate()
+        self.ctx.pop_scope()
 
     def visit_top_level_stmt(self, stmt: ast.Statement) -> None:
         """Statement suelto a nivel de ``Program``: se resuelve contra el
@@ -188,9 +294,20 @@ class _ScopeResolver:
             self.visit_stmt(stmt)
 
     def visit_stmt(self, stmt: ast.Statement) -> None:
+        """Despacha ``stmt`` a su handler.
+
+        La tabla cubre TODAS las subclases de ``ast.Statement`` y un test lo
+        verifica; si aun así llega una que no está, se reporta en vez de
+        saltarla. Un nodo ignorado en silencio significa que nadie resolvió
+        sus nombres ni anotó sus tipos, y eso no se nota hasta que el
+        programa se ejecuta —fue exactamente lo que pasó con el inicializador
+        de ``type_decl``.
+        """
         handler = self._stmt_dispatch.get(stmt.__class__)
-        if handler is not None:
-            handler(stmt)
+        if handler is None:
+            self._sin_handler(stmt, "sentencia")
+            return
+        handler(stmt)
 
     def _stmt_noop(self, stmt) -> None:
         pass  # break/continue: posicion ya validada por el parser
@@ -199,14 +316,95 @@ class _ScopeResolver:
         self.ctx.push_scope(ScopeKind.BLOCK)
         for stmt in node.statements:
             self.visit_stmt(stmt)
-        self.ctx.pop_scope()
+        self._anotar_drops(node)
+        self._pop_scope()
+
+    def _anotar_drops(self, block: ast.Block) -> None:
+        """Anota que valores mueren al cerrar ``block``.
+
+        Se hace AQUI, con el scope todavia abierto, por dos razones: el scope
+        ES la lista de locales del bloque en orden de declaracion, y es el
+        unico momento en que un tipo declarado dentro del bloque
+        (``const type T;``) todavia resuelve. Despues de esta pasada los
+        scopes se descartan y la pregunta ya no se puede hacer.
+
+        Solo los ``VAR``: un parametro no lo posee este ambito (lo trajo el
+        llamador). El orden es INVERSO al de declaracion — lo ultimo que nace
+        es lo primero que muere, para que un valor pueda depender de otro
+        declarado antes.
+
+        Que la lista sea estatica no significa que el drop sea incondicional:
+        el runtime la recorre y solo destruye lo que siga vivo (la celda sabe
+        si fue movida o liberada). Por eso un ``move`` dentro de un ``if`` no
+        necesita nada especial aqui.
+        """
+        ctx = self.ctx
+        drops: List[ast.Drop] = []
+        for symbol in ctx.scope.values.values():
+            if symbol.kind is not SymbolKind.VAR:
+                continue
+            if not type_service.owns_resources(symbol.type, ctx.scope, ctx.table):
+                continue
+            self._aplanar_drops(symbol.type, [symbol.name], drops)
+        drops.reverse()
+        block.drops = drops
+
+    def _aplanar_drops(self, t: Optional[Type], ruta: List[str],
+                       salida: List[ast.Drop]) -> None:
+        """Traduce "este valor posee recursos" a las destrucciones CONCRETAS.
+
+        Dos casos, y la regla que los separa es de quien es la
+        responsabilidad:
+
+         - el tipo declara ``__free__``  -> ESE destructor se hace cargo de
+           todo lo suyo, incluidos sus campos. Se emite una sola destruccion y
+           no se baja mas.
+         - no lo declara -> posee solo por sus campos (regla 3 de
+           ``owns_resources``), asi que se baja a ellos, en orden INVERSO al de
+           declaracion. La recursion termina porque ``owns_resources`` solo es
+           cierto si en algun punto del arbol POR VALOR hay un ``__free__``, y
+           los punteros —por donde se cierran los tipos recursivos— no poseen.
+
+        Aplanar aqui y no en ejecucion es lo mismo que se hizo con la lista de
+        drops: que campos poseen recursos es una pregunta sobre el TIPO.
+        """
+        hook = self._destructor_de(t)
+        if hook is not None:
+            salida.append(ast.Drop(path=list(ruta), hook=hook))
+            return
+        simbolo = self._nominal_symbol(t)
+        if simbolo is None or not simbolo.members:
+            return
+        # NO se invierte aqui: '_anotar_drops' invierte la lista COMPLETA al
+        # final, asi que emitir en orden de declaracion es lo que produce el
+        # orden inverso de verdad. Invertir en los dos sitios se cancelaba.
+        for campo in simbolo.members.values():
+            if type_service.owns_resources(campo.type, self.ctx.scope,
+                                           self.ctx.table):
+                self._aplanar_drops(campo.type, ruta + [campo.name], salida)
+
+    def _nominal_symbol(self, t: Optional[Type]):
+        """El ``Symbol`` del tipo nominal bajo ``t``, desenvolviendo ``T?`` y
+        ``error T`` (envoltorios) pero nunca ``ptr`` (prestamo)."""
+        while t is not None and (t.kind is TypeKind.NULLABLE
+                                 or t.kind is TypeKind.ERROR):
+            t = t.inner
+        if t is None or t.kind is not TypeKind.NOMINAL or t.name is None:
+            return None
+        return type_service.lookup_type_path(t.name, self.ctx.scope).symbol
+
+    def _destructor_de(self, t: Optional[Type]):
+        """El ``__free__`` declarado por el tipo nominal bajo ``t``, o ``None``."""
+        symbol = self._nominal_symbol(t)
+        if symbol is None:
+            return None
+        return self.ctx.table.lookup_hook(symbol.name, HookKind.FREE)
 
     def _stmt_var_decl(self, node: ast.VarDecl) -> None:
         self._check_var_init(node)
         symbol = Symbol(name=node.name, kind=SymbolKind.VAR, ln=node.ln,
                         col=node.col, type=node.restype,
-                        mutable=(node.qualifier != "const"),
-                        region=self._enclosing_region_name())
+                        mutable=(node.qualifier != "const"))
         if not self.ctx.scope.define_value(symbol):
             self.ctx.error(SemanticError.DuplicateSymbolError(
                 f"'{node.name}' ya está declarado en este scope",
@@ -215,20 +413,96 @@ class _ScopeResolver:
         elif self.locals is not None:
             self.locals[node.name] = symbol
 
-    def _check_var_init(self, node: ast.VarDecl) -> None:
+    def _stmt_type_decl(self, node: ast.TypeDecl) -> None:
+        """``[const] type T [= <expr>];`` — valida el INICIALIZADOR.
+
+        El NOMBRE lo registra ``collect`` (pasada 1) contra el scope global;
+        aquí solo se resuelve la expresión, igual que ``visit_top_level_stmt``
+        hace con un ``VarDecl`` global.
+
+        Sin esta entrada en el despacho el inicializador no lo visitaba nadie:
+        un nombre inexistente cruzaba el frontend entero sin un solo
+        diagnóstico y solo aparecía al ejecutar (``RT006``), con el
+        ``restype`` de la expresión sin anotar dentro del HIR — que promete
+        lo contrario a TODOS los backends, no solo al intérprete.
+        """
+        if self.ctx.scope is not self.ctx.table.global_scope:
+            self._define_local_type(node)
         if node.value is None:
             return
         value_type = self.visit_expr(node.value)
+        # 'type' es de primera clase: el inicializador tiene que PRODUCIR un
+        # tipo. Con 'value_type' desconocido (None) no se reporta nada — misma
+        # regla de cero falsos positivos que el resto de la pasada.
+        if value_type is not None and not is_meta(value_type):
+            self.ctx.error(ASTError.TypeMismatchError(
+                f"el inicializador de 'type {node.name}' debe producir un "
+                f"tipo, no '{value_type!r}': 'type' es un metatipo, así que "
+                f"el valor tiene que salir de una expresión de tipo 'type' "
+                f"(por ejemplo una llamada a una 'fn ... -> type')",
+                line=node.ln, column=node.col,
+            ))
+
+    def _define_local_type(self, node: ast.TypeDecl) -> None:
+        """``type T;`` dentro de una función: registra T en el scope ACTUAL.
+
+        En el nivel superior lo hace ``collect`` (pasada 1), que solo recorre
+        ``program.items``; aquí dentro no llegaba nadie y la declaración se
+        descartaba EN SILENCIO —el fallo salía lejos, como un ``AST005`` en el
+        primer uso—. Poder declararlo aquí es lo que hace de ``type`` un
+        constructo de primera clase y no solo una entrada de librería.
+
+        Se registra en los DOS namespaces por el mismo motivo que el global
+        (ver ``collect._collect_type_decl``): ``type`` es un tipo de primera
+        clase, así que el nombre vale como tipo (``const T x;``) y como valor
+        (``return T;`` en una ``fn ... -> type``).
+
+        La cache del binder se invalida porque este nombre puede SOMBREAR a un
+        tipo global homónimo: lo cacheado antes de esta línea ya no vale.
+        """
+        mutable = node.qualifier != "const"
+        symbol = Symbol(name=node.name, kind=SymbolKind.TYPE, ln=node.ln,
+                        col=node.col, type=nominal(node.name), mutable=mutable)
+        if not self.ctx.scope.define_type(symbol):
+            self.ctx.error(SemanticError.DuplicateSymbolError(
+                f"el tipo '{node.name}' ya está declarado en este scope",
+                line=node.ln, column=node.col,
+            ))
+            return
+        as_value = Symbol(name=node.name, kind=SymbolKind.TYPE, ln=node.ln,
+                          col=node.col, type=META_TYPE, mutable=mutable)
+        if not self.ctx.scope.define_value(as_value):
+            self.ctx.error(SemanticError.DuplicateSymbolError(
+                f"'{node.name}' colisiona con otro símbolo del mismo scope",
+                line=node.ln, column=node.col,
+            ))
+            return
+        self.types.invalidate()
+        if self.locals is not None:
+            self.locals[node.name] = as_value
+
+    def _check_var_init(self, node: ast.VarDecl) -> None:
+        # el tipo escrito se valida y canonicaliza PRIMERO: la comparacion de
+        # abajo usa 'node.restype', y 'point.Point' y 'Point' son nominales
+        # distintos que nunca unificarian.
+        self.types.bind(node)
+        if node.value is None:
+            return
+        value_type = self.visit_expr(node.value)
+        self._tiene_dueno(node.value)   # el binding se queda con el valor
         if _is_null_literal(node.value):
             if not type_service.unify_literal_null(node.restype):
                 self.ctx.error(ASTError.TypeMismatchError(
                     f"'null' no es asignable a '{node.restype!r}' (no es nullable)",
                     line=node.ln, column=node.col,
                 ))
-        elif not type_service.is_assignable(node.restype, value_type):
+        elif not self._acepta_valor(
+                node.restype, node.value, value_type,
+                lambda e: setattr(node, "value", e)):
             self.ctx.error(ASTError.TypeMismatchError(
                 f"no se puede inicializar '{node.name}' ({node.restype!r}) "
-                f"con un valor de tipo '{value_type!r}'",
+                f"con un valor de tipo '{value_type!r}'"
+                f"{self._sugerencia(node.restype, value_type)}",
                 line=node.ln, column=node.col,
             ))
 
@@ -237,66 +511,6 @@ class _ScopeResolver:
         # scope actual (el simbolo muere con el bloque).
         collect.define_import(node.name, node.source, self.ctx,
                               mutable=(node.qualifier != "const"))
-
-    def _stmt_region(self, node: ast.RegionStmt) -> None:
-        ctx = self.ctx
-        # los flags (shrd/mutable/na) viajan en el simbolo hacia el HIR; el
-        # runtime ejecuta RBMM de verdad (C++/pybind11, agnostico del target).
-        # Una region 'na' NO se auto-libera: su nombre PERSISTE en el scope
-        # actual para que 'delete(region r)'/'move'/'in region r' la
-        # referencien tras el bloque. Una region normal vive solo dentro de su
-        # propio scope (se auto-libera al cerrarlo; el escape obvio lo cubre la
-        # resolucion normal de nombres, ARQUITECTURA.md secc. 4.1).
-        if node.na and not ctx.scope.define_value(self._make_region_symbol(node)):
-            ctx.error(SemanticError.DuplicateSymbolError(
-                f"región duplicada '{node.name}'", line=node.ln, column=node.col,
-            ))
-        ctx.push_scope(ScopeKind.REGION)
-        ctx.scope.define_value(self._make_region_symbol(node))
-        for stmt in node.body.statements:
-            self.visit_stmt(stmt)
-        ctx.pop_scope()
-
-    def _make_region_symbol(self, node: ast.RegionStmt) -> Symbol:
-        return Symbol(name=node.name, kind=SymbolKind.REGION, ln=node.ln,
-                      col=node.col, shared=node.shared,
-                      region_mutable=node.mutable, region_na=node.na)
-
-    def _stmt_new(self, node: ast.NewStmt) -> None:
-        """``new(... region r);`` -- inicializa una region como HANDLE: su
-        nombre vive en el scope ACTUAL (persiste hasta 'delete(region r)')."""
-        region_sym = Symbol(name=node.name, kind=SymbolKind.REGION, ln=node.ln,
-                            col=node.col, shared=node.shared,
-                            region_mutable=node.mutable, region_na=node.na)
-        if not self.ctx.scope.define_value(region_sym):
-            self.ctx.error(SemanticError.DuplicateSymbolError(
-                f"'{node.name}' ya está declarado en este scope",
-                line=node.ln, column=node.col,
-            ))
-
-    def _stmt_delete(self, node: ast.DeleteStmt) -> None:
-        if node.name is not None:
-            # 'delete(region r)': r debe resolver a una region.
-            self._check_region(node.name, node.ln, node.col)
-            return
-        # 'delete()' sin argumento: solo dentro del bloque de una region.
-        if self._enclosing_region_name() is None:
-            self.ctx.error(SemanticError.InvalidDeleteError(
-                "'delete()' sin argumento solo es válido dentro del bloque de "
-                "una región (usa 'delete(region r)' fuera de ella)",
-                line=node.ln, column=node.col,
-            ))
-
-    def _stmt_in_region(self, node: ast.InRegionStmt) -> None:
-        """``in region r: ...`` -- opera EN el contexto de la region r; r debe
-        existir. El cuerpo se resuelve por scope lexico normal."""
-        self._check_region(node.region, node.ln, node.col)
-        self.visit_stmt(node.body)
-
-    def _stmt_move_region(self, node: ast.MoveRegionStmt) -> None:
-        """``move region a -> region b`` -- ambas regiones deben existir."""
-        self._check_region(node.src, node.ln, node.col)
-        self._check_region(node.dst, node.ln, node.col)
 
     def _stmt_if(self, node: ast.IfStmt) -> None:
         self.visit_expr(node.condition)
@@ -317,8 +531,84 @@ class _ScopeResolver:
             self._stmt_case_arm(arm)
 
     def _stmt_case_arm(self, node: ast.CaseArm) -> None:
-        self.visit_expr(node.pattern)
+        """``case <patron> ...``.
+
+        Un patron es una EXPRESION corriente —``case 0``, ``case Color.ROJO``—
+        salvo uno: ``case Nodo.Literal(n)`` DESESTRUCTURA una variante y liga
+        ``n`` al payload. Sintacticamente es la misma llamada que construye la
+        variante, asi que la gramatica no cambia; lo que cambia es que aqui
+        sus argumentos son nombres que se DECLARAN, no valores que se leen.
+        """
+        variante = (self._variante_nombrada(node.pattern.callee)
+                    if isinstance(node.pattern, ast.Call) else None)
+        if variante is None:
+            self.visit_expr(node.pattern)
+            self.visit_stmt(node.body)
+            return
+        self.ctx.push_scope(ScopeKind.BLOCK)
+        self._ligar_payload(node.pattern, variante)
         self.visit_stmt(node.body)
+        self._pop_scope()
+
+    def _ligar_payload(self, patron: ast.Call, variante: Symbol) -> None:
+        """Declara los nombres de ``case Nodo.Literal(n)`` con el tipo de su
+        payload. Cada uno vive SOLO en el cuerpo de esa rama."""
+        esperados = variante.param_types or ()
+        if len(patron.args) != len(esperados):
+            self.ctx.error(SemanticError.CallArityError(
+                f"la variante '{variante.name}' lleva {len(esperados)} "
+                f"valor(es) y el patron liga {len(patron.args)}",
+                line=patron.ln, column=patron.col,
+            ))
+            return
+        for arg, tipo in zip(patron.args, esperados):
+            if not isinstance(arg, ast.Identifier):
+                self.ctx.error(SemanticError.UndefinedSymbolError(
+                    "un patron de variante liga NOMBRES, no expresiones: "
+                    f"escribe 'case {variante.name}(x)' y compara dentro",
+                    line=getattr(arg, "ln", patron.ln),
+                    column=getattr(arg, "col", patron.col),
+                ))
+                continue
+            simbolo = Symbol(name=arg.name, kind=SymbolKind.VAR, ln=arg.ln,
+                             col=arg.col, type=tipo, mutable=False)
+            self.ctx.scope.define_value(simbolo)
+            if self.locals is not None:
+                self.locals[arg.name] = simbolo
+            arg.restype = tipo
+
+    def _variante_nombrada(self, callee) -> Optional[Symbol]:
+        """El ``Symbol`` de la variante que nombra ``callee``, si lo es.
+
+        Cubre las dos formas de nombrarla: cualificada (``Nodo.Literal``) y
+        pelada (``Literal``), que es como viven tambien en el namespace de
+        valores. Solo devuelve algo para variantes CON payload: una variante
+        unidad es un entero y no se invoca.
+        """
+        simbolo = None
+        if isinstance(callee, ast.MemberAccess) and \
+                isinstance(callee.obj, ast.Identifier):
+            base = self.ctx.scope.resolve_type(callee.obj.name)
+            if base is not None and base.kind is SymbolKind.ENUM and base.members:
+                simbolo = base.members.get(callee.member)
+        elif isinstance(callee, ast.Identifier):
+            simbolo = self.ctx.scope.resolve_value(callee.name)
+        if simbolo is not None and simbolo.kind is SymbolKind.ENUM_ITEM \
+                and simbolo.param_types:
+            return simbolo
+        return None
+
+    def _construir_variante(self, node: ast.Call,
+                            variante: Symbol) -> Optional[Type]:
+        """``Nodo.Literal(5)``: verifica la llamada al CONSTRUCTOR y devuelve
+        el tipo del enum. La verificacion es la de cualquier llamada — una
+        variante con payload tiene exactamente la forma de una funcion."""
+        arg_types = [self.visit_expr(arg) for arg in node.args]
+        self._check_call(variante, node, arg_types)
+        for arg in node.args:
+            self._tiene_dueno(arg)  # el payload pasa a ser del valor construido
+        return variante.type
+
 
     def _stmt_return(self, node: ast.ReturnStmt) -> None:
         fn = self.ctx.current_fn
@@ -331,6 +621,12 @@ class _ScopeResolver:
                 ))
             return
         value_type = self.visit_expr(node.value)
+        self._tiene_dueno(node.value)   # el valor pasa al llamador
+        # ...y si POSEE recursos, quien lo tenia deja de ser su dueno: sin
+        # esto el drop del bloque destruiria lo que el llamador acaba de
+        # recibir. Solo cuando posee: devolver un 'int' no transfiere nada.
+        node.transfers = type_service.owns_resources(
+            value_type, self.ctx.scope, self.ctx.table)
         if _is_null_literal(node.value):
             if not type_service.unify_literal_null(expected):
                 self.ctx.error(ASTError.InvalidReturnTypeError(
@@ -379,31 +675,73 @@ class _ScopeResolver:
     def _stmt_try(self, node: ast.TryStmt) -> None:
         # 'try { ... }': scope propio del bloque protegido.
         self._stmt_block(node.try_block)
-        # 'catch (name) { ... }': el binding del error vive SOLO en el scope
-        # del bloque catch (kind, tipo 'error' sin envolver).
+        for clausula in node.catches:
+            self._stmt_catch(clausula)
+
+    def _stmt_catch(self, node: ast.CatchClause) -> None:
+        """``catch ([tipo] nombre) { ... }``: el binding vive SOLO en su bloque.
+
+        Con tipo escrito, el binding vale ESE tipo y se puede usar sin
+        convertirlo. Sin tipo, vale ``error`` sin envolver — que significa
+        DESCONOCIDO, no un tipo concreto (ver ``type_service.es_desconocido``).
+        """
+        if node.restype is not None:
+            self.types.bind(node)
         self.ctx.push_scope(ScopeKind.BLOCK)
-        symbol = Symbol(name=node.catch_name, kind=SymbolKind.VAR,
-                        ln=node.ln, col=node.col, type=_ERROR, mutable=False)
+        symbol = Symbol(name=node.name, kind=SymbolKind.VAR, ln=node.ln,
+                        col=node.col, type=node.restype or _ERROR,
+                        mutable=False)
         self.ctx.scope.define_value(symbol)
         if self.locals is not None:
-            self.locals[node.catch_name] = symbol
-        for stmt in node.catch_block.statements:
+            self.locals[node.name] = symbol
+        for stmt in node.block.statements:
             self.visit_stmt(stmt)
-        self.ctx.pop_scope()
+        self._pop_scope()
 
     # ------------------------------------------------------------------ #
     # expresiones (el visitor devuelve el tipo si es gratis conocerlo)
     # ------------------------------------------------------------------ #
+    def _sin_handler(self, node, clase: str) -> None:
+        """Reporta un nodo que esta pasada no sabe recorrer (defecto interno)."""
+        self.ctx.error(SemanticError.MissingHandlerError(
+            f"{clase} '{node.__class__.__name__}' sin handler en la resolución "
+            f"de scopes: sus nombres no se resolvieron y su tipo no se anotó. "
+            f"Es un fallo del compilador, no del programa — añade su entrada "
+            f"en el despacho de 'scope_resolver'",
+            line=getattr(node, "ln", None), column=getattr(node, "col", None),
+        ))
+
     def visit_expr(self, expr: ast.Expression) -> Optional[Type]:
         handler = self._expr_dispatch.get(expr.__class__)
         if handler is None:
+            # sin handler no hay tipo que anotar: se reporta en vez de
+            # devolver None en silencio, que dejaria la expresion sin
+            # 'restype' dentro del HIR (ver 'visit_stmt').
+            self._sin_handler(expr, "expresión")
             return None
         restype = handler(expr)
         # anotacion en sitio (mismo patron que typed_ast): el tipo que el
         # visitor ya calculo queda en el arbol para el HIR — costo cero, es
         # un write de atributo sobre informacion que de otro modo se tira.
         expr.restype = restype
+        # TEMPORALES. Una llamada o un literal de struct PRODUCEN un valor; si
+        # ese valor posee recursos y nadie se queda con el, no lo destruye
+        # nadie. Se marca aqui —el unico punto por el que pasan todas las
+        # expresiones— y las tres posiciones que SI le dan dueno (binding,
+        # asignacion y 'return') lo desmarcan despues. Marcar de mas y quitar
+        # es mas seguro que enumerar donde marcar: si aparece una posicion
+        # nueva, el valor se destruye de mas... y por eso el desmarcado se
+        # prueba (test_temporales.py), en vez de fiarse.
+        cls = expr.__class__
+        if (cls is ast.Call or cls is ast.StructLiteral) and restype is not None:
+            expr.temp_drop = self._destructor_de(restype)
         return restype
+
+    @staticmethod
+    def _tiene_dueno(expr: Optional[ast.Expression]) -> None:
+        """El valor de ``expr`` pasa a manos de alguien: no es un temporal."""
+        if expr is not None and getattr(expr, "temp_drop", None) is not None:
+            expr.temp_drop = None
 
     def _expr_literal(self, node: ast.Literal) -> Optional[Type]:
         return node.restype
@@ -462,8 +800,11 @@ class _ScopeResolver:
         if node.operator in _BOOL_OPS:
             return _BOOL
         # aritmetica: tipado fuerte, sin coerciones implicitas
-        # (DESIGN_PRINCIPLES.md secc. 4) — solo si AMBOS lados se conocen.
-        if left is not None and right is not None and left != right:
+        # (DESIGN_PRINCIPLES.md secc. 4) — solo si AMBOS lados se conocen. El
+        # valor de un 'catch (e)' NO se conoce (tipo 'error' sin envolver),
+        # asi que operar con el no se rechaza: ver 'type_service.es_desconocido'.
+        if not type_service.es_desconocido(left) \
+                and not type_service.es_desconocido(right) and left != right:
             self.ctx.error(ASTError.TypeMismatchError(
                 f"operación '{node.operator}' entre tipos incompatibles "
                 f"('{left!r}' y '{right!r}')",
@@ -474,6 +815,7 @@ class _ScopeResolver:
 
     def _expr_assignment(self, node: ast.Assignment) -> Optional[Type]:
         value_type = self.visit_expr(node.value)
+        self._tiene_dueno(node.value)   # el destino se queda con el valor
         target = node.target
         if isinstance(target, ast.Identifier):
             symbol = self.ctx.scope.resolve_value(target.name)
@@ -494,10 +836,13 @@ class _ScopeResolver:
                         f"'null' no es asignable a '{symbol.type!r}' (no es nullable)",
                         line=node.ln, column=node.col,
                     ))
-            elif not type_service.is_assignable(symbol.type, value_type):
+            elif not self._acepta_valor(
+                    symbol.type, node.value, value_type,
+                    lambda e: setattr(node, "value", e)):
                 self.ctx.error(ASTError.TypeMismatchError(
                     f"no se puede asignar '{value_type!r}' a "
-                    f"'{target.name}' ({symbol.type!r})",
+                    f"'{target.name}' ({symbol.type!r})"
+                    f"{self._sugerencia(symbol.type, value_type)}",
                     line=node.ln, column=node.col,
                 ))
             return symbol.type
@@ -516,20 +861,69 @@ class _ScopeResolver:
                 ))
             # resolver el miembro/indice en si (reusa la logica normal)
             if isinstance(target, ast.MemberAccess):
-                return self._resolve_field(base_type, target) or value_type
+                field_type = self._resolve_field(base_type, target)
+                self._check_escritura(node, f"'{target.member}'", field_type,
+                                      value_type)
+                return field_type or value_type
             self.visit_expr(target.index)
+            self._check_escritura(node, "el elemento",
+                                  self._tipo_del_elemento(base_type),
+                                  value_type)
             return value_type
         return self.visit_expr(target) or value_type
 
-    def _expr_placement(self, node: ast.Placement) -> Optional[Type]:
-        self._check_region(node.region, node.ln, node.col)
-        return self.visit_expr(node.expr)
+    def _check_escritura(self, node: ast.Assignment, que: str,
+                         destino: Optional[Type],
+                         value_type: Optional[Type]) -> None:
+        """El valor que se escribe en un CAMPO o en un ELEMENTO es de su tipo.
 
-    def _expr_make(self, node: ast.MakeExpr) -> Optional[Type]:
-        self._check_region(node.region, node.ln, node.col)
-        owner = _nominal_name(node.restype)
-        if owner is not None:
-            node.hook = self.ctx.table.lookup_hook(owner, HookKind.MAKE)
+        La rama del ``Identifier`` ya lo comprobaba; estas dos no, así que
+        ``p.x = "a"`` y ``v[0] = "a"`` cruzaban el frontend enteros. Es la
+        misma regla y el mismo diagnóstico: el destino tiene un tipo escrito
+        y el valor tiene que caber en él.
+        """
+        if destino is None:
+            return
+        if _is_null_literal(node.value):
+            if not type_service.unify_literal_null(destino):
+                self.ctx.error(ASTError.TypeMismatchError(
+                    f"'null' no es asignable a {que} ('{destino!r}': no es "
+                    "nullable)", line=node.ln, column=node.col,
+                ))
+        elif not self._acepta_valor(destino, node.value, value_type,
+                                    lambda e: setattr(node, "value", e)):
+            self.ctx.error(ASTError.TypeMismatchError(
+                f"no se puede asignar '{value_type!r}' a {que} "
+                f"('{destino!r}'){self._sugerencia(destino, value_type)}",
+                line=node.ln, column=node.col,
+            ))
+
+    def _tipo_del_elemento(self, obj_type: Optional[Type]) -> Optional[Type]:
+        """Tipo que ``v[i] = x`` admite: el 3er parámetro de ``__index_set__``.
+
+        No el retorno de ``__index__``: quien decide qué se puede ESCRIBIR es
+        el hook de escritura, y un tipo podría declarar solo uno de los dos.
+        ``None`` (permisivo) para el indexado crudo de un puntero, que no
+        pasa por ningún hook.
+        """
+        owner = _nominal_name(self._canonical(obj_type)) \
+            if obj_type is not None else None
+        if owner is None:
+            return None
+        hook = self.ctx.table.lookup_hook(owner, HookKind.INDEX_SET)
+        if hook is None or not hook.param_types or len(hook.param_types) != 3:
+            return None
+        return type_service.substitute(hook.param_types[2],
+                                       self._sustitucion(obj_type))
+
+    def _expr_sizeof(self, node: ast.SizeofExpr) -> Optional[Type]:
+        """``sizeof(T)``: valida T y enlaza su ``__sizeof__``.
+
+        El enlace lo hacia la pasada de tipos; vive aqui porque el tipo se
+        busca en el scope, y el hook se busca por el nombre CANONICO del tipo
+        ('int8'), no por el cualificado con el que se escribe ('dt.int8').
+        """
+        self.types.bind_sizeof(node)
         return node.restype
 
     def _expr_restype(self, node) -> Optional[Type]:
@@ -557,6 +951,7 @@ class _ScopeResolver:
             # type_resolver._check_nominal).
             for value in node.values:
                 self.visit_expr(value)
+                self._tiene_dueno(value)
             return node.restype
         if struct_sym is None:
             self.ctx.error(ASTError.UnknownTypeError(
@@ -569,20 +964,23 @@ class _ScopeResolver:
                 "con '{...}'", line=node.ln, column=node.col,
             ))
         else:
-            # nombre CANONICO: el que declaró la librería ('Point'), no el
-            # cualificado con el que se escribe aquí ('point.Point'). Es el
-            # que viaja al HIR (donde nombra el struct en runtime) y el que
-            # usan la tabla de hooks y la identidad de tipos.
-            canonical = struct_sym.type.name if (
-                struct_sym.type is not None
-                and struct_sym.type.kind is TypeKind.NOMINAL) else written
-            if canonical != written:
-                node.type_name = canonical
-                node.restype = Type(TypeKind.NOMINAL, name=canonical)
+            # nombre CANONICO ('Point', no 'point.Point') + argumentos de tipo
+            # validados y aridad comprobada: la MISMA regla que una anotación,
+            # y por eso vive en el binder de tipos y no aquí.
+            self.types.bind_struct_literal(node, struct_sym)
+            mapa = type_service.bindings(struct_sym, node.restype)
+            # un generico SIN argumentos utilizables (aridad ya reportada) no
+            # se puede sustituir: comparar contra la 'T' sin ligar produciria
+            # una cascada de AST006 derivados del SEM027 que ya se emitio.
+            comprobar_valores = bool(mapa) or not struct_sym.type_params
             fields = struct_sym.members or {}
             seen: set = set()
-            for fname, value in zip(node.field_names, node.values):
-                self.visit_expr(value)
+            for indice, (fname, value) in enumerate(
+                    zip(node.field_names, node.values)):
+                value_type = self.visit_expr(value)
+                # el valor pasa a ser el CAMPO de este literal: su dueno es el
+                # struct que se esta construyendo, no un temporal suelto.
+                self._tiene_dueno(value)
                 if fname in seen:
                     self.ctx.error(SemanticError.DuplicateSymbolError(
                         f"campo '{fname}' repetido en el literal de "
@@ -593,13 +991,72 @@ class _ScopeResolver:
                         f"'{written}' no tiene un campo '{fname}'",
                         line=node.ln, column=node.col,
                     ))
+                elif comprobar_valores:
+                    self._check_field_value(
+                        written, fname, value, value_type, fields[fname], mapa,
+                        lambda e, i=indice: node.values.__setitem__(i, e))
                 seen.add(fname)
+            self._check_campos_faltantes(written, struct_sym, seen, node)
             return node.restype
         for value in node.values:
             self.visit_expr(value)
         return node.restype
 
-    def _expr_cast(self, node: ast.CastExpr) -> Optional[Type]:
+    def _check_field_value(self, written: str, fname: str, value,
+                           value_type: Optional[Type], field_sym: Symbol,
+                           mapa: dict, poner=None) -> None:
+        """El valor escrito para un campo es asignable al TIPO del campo.
+
+        El campo se declaró con los PARÁMETROS del genérico, así que se
+        sustituye antes de comparar: el campo ``T d`` visto desde un
+        ``Caja<int>{ d: ... }`` exige un ``int``. Sin esta comprobación el
+        literal era el agujero por el que un genérico se construía con el
+        contenido equivocado — y luego su tipo decía otra cosa.
+
+        Mismo criterio permisivo que init/asignación/llamada: un tipo
+        desconocido pasa, y la compatibilidad la decide ``_arg_assignable``.
+        """
+        esperado = type_service.substitute(field_sym.type, mapa)
+        ln = getattr(value, "ln", 0)
+        col = getattr(value, "col", 0)
+        if _is_null_literal(value):
+            if not type_service.unify_literal_null(esperado):
+                self.ctx.error(ASTError.TypeMismatchError(
+                    f"campo '{fname}' de '{written}': 'null' no es asignable "
+                    f"a '{esperado!r}' (no es nullable)", line=ln, column=col,
+                ))
+        elif not self._acepta_valor(esperado, value, value_type,
+                                    poner or (lambda e: None)):
+            self.ctx.error(ASTError.TypeMismatchError(
+                f"campo '{fname}' de '{written}': se esperaba "
+                f"'{esperado!r}', se encontró '{value_type!r}'"
+                f"{self._sugerencia(esperado, value_type)}",
+                line=ln, column=col,
+            ))
+
+    def _check_campos_faltantes(self, written: str, struct_sym: Symbol,
+                                escritos: set, node) -> None:
+        """Un literal nombra TODOS los campos del struct (``SEM028``).
+
+        No hay valores por defecto: un campo que el literal no escribe no
+        existe en el valor construido, y leerlo reventaba en runtime lejos de
+        la causa. Solo se comprueba si el struct declara campos — un símbolo
+        sin miembros es un tipo opaco de librería, del que no se sabe.
+        """
+        campos = struct_sym.members
+        if not campos:
+            return
+        faltan = [n for n in campos if n not in escritos]
+        if not faltan:
+            return
+        self.ctx.error(SemanticError.IncompleteStructLiteralError(
+            f"el literal de '{written}' no da valor a "
+            f"{', '.join(repr(n) for n in faltan)}: un struct se construye "
+            "con todos sus campos (no hay valores por defecto)",
+            line=node.ln, column=node.col,
+        ))
+
+    def _expr_cast(self, node: ast.CastExpr) -> Optional[Type]:  # noqa: D401
         """``cast<T>(x)``: la ÚNICA vía de conversión del lenguaje (cero
         coerciones implícitas, ``int8 b = cast<int8>(10);``).
 
@@ -619,9 +1076,17 @@ class _ScopeResolver:
         tabla nunca busca caminos intermedios. Origen desconocido (``None``):
         permisivo, cero falsos positivos (el par se re-verifica en el MIR).
         """
+        # el destino se valida y CANONICALIZA antes de buscar en la tabla:
+        # la libreria registro sus conversiones bajo el nombre con el que
+        # declaro el tipo ('int8'), no bajo el cualificado ('dt.int8').
+        self.types.bind_cast(node)
         value_type = self.visit_expr(node.value)
         target = node.restype
-        if target is None or value_type is None:
+        # origen DESCONOCIDO (incluido el 'error' sin envolver de un
+        # 'catch (e)'): permisivo, cero falsos positivos. Es tambien la unica
+        # via para sacar el valor capturado a un tipo concreto — el par se
+        # re-verifica en el MIR.
+        if target is None or type_service.es_desconocido(value_type):
             return target
         if target == value_type:
             return target
@@ -644,20 +1109,19 @@ class _ScopeResolver:
         ))
         return None
 
-    def _canonical(self, t: Type) -> Type:
+    def _canonical(self, t: Optional[Type]) -> Optional[Type]:
         """Nominal CUALIFICADO (``dt.int8``) -> nominal canónico (``int8``).
 
-        La tabla de casts se registra bajo el nombre con el que la librería
-        declaró el tipo; un valor anotado con el nombre punteado no
-        resolvería el par. Solo reescribe ese caso (una búsqueda O(saltos));
-        cualquier otro tipo se devuelve tal cual.
+        Las anotaciones ESCRITAS ya las canonicaliza ``TypeBinder``; esto es
+        para los tipos que llegan de la TABLA DE SÍMBOLOS —el retorno de una
+        función, el tipo de un campo— que se guardaron tal como se
+        escribieron. Sin esto, ``cast<int>(g())`` sobre un ``fn g() -> dt.int8``
+        no encontraba el par ``int8 -> int`` que la librería sí declara.
+
+        Atraviesa los envoltorios (``dt.int8 ptr``) y delega la regla del
+        nombre en ``type_service``, que es donde vive la identidad de tipos.
         """
-        if t.kind is not TypeKind.NOMINAL or "." not in (t.name or ""):
-            return t
-        result = type_service.lookup_type_path(t.name, self.ctx.scope)
-        if result.status is type_service.TypeLookup.OK and result.symbol.type is not None:
-            return result.symbol.type
-        return t
+        return type_service.canonical(t, self.ctx.scope)
 
     def _expr_index(self, node: ast.Index) -> Optional[Type]:
         obj_type = self.visit_expr(node.obj)
@@ -670,7 +1134,8 @@ class _ScopeResolver:
         if owner is not None:
             hook = self.ctx.table.lookup_hook(owner, HookKind.INDEX)
             if hook is not None:
-                return hook.type
+                return type_service.substitute(hook.type,
+                                               self._sustitucion(obj_type))
         return None
 
     def _expr_call(self, node: ast.Call) -> Optional[Type]:
@@ -724,6 +1189,13 @@ class _ScopeResolver:
             # si la base es opaca (members None) ya se reporto al importar;
             # si el miembro falta, _resolve_import_member ya reporto SEM011.
             return None
+        # 'Nodo.Literal(5)': el callee nombra una VARIANTE de un enum, no un
+        # metodo de un valor. Se resuelve antes de visitar 'obj' porque un
+        # nombre de tipo no es un valor y visitarlo daria SEM001.
+        variante = self._variante_nombrada(callee)
+        if variante is not None:
+            return self._construir_variante(node, variante)
+
         # no es una libreria: 'x.__next__()' despacha a un DUNDER del usuario
         # (indexado por (tipo, nombre)); 'x.print()' a un hook del set fijo.
         obj_type = self.visit_expr(obj)
@@ -738,11 +1210,23 @@ class _ScopeResolver:
             else None
         # dunder del usuario: 'x.__metodo__()' -> el dunder (owner, member).
         # Anota el nodo (viaja al HIR); la EJECUCION real de dunders del
-        # usuario esta diferida al runtime (como las regiones), no al MIR.
+        # usuario esta diferida al runtime, no al MIR.
         dunder = self.ctx.table.lookup_dunder(owner, callee.member)
         if dunder is not None:
             node.hook = dunder
-            return dunder.type
+            return type_service.substitute(dunder.type,
+                                           self._sustitucion(obj_type))
+        # hook DECLARADO POR EL PROYECTO (HTIMS): se invoca como un método,
+        # por su nombre. No hay sintaxis dedicada que lo dispare —el
+        # compilador no sabe qué significa '__gravity__'—, así que la llamada
+        # explícita es su disparador hasta que la VM+JIT lo ligue a su lógica
+        # nativa. Ver htims/readme.md y semantic/extensions.py.
+        if owner is not None:
+            extendido = self.ctx.table.lookup_hook(
+                owner, HookKind.EXTENDED, name=callee.member)
+            if extendido is not None:
+                node.hook = extendido
+                return extendido.type
         hook_kind = CALL_HOOKS.get(callee.member)
         if hook_kind is not None and owner is not None:
             hook = self.ctx.table.lookup_hook(owner, hook_kind)
@@ -766,9 +1250,21 @@ class _ScopeResolver:
                 self.visit_expr(arg)
             return None
 
+        if hook_kind in (HookKind.MIN, HookKind.MAX):
+            return self._call_rango(node, name, hook_kind, first_arg,
+                                    extra_args)
+
         arg_type = self.visit_expr(first_arg) if first_arg is not None else None
         for arg in extra_args:
             self.visit_expr(arg)
+        # 'len' sobre un 'str' es NATIVO: una cadena tiene longitud sin que
+        # ninguna libreria la declare, igual que '+' suma sin hook. Es la
+        # unica forma de medirla — 'str' es primitivo y SEM006 prohibe
+        # colgarle un '__len__'.
+        if hook_kind is HookKind.LEN and arg_type is not None \
+                and arg_type.kind is TypeKind.STR:
+            node.hook = _LEN_DE_STR
+            return _INT
         owner = _nominal_name(arg_type)
         if owner is None:
             return None  # tipo desconocido: permisivo
@@ -781,6 +1277,74 @@ class _ScopeResolver:
             return None
         node.hook = hook
         return hook.type
+
+    def _call_rango(self, node: ast.Call, name: str, hook_kind,
+                    first_arg, extra_args) -> Optional[Type]:
+        """``min(T)`` / ``max(T)``: el rango que el tipo declara.
+
+        No son keywords —no cuestan vocabulario— sino nombres corrientes que
+        despachan por convención, igual que ``print`` y ``len``; una ``fn min``
+        del usuario tiene prioridad y nunca llega aquí.
+
+        El argumento nombra un TIPO (``min(dt.int8)``) o un VALOR
+        (``min(a)``, el rango del tipo de ``a``), exactamente como ``sizeof``.
+        Se exige que sea un NOMBRE: el resultado se pliega a una constante, y
+        plegar ``min(f())`` tiraría la llamada a ``f`` con sus efectos.
+
+        A diferencia de ``print``/``len``, esto NO despacha en ejecución: el
+        rango ya es una constante de compilación —por eso ``__min__``/
+        ``__max__`` tienen el cuerpo restringido a un literal— así que la
+        llamada se resuelve aquí y viaja al HIR como el entero que es.
+        """
+        if len(node.args) != 1 or not _es_nombre(first_arg):
+            self.ctx.error(SemanticError.CallArityError(
+                f"'{name}' toma exactamente un nombre: un tipo "
+                f"('{name}(dt.int8)') o una variable ('{name}(x)')",
+                line=node.ln, column=node.col,
+            ))
+            for arg in node.args:
+                self.visit_expr(arg)
+            return None
+
+        owner = self._duenio_del_nombre(first_arg)
+        if owner is None:
+            self.ctx.error(SemanticError.UndefinedSymbolError(
+                f"'{name}' necesita un tipo nominal: "
+                f"'{_texto_de_nombre(first_arg)}' no nombra ninguno",
+                line=node.ln, column=node.col,
+            ))
+            return None
+
+        hook = self.ctx.table.lookup_hook(owner, hook_kind)
+        if hook is None or hook.const_value is None:
+            self.ctx.error(SemanticError.UndefinedSymbolError(
+                f"'{owner}' no declara '__{name}__': un tipo publica su rango "
+                f"con 'hook fn __{name}__({owner} ptr _) -> int "
+                "{ return <entero>; }'",
+                line=node.ln, column=node.col,
+            ))
+            return None
+
+        node.valor_constante = hook.const_value
+        return _INT
+
+    def _duenio_del_nombre(self, expr) -> Optional[str]:
+        """Nombre CANONICO del tipo que nombra ``expr``, sea un tipo o un valor.
+
+        Se prueba primero el namespace de TIPOS: un nombre que es tipo no deja
+        de serlo porque exista una variable homónima (misma regla que
+        ``bind_sizeof``)."""
+        escrito = _texto_de_nombre(expr)
+        if escrito is None:
+            return None
+        resultado = type_service.lookup_type_path(escrito, self.ctx.scope)
+        if resultado.status is type_service.TypeLookup.OK:
+            return type_service.canonical_name(resultado.symbol, escrito)
+        valor = self.ctx.scope.resolve_value(escrito) \
+            if "." not in escrito else None
+        if valor is None or valor.type is None:
+            return None
+        return _nominal_name(self._canonical(valor.type))
 
     def _expr_member(self, node: ast.MemberAccess) -> Optional[Type]:
         obj = node.obj
@@ -830,6 +1394,20 @@ class _ScopeResolver:
             return None
         return member.type
 
+    def _sustitucion(self, obj_type: Optional[Type]) -> dict:
+        """Mapa ``parametro -> argumento`` del tipo de un receptor.
+
+        Un metodo o un hook de ``Vector<T>`` se declaro hablando de ``T``;
+        llamado sobre un ``Vector<int>`` devuelve ``int``. El mapa se saca del
+        tipo del receptor y sale VACIO —camino rapido— para todo tipo no
+        generico, que es la inmensa mayoria.
+        """
+        core = _core(self._canonical(obj_type)) if obj_type is not None else None
+        if core is None or not core.args or core.name is None:
+            return {}
+        symbol = type_service.lookup_type_path(core.name, self.ctx.scope).symbol
+        return type_service.bindings(symbol, core) if symbol is not None else {}
+
     def _resolve_field(self, obj_type: Optional[Type], node) -> Optional[Type]:
         owner = _nominal_name(obj_type)
         if owner is None:
@@ -844,7 +1422,10 @@ class _ScopeResolver:
                 line=node.ln, column=node.col,
             ))
             return None
-        return member.type
+        # el campo se declaro con los PARAMETROS del generico; visto a traves
+        # de un uso concreto ('Vector<int>') vale su sustitucion.
+        return type_service.substitute(
+            member.type, type_service.bindings(struct_sym, _core(obj_type)))
 
     # ------------------------------------------------------------------ #
     # helpers
@@ -883,20 +1464,161 @@ class _ScopeResolver:
                         f"asignable a '{param_type!r}' (no es nullable)",
                         line=ln, column=col,
                     ))
-            elif not self._arg_assignable(param_type, arg_type):
+            elif not self._acepta_valor(
+                    param_type, arg, arg_type,
+                    lambda e, i=index - 1: node.args.__setitem__(i, e)):
                 self.ctx.error(ASTError.TypeMismatchError(
                     f"argumento {index} de '{symbol.name}': se esperaba "
-                    f"'{param_type!r}', se encontró '{arg_type!r}'",
+                    f"'{param_type!r}', se encontró '{arg_type!r}'"
+                    f"{self._sugerencia(param_type, arg_type)}",
                     line=ln, column=col,
                 ))
 
-    def _arg_assignable(self, target: Optional[Type],
-                        value: Optional[Type]) -> bool:
-        """Compatibilidad de un argumento con su parámetro. Delega en
-        ``type_service.is_assignable`` y añade la única regla que el checker
-        de llamadas necesita y que ``is_assignable`` no puede ver sin la tabla
+    # ------------------------------------------------------------------ #
+    # literales y tipos numericos de libreria
+    # ------------------------------------------------------------------ #
+    def _acepta_valor(self, target: Optional[Type], expr,
+                      value_type: Optional[Type], poner) -> bool:
+        """¿El valor cabe en ``target``? Y si solo cabe tras una conversión de
+        LITERAL declarada, la INSERTA (vía ``poner``) y responde que sí.
+
+        Un solo punto para las cinco posiciones de escritura, porque la
+        alternativa —repetir la regla en cada una— es exactamente cómo un
+        enum acabó siendo asignable a ``int`` como argumento y no como
+        inicializador.
+        """
+        if self._asignable(target, value_type):
+            return True
+        reemplazo = self._coercion_literal(target, expr, value_type)
+        if reemplazo is None:
+            return False
+        poner(reemplazo)
+        return True
+
+    def _coercion_literal(self, target: Optional[Type], expr,
+                          value_type: Optional[Type]):
+        """Un LITERAL escrito donde se espera un tipo numérico de librería.
+
+        ``const dt.int8 a = 10;`` no compilaba: ``int8`` es un nominal opaco y
+        ``10`` es un ``int``. Pero el tipo declara ``__cast__(int) -> int8`` y
+        —desde ``__min__``/``__max__``— su RANGO, así que la pregunta "¿cabe
+        el 10?" sí tiene respuesta en compilación. Si cabe, se envuelve el
+        literal en la conversión declarada (el árbol queda igual que si se
+        hubiera escrito ``cast<int8>(10)``); si no cabe, es un error que dice
+        el rango.
+
+        La asimetría con ``cast<T>(x)`` es deliberada y es la de Rust: la
+        conversión IMPLÍCITA exige que quepa; la EXPLÍCITA trunca
+        (``cast<dt.int8>(300)`` sigue valiendo 44). Son dos operaciones, no
+        una laxa y una estricta.
+
+        ``None`` si no aplica: sin literal, sin conversión declarada o sin
+        rango publicado no se inventa nada — el llamador reporta lo suyo.
+        """
+        if target is None or target.kind is not TypeKind.NOMINAL:
+            return None
+        literal = _valor_literal(expr)
+        if literal is None:
+            return None
+        canonico = self._canonical(target)
+        if self.ctx.table.lookup_cast(value_type, canonico) is None:
+            return None
+        rango = self._rango_de(canonico)
+        if rango is None:
+            # el tipo convierte pero no publica su rango: no hay forma de
+            # saber si el literal cabe, y aceptarlo seria truncar en silencio.
+            return None
+        bajo, alto = rango
+        if not (bajo <= literal <= alto):
+            self.ctx.error(ASTError.TypeMismatchError(
+                f"el literal {literal} no cabe en '{target!r}' "
+                f"(rango [{bajo}, {alto}])",
+                line=getattr(expr, "ln", 0), column=getattr(expr, "col", 0),
+            ))
+        nodo = ast.CastExpr(ln=expr.ln, col=expr.col,
+                            type=ast.NominalTypeExpr(ln=expr.ln, col=expr.col,
+                                                     name=canonico.name),
+                            value=expr, restype=canonico)
+        nodo.hook = self.ctx.table.lookup_cast(value_type, canonico)
+        return nodo
+
+    def _rango_de(self, t: Optional[Type]):
+        """``(min, max)`` que el tipo publica con ``__min__``/``__max__``.
+
+        ``None`` si no los declara: un tipo sin rango publicado no admite
+        literales sin convertir, y eso es lo correcto — el compilador sabe que
+        ``int8`` mide un byte, pero un byte va de -128 a 127 o de 0 a 255 y la
+        firma no dice cuál.
+        """
+        owner = _nominal_name(t)
+        if owner is None:
+            return None
+        bajo = self.ctx.table.lookup_hook(owner, HookKind.MIN)
+        alto = self.ctx.table.lookup_hook(owner, HookKind.MAX)
+        if bajo is None or alto is None:
+            return None
+        if bajo.const_value is None or alto.const_value is None:
+            return None
+        return bajo.const_value, alto.const_value
+
+    def _sugerencia(self, target: Optional[Type],
+                    value_type: Optional[Type]) -> str:
+        """Coletilla accionable cuando SÍ existe una conversión entre los dos.
+
+        Un "no se puede asignar X a Y" es un callejón sin salida si el
+        programa tiene la conversión declarada a un paso: lo que falta es
+        escribirla.
+        """
+        if target is None or value_type is None:
+            return ""
+        canonico = self._canonical(target)
+        if (value_type.kind, target.kind) in _NATIVE_CASTS \
+                or self.ctx.table.lookup_cast(self._canonical(value_type),
+                                              canonico) is not None:
+            return (f"; existe la conversión '{value_type!r} -> {target!r}': "
+                    f"envuelve el valor en "
+                    f"'cast<{self._como_se_escribe(canonico)}>(...)'")
+        return ""
+
+    def _como_se_escribe(self, t: Optional[Type]) -> str:
+        """El tipo tal como se puede NOMBRAR desde el scope actual.
+
+        Un tipo de librería tiene dos nombres: el CANÓNICO con el que lo
+        declaró (``int8``) y el que ve el consumidor (``dt.int8``). Los
+        diagnósticos internos usan el primero, pero una sugerencia lo que
+        necesita es el segundo — decirle a alguien que escriba
+        ``cast<int8>(...)`` cuando eso no resuelve es mandarle a un segundo
+        error. Se busca el import que lo publica; si no aparece ninguno se
+        devuelve el canónico, que es lo mejor que se sabe.
+        """
+        if t is None or t.kind is not TypeKind.NOMINAL:
+            return repr(t)
+        if type_service.lookup_type_path(t.name, self.ctx.scope).status \
+                is type_service.TypeLookup.OK:
+            return repr(t)
+        scope = self.ctx.scope
+        while scope is not None:
+            for alias, symbol in scope.values.items():
+                if symbol.kind is SymbolKind.IMPORT and symbol.members \
+                        and t.name in symbol.members:
+                    return f"{alias}.{t.name}"
+            scope = scope.parent
+        return repr(t)
+
+    def _asignable(self, target: Optional[Type],
+                   value: Optional[Type]) -> bool:
+        """¿Un valor de tipo ``value`` cabe en un destino de tipo ``target``?
+
+        Delega en ``type_service.is_assignable`` y añade la única regla que
+        esta pasada necesita y que ``is_assignable`` no puede ver sin la tabla
         de símbolos: un valor de ENUM es asignable a ``int`` (los items de un
-        enum son enteros, estilo C — ver ``test_enum_y_match``)."""
+        enum son enteros, estilo C — ver ``test_enum_y_match``).
+
+        Lo usan las CUATRO posiciones de escritura —init, asignación, campo y
+        argumento— porque son la misma pregunta: que cada una tuviera su
+        propia respuesta era la razón de que un enum se pudiera pasar a un
+        ``int`` como argumento y no inicializar uno.
+        """
         if type_service.is_assignable(target, value):
             return True
         return target == _INT and self._is_enum_type(value)
@@ -910,29 +1632,63 @@ class _ScopeResolver:
         return (result.symbol is not None
                 and result.symbol.kind is SymbolKind.ENUM)
 
-    def _check_region(self, name: str, ln: int, col: int) -> None:
-        symbol = self.ctx.scope.resolve_value(name)
-        if symbol is None or symbol.kind is not SymbolKind.REGION:
-            self.ctx.error(SemanticError.UndefinedRegionError(
-                f"la región '{name}' no está declarada en este punto",
-                line=ln, column=col,
-            ))
 
-    def _enclosing_region_name(self) -> Optional[str]:
-        """Nombre de la región más interna que contiene al scope actual."""
-        scope = self.ctx.scope
-        while scope is not None:
-            if scope.kind is ScopeKind.REGION:
-                # el simbolo REGION es el unico kind REGION en 'values'
-                for sym in scope.values.values():
-                    if sym.kind is SymbolKind.REGION:
-                        return sym.name
-            scope = scope.parent
-        return None
+#: hook SINTETICO del 'len' nativo de 'str'. No lo declara nadie: existe para
+#: que la llamada viaje al HIR por el MISMO camino que cualquier otro
+#: '__len__' (una HookRef con dueño), en vez de que el consumidor tenga que
+#: reconocer el NOMBRE 'len' en runtime. El dueño 'str' es lo que la marca.
+_LEN_DE_STR = Symbol(name="__len__", kind=SymbolKind.HOOK, ln=0, col=0,
+                     type=_INT, hook_kind=HookKind.LEN, hook_owner="str")
+
+
+def _leaf_igual(a: Optional[str], b: Optional[str]) -> bool:
+    """¿Dos nombres nominales nombran el mismo tipo, salvo calificacion?"""
+    if a is None or b is None:
+        return False
+    return a.rsplit(".", 1)[-1] == b.rsplit(".", 1)[-1]
+
+
+def _es_nombre(expr) -> bool:
+    """¿``expr`` es un nombre simple o cualificado (``a`` / ``dt.int8``)?"""
+    return _texto_de_nombre(expr) is not None
+
+
+def _texto_de_nombre(expr) -> Optional[str]:
+    """El nombre escrito, con sus puntos; ``None`` si no es un nombre."""
+    if isinstance(expr, ast.Identifier):
+        return expr.name
+    if isinstance(expr, ast.MemberAccess):
+        base = _texto_de_nombre(expr.obj)
+        return f"{base}.{expr.member}" if base is not None else None
+    return None
+
+
+def _valor_literal(expr) -> Optional[int]:
+    """El entero que escribe un literal, con el signo unario opcional.
+
+    Solo ENTEROS: un flotante no tiene un "cabe/no cabe" que se pueda decidir
+    con dos cotas enteras (el redondeo IEEE no es un recorte de rango), asi
+    que no entra en la coercion.
+    """
+    signo = 1
+    if isinstance(expr, ast.UnaryOp) and expr.operator == "-":
+        signo, expr = -1, expr.operand
+    if isinstance(expr, ast.Literal) and expr.literal_kind == "int":
+        return signo * expr.value
+    return None
 
 
 def _is_null_literal(expr: ast.Expression) -> bool:
     return isinstance(expr, ast.Literal) and expr.literal_kind == "null"
+
+
+def _core(t: Optional[Type]) -> Optional[Type]:
+    """El nominal 'nucleo' de ``t``, desenvolviendo ``ptr``/``?``. Es donde
+    viven los argumentos de tipo de un generico."""
+    while t is not None and (t.kind is TypeKind.POINTER
+                             or t.kind is TypeKind.NULLABLE):
+        t = t.inner
+    return t
 
 
 def _nominal_name(t: Optional[Type]) -> Optional[str]:

@@ -6,7 +6,7 @@ Structs, enums, punteros y transferencia de propiedad.
 .. _ej-struct:
 
 Structs y enums
-================
+---------------
 
 .. code-block:: srcx
 
@@ -46,9 +46,10 @@ falta cuando el cuerpo no es un bloque.
 .. _ej-punteros:
 
 Punteros y ``move``
-====================
+-------------------
 
 .. code-block:: srcx
+   :class: fragmento
 
    fn incrementar(int ptr mutable p) -> void {
        // escribir a través de un 'ptr' sin 'mutable' sería SEM015

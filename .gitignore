@@ -1,35 +1,67 @@
+# ---------------------------------------------------------------------------
+# Regla general: aqui solo entra lo que se GENERA. Si un archivo hace falta
+# para compilar o para entender el proyecto, se versiona aunque estorbe.
+# ---------------------------------------------------------------------------
+
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
 .eggs/
-build/
-dist/
 .venv/
 venv/
 env/
 
-# --- suriaX ---
-.suriaX_config.yaml
-*.o                      
-*.exe
-*.wasm
-out/     
-dumps/                
-test.srcx
-
-#documentation
-documentation/build/
-
-documentation/web/
-
-.vscode/
-
-test/**/__pycache__/
-
-
+# --- construccion y empaquetado ---
 build/
-#suriaX generated
+dist/
+*.o
+*.exe
+# modulos nativos ya construidos (CMake los deja en runtime/**/build/, que
+# 'build/' ya cubre; estos son por si alguien construye fuera de arbol).
+*.so
+*.dylib
+*.pyd
+
+# --- configuracion y entorno local ---
+.suriaX_config.yaml
+.vscode/
+.idea/
+.DS_Store
+
+# --- salidas del compilador ---
+out/
+dumps/
 log/
-V0/src/HIR/gen/
+# HIR serializado y sus vistas: se regeneran con --emit-hir. Los golden de la
+# suite estan bajo test/ y se anulan mas abajo.
+*.phir
+*.phir.txt
+*.phir.pretty
+*.wasm
 # stubs protobuf del HIR: se generan en build con protoc (ver V0/src/HIR/stubs.py)
+V0/src/HIR/gen/
+
+# ...pero los fixtures del backend web SI se versionan: son la referencia
+# contra la que se prueba el lector, y generarlos en cada corrida convertiria
+# la prueba en "el lector entiende sus propios bytes", que no prueba nada.
+!test/web/fixtures/*.phir
+
+# --- documentacion generada ---
+documentation/build/
+documentation/web/
+# copias que conf.py hace del repo hacia el sitio (se rehacen en cada build)
+documentation/source/repo/
+
+# --- restos de las pruebas ---
+# test/e2e/test_web_wasm.py crea su temporal EN LA RAIZ (el linker necesita
+# resolver './lib' desde ahi). Se borra solo; esto cubre una corrida cortada.
+/suriax-*/
+test.srcx
+node_modules/
+
+
+# --- .web/: cache y volcados del compilador web, nunca codigo (ver su readme) ---
+.web/*
+!.web/readme.md

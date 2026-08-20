@@ -54,6 +54,28 @@ interno al más externo, y el primero que aparece gana.
        return x;           // 2
    }
 
+Los **tipos** se anidan igual que los valores: ``type`` se puede declarar
+dentro de una función o de un bloque, y ahí vive.
+
+.. code-block:: srcx
+   :class: fragmento
+
+   const type T;                 // global
+
+   fn f() -> void {
+       const type T;             // sombrea al global DENTRO de f
+       const T x;                // este T es el local
+   }
+
+   fn g() -> void {
+       const T y;                // y este, el global
+   }
+
+La diferencia con las variables está en el **orden**: un tipo global se puede
+usar antes de escribirlo (la recolección registra todo lo de nivel superior
+antes de mirar ningún cuerpo), pero uno anidado no —dentro de una función las
+sentencias se resuelven en orden—.
+
 Solo el ámbito **global** sobrevive a esta fase: los de bloque son derivables
 recorriendo los cuerpos, así que no se serializan.
 
@@ -66,6 +88,7 @@ Mutabilidad
 ------------
 
 .. code-block:: srcx
+   :class: fragmento
 
    const int limite = 10;
    var int contador = 0;
@@ -110,6 +133,7 @@ Move-semantics
 ``move`` transfiere la propiedad de un valor e **invalida el origen**:
 
 .. code-block:: srcx
+   :class: fragmento
 
    var Punto a = Punto{ x: 1, y: 2 };
    move a;              // 'a' queda inválida a partir de aquí
@@ -170,7 +194,7 @@ consumidor nunca escribe ``__print__``, escribe ``print(x)``.
      - ``free x;``
    * - ``__sizeof__``
      - ``fn __sizeof__(T ptr x) -> int``
-     - ``sizeof(T)``
+     - ``sizeof(T)`` · ``sizeof(valor)``
    * - ``__cast__``
      - ``fn __cast__(X x) -> T``
      - ``cast<T>(x)``
@@ -183,21 +207,49 @@ consumidor nunca escribe ``__print__``, escribe ``print(x)``.
    * - ``__eq__``
      - ``fn __eq__(T ptr a, T ptr b) -> bool``
      - ``a == b``
-   * - ``__make__``
-     - ``fn __make__(...) -> T ptr``
-     - construcción del tipo
+   * - ``__min__`` / ``__max__``
+     - ``fn __min__(T ptr x) -> int``
+     - ``min(T)`` · ``min(valor)`` · un literal donde se espera ``T``
 
 El tipo dueño sale del **primer parámetro** (desenvuelto hasta su nominal),
-salvo en ``__make__``, que se asocia por su tipo de retorno porque todavía no
-existe la instancia, y en ``__cast__``, cuyo dueño es el lado nominal de la
-firma.
+salvo en ``__cast__``, cuyo dueño es el lado nominal de la firma.
+
+``__min__``/``__max__`` son los únicos que el compilador **lee** en vez de
+disparar: mira el literal de su ``return`` para decidir si un literal cabe en
+el tipo (ver :ref:`rango-literal`). Por eso su cuerpo tiene que ser
+exactamente ``{ return <entero>; }`` — cualquier otra cosa sería evaluar
+código, y esta fase no evalúa nada.
+
+Y por eso mismo ``min``/``max`` se pueden **preguntar** sin que sean palabras
+reservadas:
 
 .. code-block:: srcx
+   :class: fragmento
+
+   const dt.int8 a = 10;
+
+   int bajo  = min(dt.int8);   // el TIPO
+   int alto  = max(a);         // o un VALOR: el rango del tipo de 'a'
+
+Igual que ``print`` y ``len``, son identificadores corrientes que despachan por
+convención —una ``fn min`` del usuario tiene prioridad—, y su argumento nombra
+un tipo o un valor, como en ``sizeof``. A diferencia de ``print``/``len``, no
+despachan en ejecución: el rango ya es una constante de compilación, así que la
+llamada **se resuelve al entero que es** y viaja al HIR como un literal.
+
+``len`` sobre un ``str`` es **nativo**: una cadena tiene longitud sin que
+ninguna librería la declare, y no podría declararla —``SEM006`` prohíbe colgar
+un hook de un primitivo—. Para cualquier otro tipo, ``len(x)`` sigue exigiendo
+que ``x`` declare ``__len__``.
+
+.. code-block:: srcx
+
+   #from io #import stdp
 
    struct { str texto; int largo; } Cadena;
 
    hook fn __print__(Cadena ptr c) -> void {
-       __write__(c.texto);
+       stdp.print(c.texto);
    }
 
    hook fn __len__(Cadena ptr c) -> int {
@@ -222,8 +274,8 @@ Un trait es un **contrato**: un conjunto de firmas que un tipo debe proveer.
 .. code-block:: srcx
 
    @trait struct {
-       dunder fn __siguiente__(self) -> int;
-       dunder fn __fin__(self) -> bool;
+       dunder fn __siguiente__(self ptr) -> int;
+       dunder fn __fin__(self ptr) -> bool;
    } Iterable;
 
    @impl(Iterable)
@@ -234,7 +286,9 @@ Un trait es un **contrato**: un conjunto de firmas que un tipo debe proveer.
 
 El compilador verifica la conformidad al ver ``@impl``: si falta un método o
 su firma no encaja, es ``SEM021``. ``self`` en un prototipo de trait es el
-tipo que hará la implementación.
+tipo que hará la implementación, y se sustituye **tal cual**: un
+``self ptr`` del contrato exige un ``Contador ptr`` en la implementación,
+no un ``Contador``.
 
 .. _llamadas:
 

@@ -23,6 +23,32 @@ const type float16;
 const type float32;
 const type float64;
 
+// conversion hacia cada tipo. Se declara como PROTOTIPO: el ancho no se puede
+// escribir en suriaX (haria falta aritmetica de bits sobre un entero que ya es
+// de 64), asi que el cuerpo lo pone el host —mismo patron que __write__ y
+// __reserve__—. Es lo que hace el tipo REAL: 'cast<int8>(300)' da 44
+// (complemento a dos, como C) en vez de dejar el 300 intacto.
+hook fn __cast__(int n)   -> int8;
+hook fn __cast__(int n)   -> int16;
+hook fn __cast__(int n)   -> int32;
+
+// los flotantes redondean al formato IEEE-754 del ancho destino
+// (binary16/32/64), no truncan.
+hook fn __cast__(float x) -> float16;
+hook fn __cast__(float x) -> float32;
+hook fn __cast__(float x) -> float64;
+
+// y la vuelta al primitivo, sin la cual el tipo no seria usable: hace falta
+// para imprimirlo o para operar con el. No pierde nada —el valor ya cabe en
+// el ancho ancho—, asi que no lleva cuerpo: la conversion a un PRIMITIVO la
+// resuelve el propio target.
+hook fn __cast__(int8 v)    -> int;
+hook fn __cast__(int16 v)   -> int;
+hook fn __cast__(int32 v)   -> int;
+hook fn __cast__(float16 v) -> float;
+hook fn __cast__(float32 v) -> float;
+hook fn __cast__(float64 v) -> float;
+
 // tamano de cada tipo (un cuerpo de __sizeof__ por tipo dueno; overload por
 // tipo, igual que __cast__). 'sizeof(int8)' despacha al que tiene owner int8.
 hook fn __sizeof__(int8 ptr _)    -> int { return 1; }
@@ -31,5 +57,23 @@ hook fn __sizeof__(int32 ptr _)   -> int { return 4; }
 hook fn __sizeof__(float16 ptr _) -> int { return 2; }
 hook fn __sizeof__(float32 ptr _) -> int { return 4; }
 hook fn __sizeof__(float64 ptr _) -> int { return 8; }
+
+// RANGO de cada tipo entero. Es lo que hace escribible 'const dt.int8 a = 10;'
+// sin mentir: el compilador sabe por __sizeof__ que int8 mide un byte, pero un
+// byte va de -128 a 127 o de 0 a 255 y la firma no lo dice. Con __min__/__max__
+// la pregunta "¿cabe el 10?" tiene respuesta en COMPILACION — el frontend lee
+// el literal de estos cuerpos, no los ejecuta.
+//
+// Ojo con la asimetria, que es deliberada (la misma de Rust): un literal
+// implicito tiene que CABER; 'cast<dt.int8>(300)' sigue truncando a 44.
+hook fn __min__(int8 ptr _)  -> int { return -128; }
+hook fn __max__(int8 ptr _)  -> int { return 127; }
+hook fn __min__(int16 ptr _) -> int { return -32768; }
+hook fn __max__(int16 ptr _) -> int { return 32767; }
+hook fn __min__(int32 ptr _) -> int { return -2147483648; }
+hook fn __max__(int32 ptr _) -> int { return 2147483647; }
+
+// los flotantes NO publican rango: sus cotas no son enteras y el redondeo
+// IEEE no es un recorte de rango, asi que un literal flotante no se coacciona.
 
 #export as dt_variables
