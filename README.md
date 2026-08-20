@@ -4,16 +4,16 @@
   <picture>
   <img src="./assets/suri_banner_.png" alt="Banner" />
   </picture>
-  
-  [![CI](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml/badge.svg)](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml)
 
+  
+  [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14168/badge)](https://www.bestpractices.dev/projects/14168)
+  [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/samue1-pineda/suriaX/badge)](https://scorecard.dev/viewer/uri=github.com/samue1-pineda/suriaX)
+  [![CI](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml/badge.svg)](https://github.com/samue1-pineda/suriaX/actions/workflows/ci.yml)
   [![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/tests.json)](https://github.com/samue1-pineda/suriaX/actions/workflows/tests.yml)
   [![Version](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/version.json)](version.py)
   [![Release](https://img.shields.io/github/v/release/samue1-pineda/suriaX?include_prereleases&label=release)](https://github.com/samue1-pineda/suriaX/releases/latest)
   [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-  [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14168/badge)](https://www.bestpractices.dev/projects/14168)
-  [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/samue1-pineda/suriaX/badge)](https://scorecard.dev/viewer/uri=github.com/samue1-pineda/suriaX)
   
   [Español] | [website] | [getting started] | [current_errors] | [Documentation] 
   
@@ -44,10 +44,7 @@ suriaX is a programming language whit the following goals:
 
 **First version of the web documentation built**!
 
-the project is currently a **Pre-Alpha Preview**. The exact number is the
-*Version* badge above: it is generated from [`version.py`](version.py), the
-single source every consumer reads (CMake, the docs site, `suriaX --version`
-and the release), so it cannot disagree with what is published.
+the project is currently a **Pre-Alpha Preview**.
 
 [**x**] language syntax & EBNF grammar
 
