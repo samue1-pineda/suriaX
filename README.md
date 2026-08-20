@@ -5,6 +5,8 @@
   <img src="./assets/suri_banner_.png" alt="Banner" />
   </picture>
   
+  [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14168/badge)](https://www.bestpractices.dev/projects/14168)
+  
   [Español] | [website] | [getting started] | [current_errors] | [Documentation] 
   
 </div>
