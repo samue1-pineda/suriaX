@@ -38,14 +38,11 @@ async function instantiate() {
 /** Ejecuta la misma función en el backend JS, para comparar. */
 async function jsExports(): Promise<Record<string, (...args: never[]) => unknown>> {
   const { toBase64 } = await import("../../web/src/codegen/js.ts");
-  // el módulo JS no exporta las funciones sueltas: se importa el código y se
-  // evalúa una versión con todas expuestas.
-  const source = CONTROL.js!.replace(
-    "export default run;",
-    "export default run;\n" +
-      "export { abs, clasificar, suma_hasta, suma_impares, en_rango, extremo, negado, main };",
-  );
-  const url = "data:text/javascript;base64," + toBase64(new TextEncoder().encode(source));
+  // el módulo JS exporta las funciones del programa por su nombre, igual que
+  // el WASM: los dos salen del mismo WIR y por eso se pueden comparar función
+  // a función.
+  const url = "data:text/javascript;base64," +
+    toBase64(new TextEncoder().encode(CONTROL.js!));
   return (await import(url)) as Record<string, (...args: never[]) => unknown>;
 }
 

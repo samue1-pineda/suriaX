@@ -1,0 +1,93 @@
+/- Fuente del fixture de DATOS (datos.phir).
+
+ Cubre lo que el codegen v2 añadió sobre el control de flujo:
+   - 'enum' sin payload (un entero con nombre) y 'Enum.ITEM' como valor
+   - 'match' sobre un enum y sobre enteros
+   - 'cast' entre numéricos: int <-> float, int <-> char
+   - 'str' como VALOR: en variables, parámetros, retornos y '=='
+     (una cadena constante viaja como el índice de su constante)
+   - variables de nivel de MÓDULO: constantes, calculadas y mutables
+     (una global de WASM, no un local de '__module_init')
+
+ Se regenera con:  python V0/main.py datos.srcx --emit-hir
+-/
+
+#from io #import stdp
+
+/- globales: una constante, una CALCULADA (no cabe como init de WASM) y una
+   mutable que las funciones comparten -/
+const int BASE = 7;
+const int DOBLE = BASE * 2;
+var int visitas = 0;
+
+enum Color { ROJO, VERDE, AZUL };
+
+/- valores EXPLÍCITOS y no consecutivos: el índice no es el ordinal -/
+enum Codigo { OK = 200, NO_ESTA = 404, ROTO = 500 };
+
+fn peso(Color c) -> int {
+    match (c) {
+        case Color.ROJO: { return 10; }
+        case Color.VERDE: { return 20; }
+        case Color.AZUL: { return 30; }
+    }
+    return 0;
+}
+
+fn es_error(Codigo c) -> bool {
+    match (c) {
+        case Codigo.OK: { return false; }
+        case Codigo.NO_ESTA: { return true; }
+        case Codigo.ROTO: { return true; }
+    }
+    return false;
+}
+
+/- 'match' sobre enteros, no sobre un enum -/
+fn nombre_digito(int d) -> str {
+    match (d) {
+        case 0: { return "cero"; }
+        case 1: { return "uno"; }
+        case 2: { return "dos"; }
+    }
+    return "otro";
+}
+
+fn mitad(int n) -> float {
+    return cast<float>(n) / 2.0;
+}
+
+fn truncado(float f) -> int {
+    return cast<int>(f);
+}
+
+fn letra(int codigo) -> char {
+    return cast<char>(codigo);
+}
+
+fn codigo_de(char c) -> int {
+    return cast<int>(c);
+}
+
+/- 'str' entra por parámetro, se compara y sale por retorno -/
+fn saludo(str quien) -> str {
+    if (quien == "mundo") {
+        return "hola, mundo";
+    }
+    return "hola, extraño";
+}
+
+fn visitar() -> int {
+    visitas = visitas + 1;
+    return visitas;
+}
+
+fn base_por(int n) -> int { return BASE * n; }
+
+fn main() -> int {
+    var Color c = Color.AZUL;
+    var str texto = saludo("mundo");
+    stdp.println(texto);
+    stdp.println(nombre_digito(2));
+    return peso(c) + truncado(mitad(7));
+}

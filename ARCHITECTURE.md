@@ -8,7 +8,8 @@ explícitas.
 
 > status: **arquitectura general definida**. El frontend, el HIR y el
 > intérprete están completos; el target web ejecuta un subconjunto del
-> lenguaje; el backend C++ está en construcción.
+> lenguaje; del backend C++ existe el **lector del HIR** (`backend/`) y falta
+> todo lo demás (MIR, VM/JIT).
 
 ## Visión general del pipeline
 
@@ -59,6 +60,36 @@ memory_logic -.-> MIR
 end
 ```
 
+## La frontera: compilador y tooling (suriniX)
+
+Dos productos conviven en este repositorio y conviene no mezclarlos: el
+**compilador** —que convierte un `.srcx` en artefactos— y el **tooling**, que
+es todo lo que rodea a esa operación (pedirla desde una terminal, decidir
+dónde van los volcados, enseñarla en una página). El tooling se llama
+**suriniX** y todavía no tiene repositorio propio.
+
+| | qué es | quién |
+|---|---|---|
+| **Compilador** | fuente -> artefactos | `V0/src/` (frontend, HIR, linker), `V0/include/`, `V0/error_handler/`, `V0/driver/`, `runtime/`, `backend/`, `web/`, `htims/`, `lib/` |
+| **suriniX** | todo lo que rodea a compilar | `suri/` (el comando), `V0/cli/` (argparse y formato de terminal), `config/` (el `.suriaX_config.yaml`, los logs, los volcados y la caché de build), `playground/` |
+
+**La dirección de la dependencia es una sola: suriniX conoce al compilador, y
+el compilador no conoce a suriniX.** Un compilador que sabe formatear para una
+terminal o que lee el yaml del proyecto no se puede embeber en un editor, en
+un servidor ni en otra herramienta sin arrastrar esas decisiones. `V0/driver/`
+se queda del lado del compilador porque es su API —*el compilador como
+librería*—, no una herramienta sobre él.
+
+Hoy la frontera se cruza en **un solo sitio**, y está anotado como tal:
+`V0/driver/pipeline.py` importa `config/`. Cerrarlo significa que el driver
+reciba la configuración ya cargada y un destino para sus volcados en vez de ir
+a buscarlos, que es el trabajo pendiente de la separación.
+
+Que no se cruce en ningún sitio más lo comprueba
+`test/unit/test_frontera_tooling.py` sobre el código fuente, igual que la
+frontera de `htims/` (que no puede importar `V0/`). La lista de cruces
+conocidos solo puede ENCOGER: añadir uno nuevo rompe la prueba.
+
 ## El entrypoint: `cli/` y `driver/`
 
 El compilador se invoca hoy por línea de comandos y mañana por suriniX
@@ -73,6 +104,12 @@ El compilador se invoca hoy por línea de comandos y mañana por suriniX
 para que suriniX reutilice el pipeline entero en vez de invocar al proceso o
 reimplementarlo, y para que ejecutar sea una decisión del llamador: el driver
 deja el `.phir` y dice si el target lo pide, pero no lo lanza.
+
+El segundo consumidor de esa frontera ya existe: [`playground/`](playground/README.md),
+la página que enseña **cada fase** sobre el código de quien la visita. Pide los
+artefactos con `driver/artifacts.collect()` y no analiza nada por su cuenta —
+reimplementar el frontend en TypeScript para que corriera en el navegador
+habría sido un segundo compilador que mantener sincronizado con este.
 
 ## Frontend (Python)
 
@@ -144,9 +181,14 @@ reservados. Move-semantics sí viaja (`MoveStmt`, `Symbol.moved_at`).
 > sigue detectando `llvm-config` y lo reporta en `--check`, pero nada de la
 > compilación depende de ello.
 
+Vive en [`backend/`](backend/README.md) y se construye con el mismo CMake de
+la raíz (`cmake --build build --target suriax-hir`). Necesita protobuf para
+C++; si falta, se omite con un aviso y el resto del repositorio sigue
+compilando — el frontend en Python no depende de este lado.
+
 | Fase | Entrada → Salida | Responsabilidad |
 |------|------------------|-----------------|
-| **Lector HIR** | `.phir` → estructuras C++ | Valida `schema_version` y reconstruye el árbol y la tabla de símbolos. |
+| **Lector HIR** ✅ | `.phir` → `Module` + índices | Valida `schema_version` fail-fast, reconstruye la tabla de símbolos, liga las N unidades y recorre el árbol con un `switch` exhaustivo por `oneof`. Sus dos vistas (`--pretty`, `--summary`) son **byte-idénticas** a las de Python: eso convierte `test/e2e/test_backend_cpp.py` en un diferencial entre consumidores. |
 | **MIR lowering** | HIR → **MIR** | IR de **registros** con control de flujo explícito (CFG) y las verificaciones del modelo de memoria (lifetimes de región, move). |
 | **VM / JIT** | MIR → bytecode | **Target nativo estándar.** Ejecuta el bytecode y compila en caliente las rutas calientes. |
 | **Targets** | bytecode → artefacto | Según `compilerconfig`: `IS_WIN32` → `.exe`, `IS_LINUX` → `.o`. |
@@ -214,7 +256,13 @@ lógica reutilizable en [`CMake/`](CMake/), que descubre los módulos de
 El bloque `#extern cpp{ ... }` incrusta código C++. El **lexer lo captura
 crudo** (token `RAW_BLOCK`) sin tokenizarlo con las reglas de suriaX; el
 contenido viaja intacto hasta el backend C++, que lo compila e integra vía los
-*bindings*. La validación del C++ ocurre en el backend, no en el frontend. El
+*bindings*. La validación del C++ ocurre en el backend, no en el frontend.
+
+El viaje ya está completo hasta el lado nativo: `suriax-hir --emit-cpp`
+recoge los bloques de todas las unidades y los escribe como una unidad de
+traducción de C++, con `#line` al `.srcx` para que los errores del compilador
+apunten al archivo del usuario. Compilarlo y enlazarlo es del backend nativo,
+que aún no existe. El
 target web lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
 
 ## `compilerconfig` y la selección de target

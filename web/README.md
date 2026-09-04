@@ -85,27 +85,66 @@ codegen, no en runtime:
 | `WEB004` | `free x;` | La memoria la gestiona el runtime de JS. |
 | `WEB005` | `__free__`, `__sizeof__` | Dependen del runtime nativo. |
 | `WEB006` | `move x;` | Exige invalidación en runtime, aún no implementada. |
-| `WEB007` | Cualquier librería que no sea `IO` | Ver abajo. |
+| `WEB007` | Una librería fuera de la allowlist | Solo si la política declara una; `WEB_V1_POLICY` permite cualquiera y contiene por capacidad. |
 | `WEB008` | `sizeof(T)` | Depende del layout nativo. |
 | `WEB900`/`WEB901` | `.phir` ilegible / nodo malformado | Errores del lector. |
+
+### Imprimir un valor calculado
+
+`stdp.println(f"total {x}")` **funciona**. No se construye una cadena: el
+f-string se convierte en una secuencia de escrituras —texto literal, valor,
+texto literal— y cada valor va a la primitiva del host que corresponde a su
+tipo (`__write_int__`, `__write_float__`, `__write_bool__`, `__write_char__`),
+que es **quien lo formatea**.
+
+Formatear en WebAssembly habría exigido escribir a mano la conversión de
+`double` a texto con las reglas de CPython (representación más corta que hace
+round-trip, punto decimal siempre presente, exponente de dos dígitos), y una
+diferencia de un dígito rompe la comparación con el intérprete. Con el
+formateo en el host hay **un solo sitio** que decide cómo se ve un valor
+([`src/codegen/runtime.ts`](src/codegen/runtime.ts)), compartido por el
+backend JS y por el host del WASM.
+
+Los textos contiguos se funden antes de emitir, así que `println("hola")`
+sigue siendo **una** escritura de `"hola\n"`, igual que antes, y los imports
+del host se declaran solo si se usan: un programa que únicamente imprime
+literales importa una función, no cinco.
+
+Lo que sigue sin soporte es la cadena como **valor** (`var str s = a + b;`,
+`cast<str>(x)`): eso sí necesita un runtime de cadenas —memoria dinámica y
+concatenación— y da `WEB102` con su posición.
 
 Las construcciones de región no aparecen porque **ya no existen**: se
 retiraron del lenguaje en la v0.2.0. El target web no conoce el modelo de
 memoria — recibe el HIR ya resuelto.
 
-### Librerías: solo `IO`
+### Librerías: cualquiera que el target sepa traducir
 
-En esta primera versión la única librería ejecutable es el paquete de
-impresión: `IO`, `IO.stdp` (`print`/`println`) y `IO.stdpf` (`printf`).
-Cualquier otra se rechaza **aunque el programa compile y su `.phir` esté al
-lado** — que no viaje es una decisión del target, no un accidente de
-empaquetado.
+El lowering baja la **imagen entera** —la unidad principal y sus librerías—,
+así que una librería de funciones corrientes (`math`) se traduce como
+cualquier otro código y se ejecuta.
 
-Esas unidades son además **confiables**: su implementación la aporta el host
-(la primitiva `__write__` es la salida del playground), así que su HIR no se
-traduce ni se revisa. Por eso `IO.stdp` puede declarar
-`fn __print__(String ptr s)` —un puntero— sin violar `WEB002`. Lo que sí se
-revisa de una librería confiable son sus propios imports.
+Antes solo corría `IO`, y no porque el target no pudiera traducir las demás:
+`lowerImage` devolvía `lowerModule(image.main.module)` y las unidades se
+tiraban antes de llegar al WIR. Con eso, `WEB007` rechazaba por identidad
+("esta librería no") algo que en realidad nunca se había intentado.
+
+Ahora decide la **capacidad**: una librería que usa punteros se rechaza por
+`WEB002` señalando la línea exacta, no por llamarse como se llama. `lib/math`
+funciona; `lib/mem` y `array.vector` siguen fuera porque usan punteros, y
+`d_types` porque declara `__sizeof__`.
+
+`IO` sigue siendo un caso aparte: es una unidad **confiable**, su
+implementación la aporta el host (la primitiva `__write__` es la salida del
+playground), así que su HIR no se traduce ni se revisa. Por eso `IO.stdp`
+puede declarar `fn __print__(String ptr s)` —un puntero— sin violar `WEB002`.
+Lo que sí se revisa de una librería confiable son sus propios imports.
+
+Las funciones de una librería viajan al WIR con el nombre **cualificado**
+(`math.basic.add`): dos unidades pueden declarar `max`, y el nombre acaba
+siendo el del export de WebAssembly, donde repetirlo produce un módulo
+inválido. Un identificador de suriaX no puede llevar `.`, así que cualificar
+basta para no chocar nunca con un nombre del usuario.
 
 ### Habilitar algo
 
@@ -165,11 +204,40 @@ comprueba ejecutando los dos.
 
 ### Alcance del codegen
 
-Hoy: **variables, aritmética, comparaciones, llamadas, `if`/`else`/`else if`,
-`while` con `break`/`continue`, `and`/`or`/`not` e impresión de literales.**
-Lo demás da `WEB100`/`WEB101`/`WEB102` con su posición y **no se emite nada**.
+Hoy: **variables (locales y de módulo), aritmética, comparaciones, llamadas,
+`if`/`else`/`else if`, `while` con `break`/`continue`, `and`/`or`/`not`,
+`match`, `cast` entre numéricos, `enum` sin payload, `str` constante como
+valor e impresión.** Lo demás da `WEB100`/`WEB101`/`WEB102` con su posición y
+**no se emite nada**.
+
+Lo que sigue fuera, y por qué: `struct` y punteros (harían falta memoria
+lineal y un asignador, y el target web se declaró **sin gestión de memoria**),
+`try`/`catch`/`throw` (necesitan una representación del error), y toda cadena
+CALCULADA (concatenar o `cast<str>` piden un runtime de cadenas).
 
 Detalles deliberados:
+
+- Un **`enum` sin payload es un entero con nombre**, así que su item es una
+  constante y `match` es una cadena de comparaciones — no un `br_table`, que
+  es *denso*: `ROJO = 1, AZUL = 400` habría generado cuatrocientas entradas
+  para tres casos. El item CON payload (`Numero(int)`) no se traduce: el enum
+  deja de ser un entero y representarlo como tal perdería el dato.
+- El **sujeto del `match` se evalúa una vez** y se guarda en un local: es el
+  único local que este lowering inventa, y sin él `match (siguiente())`
+  llamaría a `siguiente` una vez por caso.
+- **`float` -> `int` satura** (`i64.trunc_sat_f64_s`): el `trunc` que trapea
+  aborta el módulo entero ante un NaN, y un `cast` no debería poder matar al
+  programa. El backend JS hace lo mismo a mano para no discrepar.
+- Una **cadena constante es el ÍNDICE de su constante**, no un puntero: así
+  cabe en una variable, en un parámetro y en un retorno sin memoria dinámica.
+  Como se internan por texto, `==` contesta bien; el ORDEN (`a < b`) no, y por
+  eso se rechaza: los índices van por orden de aparición, no alfabético.
+- Una **variable de módulo es una global de WASM**, no un local de
+  `__module_init`: un local muere con su función y ninguna otra la vería. Un
+  `const` del programa sale **inmutable en el binario** —el validador impide
+  reasignarla— salvo cuando su valor hay que calcularlo (`const int DOBLE =
+  BASE * 2`): WASM solo admite constantes como inicializador, así que arranca
+  a cero y `__module_init` se lo asigna.
 
 - `int` es **i64** de verdad (y `BigInt` con envoltura explícita en el backend
   JS): `9007199254740992 + 1` da el valor exacto en los dos.

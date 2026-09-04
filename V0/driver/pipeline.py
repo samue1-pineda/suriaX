@@ -22,6 +22,7 @@ from typing import Optional
 
 import htims
 from config import compilerconfig
+from include import ast_nodes as ast
 from src.frontend.lexer import source_reader
 from src.frontend.lexer.lexer import Lexer
 from src.frontend.parser.parser import Parser
@@ -31,9 +32,12 @@ from .options import (EXIT_COMPILE_ERROR, EXIT_CONFIG_ERROR,
                       EXIT_MISSING_DEPENDENCY, EXIT_OK, CompileOptions,
                       CompileResult)
 from .reporting import Reporter, SilentReporter
+from error_handler.error import blocks
 
 #: dependencias que TODA compilación necesita (ninguna: el frontend completo
-#: corre con la librería estándar). La fase HIR añade 'protobuf' aparte.
+#: corre con la librería estándar, y la fase HIR tampoco: desde que el
+#: '.phir' se escribe a mano, el compilador entero no necesita nada
+#: instalado. Ver 'src/HIR/PROTOBUF_BRIDGE.md' secc. 2.
 _PHASE_DEPS: set[str] = set()
 
 
@@ -53,25 +57,28 @@ def load_config(source_path: Optional[str]) -> dict:
         return config
 
 
-def emit_library_units(libraries: dict, config: dict, log,
-                       times: dict, *, hir_text: bool = False,
-                       reporter: Optional[Reporter] = None) -> Optional[str]:
-    """
-    Emite un ``<alias>.phir`` + ``<alias>.txt`` por unidad ``.libsrx`` cargada
+def build_library_units(libraries: dict, config: dict, *,
+                        hir_text: bool = False,
+                        reporter: Optional[Reporter] = None,
+                        log=None) -> tuple:
+    """Compila cada unidad ``.libsrx`` cargada y devuelve SUS BYTES.
 
     Recorre un *worklist*: si una librería importa otras, sus unidades se
-    encolan también (cada ``Module`` referencia solo las suyas), Cada unidad
+    encolan también (cada ``Module`` referencia solo las suyas). Cada unidad
     corre su PROPIO pipeline completo (la carga del import solo llegó a la
-    pasada 1)
+    pasada 1).
 
-    los ``.phir`` quedan junto al del módulo principal, así el
-    module-linker del intérprete los resuelve por ruta relativa.
-
-    Un PAQUETE llega como su carpeta: la unidad que se emite es su archivo
+    Un PAQUETE llega como su carpeta: la unidad que se compila es su archivo
     padre (``main.libsrx``); sus submódulos vienen aparte, ya calificados
     (``IO.stdp``), porque la Semántica los registró al resolver el import.
 
-    Devuelve un mensaje de error (str) si alguna unidad no pudo generarse
+    Construir y ESCRIBIR están separados a propósito: el mismo recorrido lo
+    necesitan quien vuelca los ``.phir`` a disco (:func:`emit_library_units`)
+    y quien solo quiere los bytes para dárselos a otro proceso — el
+    playground los pone junto al módulo principal en un temporal. Duplicar el
+    worklist para eso habría sido mantener dos veces la misma pregunta.
+
+    Devuelve ``({alias: (bytes, texto|None, ruta)}, error|None)``.
     """
     from src.frontend.semantic import analyze
     from src.frontend.parser.typed_ast import resolve_types
@@ -79,10 +86,10 @@ def emit_library_units(libraries: dict, config: dict, log,
     from src.linker_p.resolver import PACKAGE_PARENT, package_parent
 
     reporter = reporter or SilentReporter()
-    dumps_dir = compilerconfig.dumps_dir(config)
     pending = dict(libraries)
     done: set = set()
     failed: Optional[str] = None
+    unidades: dict = {}
 
     while pending:
         alias, lib_path = pending.popitem()
@@ -106,9 +113,16 @@ def emit_library_units(libraries: dict, config: dict, log,
         lib_program = lib_parser.parse()
         resolve_types(lib_program)
         sub_libs: dict = {}
+        # El alias del '#export' (la ÚLTIMA declaración del archivo, igual
+        # que lo lee el linker). Hace falta aquí porque esta pasada vuelve a
+        # analizar la librería por su cuenta para emitir su .phir: sin él sus
+        # tipos saldrían sin calificar y no coincidirían con los que ya
+        # registró el consumidor.
+        export = lib_program.items[-1] if lib_program.items else None
+        unidad = export.alias if isinstance(export, ast.ExportDirective) else ""
         lib_table, lib_errors = analyze(
             lib_program, source_path=lib_path, config=config,
-            libraries=sub_libs,
+            libraries=sub_libs, unit=unidad,
         )
         for sub_alias, sub_path in sub_libs.items():
             if sub_alias not in done:
@@ -124,20 +138,51 @@ def emit_library_units(libraries: dict, config: dict, log,
         )
         if hir_errors:
             reporter.diagnostics(f"errores del HIR ({alias})", hir_errors)
-            log.error_batch(hir_errors, source_file=lib_path)
+            if log is not None:
+                log.error_batch(hir_errors, source_file=lib_path)
             failed = f"la unidad '{alias}' no pudo emitirse"
             continue
 
-        data = serialize(module)
-        text = module_to_text(module) if hir_text else None
+        unidades[alias] = (serialize(module),
+                           module_to_text(module) if hir_text else None,
+                           lib_path)
+
+    return unidades, failed
+
+
+def emit_library_units(libraries: dict, config: dict, log,
+                       times: dict, *, hir_text: bool = False,
+                       reporter: Optional[Reporter] = None) -> Optional[str]:
+    """Escribe un ``<alias>.phir`` (+ ``.txt``) por unidad ``.libsrx`` cargada.
+
+    Los ``.phir`` quedan junto al del módulo principal, así el module-linker
+    del consumidor los resuelve por ruta relativa. Quien decide QUÉ unidades
+    hay y las compila es :func:`build_library_units`; esto solo las vuelca.
+
+    Devuelve un mensaje de error (str) si alguna unidad no pudo generarse.
+    """
+    reporter = reporter or SilentReporter()
+    dumps_dir = compilerconfig.dumps_dir(config)
+    unidades, failed = build_library_units(
+        libraries, config, hir_text=hir_text, reporter=reporter, log=log)
+    for alias, (data, text, lib_path) in unidades.items():
         out = compilerconfig.dump_hir(
             data, source_path=lib_path, config=config,
             out_path=os.path.join(dumps_dir, f"{alias}.phir"), text=text,
         )
         reporter.info(f"  unidad '{alias}': {len(data)} bytes -> {out}"
                       f"{' (+ .txt)' if text else ''}")
-
     return failed
+
+
+def _titulo(fase: str, diagnosticos) -> str:
+    """Encabezado del bloque de diagnosticos de una fase.
+
+    Llamar "errores" a una lista que solo trae avisos es mentir en la unica
+    linea que el usuario lee entera.
+    """
+    return f"{'errores' if blocks(diagnosticos) else 'avisos'} {fase}"
+
 
 def compile_source(path: str, options: Optional[CompileOptions] = None, *,
                    reporter: Optional[Reporter] = None) -> CompileResult:
@@ -234,9 +279,11 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
         result.log_file = log.flush()
         result.status = EXIT_EXTENSION_ERROR
         return result
-    # la fase HIR es la unica que exige protobuf
-    #no imponer la dependencia la dependencia si no se emite el HIR, al menos que se use el interprete
-    phase_deps = _PHASE_DEPS | ({"protobuf"} if emit_hir is not None else set())
+    # NINGUNA fase exige ya protobuf: el HIR se serializa a mano contra el
+    # propio 'hir.proto' (ver 'src/HIR/stubs.py'). Antes esto anadia
+    # 'protobuf' al emitir el HIR, y como emitirlo es parte de compilar, la
+    # dependencia era de hecho obligatoria para todo.
+    phase_deps = _PHASE_DEPS
     try:
         compilerconfig.ensure_dependencies(required=phase_deps)
     except compilerconfig.DependencyError as exc:
@@ -321,16 +368,22 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
             log.note(note["code"], note["message"], file=note.get("file"),
                      line=note.get("line"), column=note.get("column"))
 
+        # Lo que DETIENE la compilacion es la severidad, no el hecho de haber
+        # diagnosticos: un aviso se reporta y la compilacion continua, que es
+        # lo que la escala de 'Severity' prometia desde el principio.
         if parser.ctx.errors:
-            reporter.diagnostics("errores de sintaxis", parser.ctx.errors)
+            reporter.diagnostics(_titulo("sintaxis", parser.ctx.errors),
+                                 parser.ctx.errors)
             log.error_batch(parser.ctx.errors, source_file=path)
             result.diagnostics.extend(parser.ctx.errors)
-            exit_code = EXIT_COMPILE_ERROR
+            if blocks(parser.ctx.errors):
+                exit_code = EXIT_COMPILE_ERROR
         if sem_errors:
-            reporter.diagnostics("errores semanticos", sem_errors)
+            reporter.diagnostics(_titulo("semanticos", sem_errors), sem_errors)
             log.error_batch(sem_errors, source_file=path)
             result.diagnostics.extend(sem_errors)
-            exit_code = EXIT_COMPILE_ERROR
+            if blocks(sem_errors):
+                exit_code = EXIT_COMPILE_ERROR
 
         if report is not None:
             report.metrics(

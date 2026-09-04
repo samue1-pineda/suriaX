@@ -57,6 +57,32 @@ class StructValue:
         return f"{self.type_name}{{{inner}}}"
 
 
+def copy_on_bind(value: Any) -> Any:
+    """El valor que se liga a un nombre nuevo, con semántica de VALOR.
+
+    Un ``struct`` es un valor, no una referencia: el único tipo del lenguaje
+    que refiere a otro sitio es ``ptr``. Sin esta copia, ``var Caja b = a;``
+    dejaba a los dos nombres apuntando al MISMO ``StructValue``, así que
+    ``b.v = 99`` cambiaba también ``a`` — y con eso la regla de punteros
+    quedaba sin sentido: escribir por un ``ptr`` de solo lectura es
+    ``SEM015``, pero bastaba pasar el struct por valor y mutarlo.
+
+    La copia es **superficial en los punteros y profunda en los campos**: se
+    crean celdas nuevas para cada campo (por eso mutar la copia no toca al
+    original) pero un ``ptr`` guardado en un campo sigue apuntando a lo mismo,
+    que es lo que significa un préstamo. Los demás valores del intérprete son
+    inmutables (int, float, bool, str, char) o son referencias a propósito
+    (punteros, bloques, namespaces): se devuelven tal cual.
+    """
+    if isinstance(value, StructValue):
+        return StructValue(
+            value.type_name,
+            {name: Cell(copy_on_bind(cell.value), name=name)
+             for name, cell in value.fields.items()},
+        )
+    return value
+
+
 class TypeValue:
     __slots__ = ("name",)
 
@@ -140,4 +166,5 @@ def format_value(value: Any) -> str:
 
 
 __all__ = ["FunctionValue", "Namespace", "StructValue", "TypeValue",
+           "copy_on_bind",
            "EnumNamespace", "VariantCtor", "EnumValue", "format_value"]

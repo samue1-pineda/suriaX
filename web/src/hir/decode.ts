@@ -117,6 +117,7 @@ function decodeType(r: Reader): Type {
   let name = "";
   let inner: Type | null = null;
   let mut = false;
+  const args: Type[] = [];
   while (!r.eof) {
     const tag = r.readUint32();
     switch (tag) {
@@ -124,10 +125,11 @@ function decodeType(r: Reader): Type {
       case 18: name = r.readString(); break;
       case 26: inner = r.readMessage(decodeType); break;
       case 32: mut = r.readBool(); break;
+      case 42: args.push(r.readMessage(decodeType)); break;
       default: r.skip(tag);
     }
   }
-  return { kind, name, inner, mut };
+  return { kind, name, inner, mut, args };
 }
 
 function decodeSymbol(r: Reader): SymbolInfo {
@@ -339,6 +341,18 @@ function decodeExpr(r: Reader): Expr {
       case 186: node = r.readMessage(decodeAddrOf); break;
       case 194: node = r.readMessage(decodeCast); break;
       case 202: node = r.readMessage(decodeStructLiteral); break;
+      case 210: node = {
+        case: "moveExpr",
+        operand: r.readMessage((sub) => {
+          let operand = MISSING_EXPR;
+          while (!sub.eof) {
+            const inner = sub.readUint32();
+            if (inner === 10) operand = sub.readMessage(decodeExpr);
+            else sub.skip(inner);
+          }
+          return operand;
+        }),
+      }; break;
       default: r.skip(tag);
     }
   }
@@ -840,15 +854,26 @@ function decodeStruct(r: Reader): StructDecl {
 function decodeEnumItem(r: Reader): EnumItem {
   let name = "";
   let value: Expr | null = null;
+  const payloadTypeIds: number[] = [];
   while (!r.eof) {
     const tag = r.readUint32();
     switch (tag) {
       case 10: name = r.readString(); break;
       case 18: value = r.readMessage(decodeExpr); break;
+      // 'repeated uint32' viaja EMPAQUETADO en proto3 (tag 26), pero un
+      // escritor puede emitirlo campo a campo (tag 24): los dos son válidos y
+      // los dos se leen, que es lo que exige aceptar cualquier .phir legal.
+      case 24: payloadTypeIds.push(r.readUint32()); break;
+      case 26: {
+        const packed = r.readBytes();
+        const inner = new Reader(packed);
+        while (!inner.eof) payloadTypeIds.push(inner.readUint32());
+        break;
+      }
       default: r.skip(tag);
     }
   }
-  return { name, value };
+  return { name, value, payloadTypeIds };
 }
 
 function decodeEnum(r: Reader): EnumDecl {

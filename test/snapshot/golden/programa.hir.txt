@@ -350,6 +350,8 @@ items {
           }
           catches {
             name: "e"
+            block {
+            }
           }
         }
       }

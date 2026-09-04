@@ -20,14 +20,15 @@ _MANIFEST = ("project:   DelManifiesto\n"
              "logic_dir: extensions/logic\n"
              "calls_dir: extensions/calls\n")
 
-_PHYSICS = ('from htims import hook\n'
+_PHYSICS = ('from htims import signature_extends\n'
             'PROJECT = "MiJuego"\n'
-            '@hook("__gravity__", owner="Body", params=["Body ptr mutable"],\n'
-            '      returns="void", logic="gravity_cpp")\n'
+            '@signature_extends("__gravity__", owner="Body",\n'
+            '                   params=["Body ptr mutable"], returns="void",\n'
+            '                   cxx=True, logic="gravity_cpp")\n'
             'def gravity(body): pass\n')
 
-_AUDIO = ('from htims import hook\n'
-          '@hook("__play__", owner="Sound", returns="void")\n'
+_AUDIO = ('from htims import signature\n'
+          '@signature("__play__", owner="Sound", returns="void")\n'
           'def play(s): pass\n')
 
 

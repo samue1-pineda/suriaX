@@ -21,6 +21,7 @@ for _p in (_REPO_ROOT, os.path.join(_REPO_ROOT, "V0"),
         sys.path.insert(0, _p)
 
 from helpers import assert_has_code, assert_ok, parse  # noqa: E402
+from include import ast_nodes as ast  # noqa: E402
 
 #: un genérico con un campo del parámetro, su hook de indexado y un método.
 VEC = (
@@ -257,3 +258,199 @@ def test_el_menor_que_sigue_siendo_una_comparacion():
     parser RETROCEDE y ``a < b`` vuelve a ser lo que siempre fue."""
     assert_ok("fn f(int a, int b) -> bool { return a < b; };")
     assert_ok("fn f(int a, int b, int c) -> bool { return a < b > c; };")
+
+
+# --------------------------------------------------------------------------- #
+# la SUSTITUCIÓN llega a todas las preguntas sobre el tipo
+# --------------------------------------------------------------------------- #
+# Un campo de un genérico se declara como 'T', y 'T' no resuelve a nada. Cada
+# pregunta que baje a los campos tiene que sustituir primero; las que no lo
+# hacían daban respuestas falsas sobre el tipo CONCRETO, en silencio.
+
+def test_un_generico_posee_lo_que_posee_su_argumento():
+    """``Caja<R>`` con ``R`` que declara ``__free__`` POSEE recursos. Sin
+    sustituir, su campo era 'T' —que no resuelve— así que 'Caja<R>' no poseía
+    nada y su destructor no se ejecutaba nunca: una fuga silenciosa."""
+    from helpers import analyze
+    from src.frontend.semantic import type_service
+    from include.types_ast import Type, TypeKind
+
+    _, table, errores = analyze(
+        "struct { int id; } R;\n"
+        "hook fn __free__(R ptr r) -> void { };\n"
+        "struct { T dentro; } Caja<T>;\n"
+        "fn main() -> int { return 0; };")
+    assert not errores, [e.code for e in errores]
+
+    scope = table.global_scope
+    caja_r = Type(TypeKind.NOMINAL, name="Caja",
+                  args=(Type(TypeKind.NOMINAL, name="R"),))
+    caja_int = Type(TypeKind.NOMINAL, name="Caja",
+                    args=(Type(TypeKind.INT),))
+    assert type_service.owns_resources(caja_r, scope, table)
+    # ...y la misma plantilla con otro argumento NO posee: es lo que hace que
+    # la respuesta sea del tipo concreto y no de la plantilla.
+    assert not type_service.owns_resources(caja_int, scope, table)
+
+
+def test_un_ciclo_que_pasa_por_un_generico_se_detecta():
+    """``struct { Caja<S> c; } S;`` no tiene tamaño finito, y sin sustituir el
+    ciclo era invisible porque el campo de 'Caja' es 'T'."""
+    from helpers import error_codes
+    codes = error_codes("struct { T dentro; } Caja<T>;\n"
+                        "struct { Caja<S> c; } S;\n"
+                        "fn main() -> int { return 0; };")
+    assert "SEM026" in codes, codes
+
+
+def test_un_ciclo_ajeno_al_objetivo_no_cuelga_el_analisis():
+    """Regresión: la guarda comparaba el nombre de un TIPO contra la lista de
+    nombres de CAMPO recorridos. Un ciclo que no incluye al tipo consultado
+    (A -> B -> C -> B) no la disparaba y el recorrido no terminaba."""
+    from helpers import error_codes
+    codes = error_codes("struct { B b; } A;\n"
+                        "struct { C c; } B;\n"
+                        "struct { B otra; } C;\n"
+                        "fn main() -> int { return 0; };")
+    assert "SEM026" in codes, codes
+
+
+# --------------------------------------------------------------------------- #
+# genéricos de FUNCIÓN
+# --------------------------------------------------------------------------- #
+# Los de tipo ya existían; los de función eran el hueco que impedía que una
+# librería como 'array.vector' guardara algo que no fuera 'int'. Se resuelven
+# igual que el resto del lenguaje: ESCRIBIÉNDOLOS ('make<int>(6)'), con una
+# deducción literal cuando el parámetro aparece en un argumento.
+
+def test_una_funcion_generica_se_llama_con_su_argumento_de_tipo():
+    assert_ok("fn primero<T>(T a) -> T { return a; };\n"
+                 "fn main() -> int { return primero<int>(1); };")
+
+
+def test_el_parametro_se_deduce_cuando_esta_en_un_argumento():
+    """'primero(1)' no necesita '<int>': la T está en la firma del argumento."""
+    assert_ok("fn primero<T>(T a) -> T { return a; };\n"
+                 "fn main() -> int { return primero(1); };")
+
+
+def test_el_retorno_se_sustituye_con_los_argumentos_de_la_llamada():
+    """Sin esto la llamada entregaría un 'Caja<T>' con la T sin ligar, y nada
+    unificaría con él."""
+    assert_ok("struct { T v; } Caja<T>;\n"
+                 "fn crea<T>(T x) -> Caja<T> { return Caja<T>{ v: x }; };\n"
+                 "fn main() -> int { var Caja<int> c = crea<int>(7); "
+                 "return c.v; };")
+
+
+def test_la_aridad_de_los_argumentos_de_tipo_se_comprueba():
+    assert_has_code("fn primero<T>(T a) -> T { return a; };\n"
+                    "fn main() -> int { return primero<int, str>(1); };",
+                    "SEM027")
+
+
+def test_un_argumento_que_no_casa_con_el_tipo_escrito_se_rechaza():
+    assert_has_code("fn primero<T>(T a) -> T { return a; };\n"
+                    "fn main() -> int { return primero<str>(1); };",
+                    "AST006")
+
+
+def test_el_menor_que_sigue_siendo_una_comparacion():
+    """'a < b' y 'make<int>(...)' comparten el '<'. Es la única posición
+    ambigua del lenguaje y se resuelve MIRANDO qué hay tras el '>': un '('
+    abre una llamada, un '{' un literal, y cualquier otra cosa retrocede."""
+    assert_ok("fn main() -> int {\n"
+                 "    var int a = 1; var int b = 2; var int c = 3;\n"
+                 "    if (a < b and b < c) { return 1; };\n"
+                 "    return 0;\n"
+                 "};")
+
+
+def test_un_metodo_de_un_generico_devuelve_el_tipo_instanciado():
+    """'@impl Caja<T>': el receptor nombra la T que hay que ligar."""
+    assert_ok("struct { T v; } Caja<T>;\n"
+                 "@impl Caja<T> { fn get(Caja<T> ptr self) -> T "
+                 "{ return self.v; } }\n"
+                 "fn main() -> int { var Caja<int> c = Caja<int>{ v: 7 }; "
+                 "return c.get(); };")
+
+
+# --------------------------------------------------------------------------- #
+# declaración de CONTENEDOR: 'int vec.Vector v[8];'
+# --------------------------------------------------------------------------- #
+# Es AZÚCAR y se deshace en el parser: la Semántica, el HIR y los backends ven
+# exactamente el 'var' y la llamada que ya veían. Lo que se prueba aquí es que
+# la forma nueva produzca ESO y no otra cosa.
+
+_VECTOR = ("struct { T ptr mutable datos; int len; int cap; } Vector<T>;\n"
+           "fn make<T>(int cap) -> Vector<T>;\n")
+
+
+def test_la_declaracion_con_corchetes_es_el_var_de_siempre():
+    program, errores, _lex = parse(
+        "fn main() -> int { int Vector v[8]; return 0; };")
+    assert not errores, errores
+    decl = program.items[0].body.statements[0]
+    assert isinstance(decl, ast.VarDecl)
+    assert decl.name == "v"
+    # el tipo es el contenedor INSTANCIADO con el elemento
+    assert decl.type.name == "Vector"
+    assert [a.name for a in decl.type.args] == ["int"]
+    # y el valor, la llamada al constructor de su módulo
+    assert isinstance(decl.value, ast.Call)
+    assert [a.name for a in decl.value.type_args] == ["int"]
+
+
+def test_el_constructor_se_busca_en_el_modulo_del_contenedor():
+    """'vec.Vector' -> 'vec.make': la convención es de la librería, no de la
+    gramática (el mismo criterio que pone 'print' en IO)."""
+    program, errores, _lex = parse(
+        "fn main() -> int { int vec.Vector v[8]; return 0; };")
+    assert not errores, errores
+    decl = program.items[0].body.statements[0]
+    callee = decl.value.callee
+    assert isinstance(callee, ast.MemberAccess)
+    assert callee.obj.name == "vec" and callee.member == "make"
+
+
+def test_una_declaracion_corriente_sigue_teniendo_un_solo_tipo():
+    """El retroceso del parser no puede tragarse 'int x;'."""
+    program, errores, _lex = parse(
+        "fn main() -> int { int x = 1; return x; };")
+    assert not errores, errores
+    decl = program.items[0].body.statements[0]
+    assert isinstance(decl, ast.VarDecl) and decl.name == "x"
+    assert decl.type.name == "int" and decl.capacity is None
+
+
+def test_reservar_sin_contenedor_dice_que_falta():
+    _program, errores, _lex = parse("fn main() -> int { int v[8]; return 0; };")
+    assert errores, "una declaración con '[...]' y sin contenedor no es válida"
+    assert "contenedor" in errores[0].message, errores[0].message
+
+
+def test_mas_push_que_espacios_se_ve_al_compilar():
+    assert_has_code(
+        _VECTOR +
+        "@impl Vector<T> { fn push(Vector<T> ptr mutable self, T x) -> void { } }\n"
+        "fn main() -> int {\n"
+        "    int Vector v[2];\n"
+        "    v.push(1);\n"
+        "    v.push(2);\n"
+        "    v.push(3);\n"
+        "    return 0;\n"
+        "};", "SEM033")
+
+
+def test_los_push_que_dependen_de_la_ejecucion_no_se_cuentan():
+    """Dentro de un bucle la cuenta no es decidible: afirmar que no cabe
+    rechazaría un programa correcto. Sigue fallando en ejecución."""
+    assert_ok(
+        _VECTOR +
+        "@impl Vector<T> { fn push(Vector<T> ptr mutable self, T x) -> void { } }\n"
+        "fn main() -> int {\n"
+        "    int Vector v[2];\n"
+        "    var int i = 0;\n"
+        "    while (i < 10) { v.push(i); i = i + 1; };\n"
+        "    return 0;\n"
+        "};")

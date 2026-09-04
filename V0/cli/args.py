@@ -29,6 +29,46 @@ def _version() -> str:
     return VERSION
 
 
+#: A quién pertenece cada bandera. La regla, y no es cosmética:
+#:
+#:   COMPILADOR  hace falta para COMPILAR o para leer lo que la compilación
+#:               produjo (un artefacto de una fase, un diagnóstico). Sin
+#:               ella el compilador haría menos.
+#:   SURINIX     es una comodidad ALREDEDOR de compilar: preparar el
+#:               proyecto, medir, contar lo que pasó. Sin ella el compilador
+#:               hace exactamente lo mismo.
+#:
+#: Existe para que la separación se pueda ejecutar: el día que ``surinix/``
+#: sea su propio paquete, esta tabla dice qué se lleva y qué se queda — y
+#: mientras tanto impide que una bandera nueva entre sin decidirlo (lo
+#: comprueba ``test/unit/test_frontera_tooling.py``).
+DUENO = {
+    # --- del COMPILADOR: la compilación y sus artefactos ---
+    "source": "compilador",
+    "--run": "compilador",          # ejecutar es un target, no una comodidad
+    "--stdin": "compilador",        # de dónde viene el fuente
+    "--emit-hir": "compilador",
+    "--hir-pretty": "compilador",
+    "--hir-text": "compilador",
+    "--emit-ast-json": "compilador",
+    "--emit-tokens": "compilador",
+    "--emit-stage": "compilador",
+    "--dump-symbols-table": "compilador",
+    "--emit-diagnostics": "compilador",   # el canal del editor: son SUS errores
+    "--emit-lang-info": "compilador",     # la especificación del lenguaje
+    "--emit-extensions": "compilador",    # el vocabulario que el proyecto añade
+    "--trace-exec": "compilador",         # traza del intérprete: es su ejecución
+    "--trace-memory": "compilador",
+
+    # --- de SURINIX: alrededor de compilar ---
+    "--version": "surinix",
+    "--check": "surinix",           # dependencias de la MÁQUINA, no del programa
+    "--init-config": "surinix",     # preparar el proyecto
+    "--time": "surinix",            # medir
+    "--debug": "surinix",           # contar lo que pasó, en un informe
+}
+
+
 def build_parser() -> argparse.ArgumentParser:
     """El parser de argumentos del compilador."""
     parser = argparse.ArgumentParser(
@@ -143,4 +183,4 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-__all__ = ["build_parser"]
+__all__ = ["DUENO", "build_parser"]

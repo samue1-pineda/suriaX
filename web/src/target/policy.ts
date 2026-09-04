@@ -118,16 +118,28 @@ const IO_UNITS: readonly TrustedUnit[] = [
 /**
  * **Perfil del target web v1.**
  *
- * Cero capacidades habilitadas y una sola librería ejecutable (`IO`). Toda
- * otra librería se rechaza aunque el programa compile en el frontend y
- * aunque su `.phir` esté al lado: "no debe viajar" es una decisión del
- * target, no un accidente de empaquetado.
+ * Cero capacidades habilitadas, pero **cualquier librería puede importarse**.
+ *
+ * Antes solo `IO`, y no porque el target no pudiera traducir las demás: el
+ * lowering tiraba las unidades y bajaba solo la principal, así que ninguna
+ * librería tenía forma de llegar al WIR. Con la imagen entera bajando, una
+ * librería de funciones corrientes (`math`) se traduce como cualquier otro
+ * código.
+ *
+ * Lo que decide ahora es la CAPACIDAD, no la identidad de la unidad: una
+ * librería que usa punteros se rechaza por `WEB002` señalando la línea
+ * exacta, no por llamarse como se llama. Es un diagnóstico mejor y una regla
+ * más honesta — lo que el target no sabe hacer es lo que no puede ejecutar.
+ *
+ * `IO` sigue siendo **confiable**: su implementación la aporta el host
+ * (`__write__`), así que su cuerpo no se traduce ni se revisa. Es lo que le
+ * permite declarar `fn __print__(String ptr s)` sin violar `WEB002`.
  */
 export const WEB_V1_POLICY: Policy = {
   name: "web-v1",
   allowed: new Set<Capability>(),
   allowedUnits: new Set(IO_UNITS.map((u) => unitKey(u.alias))),
-  allowAllUnits: false,
+  allowAllUnits: true,
   trustedUnits: new Map(IO_UNITS.map((u) => [unitKey(u.alias), u])),
 };
 

@@ -107,6 +107,8 @@ arrastrar.
 .. _EXT025-def:
 .. _EXT026-def:
 .. _EXT027-def:
+.. _EXT028-def:
+.. _EXT029-def:
 
 .. table::
    :widths: auto
@@ -135,6 +137,12 @@ arrastrar.
                                                literales.
    ``EXT026``  ExtensionError                  Argumento desconocido en el decorador.
    ``EXT027``  ExtensionError                  Colisión con el vocabulario fijo del compilador.
+   ``EXT028``  ExtensionError                  Una firma PURA (``@signature``) pide lógica nativa.
+                                               Bajar a C++ está negado por defecto: se declara con
+                                               ``@signature_extends(..., cxx=True)``.
+   ``EXT029``  ExtensionError                  El contrato con C++ está incompleto: falta
+                                               ``cxx=True`` (el opt-in se escribe) o falta
+                                               ``logic``, el símbolo que ``logic_dir`` implementará.
    ==========  ==============================  ====================================================
 
 .. _lex-errores:
@@ -317,6 +325,10 @@ SEM — semántica
 .. _SEM027-def:
 .. _SEM028-def:
 .. _SEM029-def:
+.. _SEM030-def:
+.. _SEM031-def:
+.. _SEM032-def:
+.. _SEM033-def:
 
 
 .. table::
@@ -353,6 +365,13 @@ SEM — semántica
    ``SEM027``  TypeArityError                  Un genérico usado con un número de argumentos que no es el suyo.
    ``SEM028``  IncompleteStructLiteralError    Un literal de struct que deja campos sin valor.
    ``SEM029``  UnsupportedPayloadError         Una variante de ``enum`` que lleva un valor con destructor.
+   ``SEM030``  NonExhaustiveMatchError         **Aviso**: un ``match`` sobre un ``enum`` deja variantes sin cubrir.
+   ``SEM031``  NotIndexableError               ``x[i]`` sobre un primitivo, que nunca puede declarar ``__index__``.
+   ``SEM032``  ImplicitOwnershipCopyError      Ligar a otro nombre un valor con destructor sin ``move``.
+   ``SEM033``  ContainerOverflowError          Mas ``push`` seguidos que espacios reservados en la
+                                               declaracion (``int vec.Vector v[2];``). Solo cuando la
+                                               cuenta no depende de la ejecucion; el resto sigue
+                                               fallando en ejecucion.
    ==========  ==============================  ====================================================
 
 .. _hir-errores:
@@ -410,6 +429,8 @@ RT — ejecución
 .. _RT013-def:
 .. _RT014-def:
 .. _RT015-def:
+.. _RT016-def:
+.. _RT017-def:
 
 
 .. table::
@@ -433,6 +454,8 @@ RT — ejecución
    ``RT013``   IndexOutOfRangeError            Índice fuera de rango.
    ``RT014``   NotIndexableError               Indexación sobre algo que no la admite.
    ``RT015``   CorruptMemoryHandleError        El backend de memoria recibió un handle inválido.
+   ``RT016``   DivisionByZeroError             ``a / 0`` o ``a % 0``.
+   ``RT017``   MissingReturnError              Una función con tipo de retorno terminó sin devolver un valor.
    ==========  ==============================  ====================================================
 
 .. _web-errores:

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 
 import { decodeModule, loadModule } from "../../web/src/hir/decode.ts";
 import { encodeModule } from "../../web/src/hir/encode.ts";
-import { HookKind, SymbolKind, TypeKind, type Module } from "../../web/src/hir/schema.ts";
+import { HookKind, SymbolKind, TypeKind, formatType, type Module } from "../../web/src/hir/schema.ts";
 import { Writer as TestWriter, buildModule, fixture } from "./helpers.ts";
 
 /** Compara dos módulos ignorando la identidad de los objetos (Map incluido). */
@@ -146,4 +146,76 @@ test("un módulo vacío se re-escribe a lo mínimo", () => {
   }));
   assert.equal(module.schemaVersion, 2);
   assert.equal(module.items.length, 0);
+});
+
+test("dos instanciaciones de un generico no colapsan en la ida y vuelta", () => {
+  // El decodificador descartaba 'Type.args' (el tag 42 caía en 'skip') y
+  // 'typeKey' no los miraba, así que 'Vector<int>' y 'Vector<str>' eran el
+  // MISMO tipo: al re-emitir compartían entrada del pool y los dos parámetros
+  // acababan apuntando al primero. Ninguna prueba lo veía porque ningún
+  // fixture usa genéricos.
+  const vector = (arg: TypeKind) => (t: TestWriter) => {
+    t.uint32(1, TypeKind.NOMINAL);
+    t.string(2, "Vector");
+    t.message(5, (a) => a.uint32(1, arg));
+  };
+  const bytes = buildModule((w) => {
+    w.message(4, (d) => {
+      d.uint32(1, 1);
+      d.uint32(2, 1);
+      d.message(10, (fn) => {
+        fn.string(1, "f");
+        fn.uint32(7, 1);                                   // -> void
+        fn.message(2, (p) => { p.string(2, "a"); p.uint32(3, 6); });
+        fn.message(2, (p) => { p.string(2, "b"); p.uint32(3, 7); });
+      });
+    });
+  }, 2, [vector(TypeKind.INT), vector(TypeKind.STR)]);
+
+  const params = (module: Module) => {
+    const decl = module.items[0]!.node;
+    assert.equal(decl.case, "function");
+    return decl.case === "function" ? decl.fn.params : [];
+  };
+
+  const original = params(decodeModule(bytes));
+  assert.equal(formatType(original[0]!.type), "Vector<int>");
+  assert.equal(formatType(original[1]!.type), "Vector<str>");
+
+  const ida_y_vuelta = params(decodeModule(encodeModule(decodeModule(bytes))));
+  assert.equal(formatType(ida_y_vuelta[0]!.type), "Vector<int>");
+  assert.equal(formatType(ida_y_vuelta[1]!.type), "Vector<str>",
+               "las dos instanciaciones tienen que seguir siendo distintas");
+});
+
+test("un item de enum con PAYLOAD no se confunde con una constante", () => {
+  // El '.proto' declara 'payload_type_ids' y dice con todas las letras que
+  // sin ese campo un consumidor no puede saber si 'Numero' es un entero o un
+  // constructor. El lector lo tiraba (el tag 3 caía en 'skip'), así que
+  // 'Numero(int)' llegaba idéntico a 'ROJO' — el mismo error que se coló con
+  // 'Type.args'. Un backend que los traduzca igual emite un entero donde el
+  // programa guardaba un dato.
+  const bytes = buildModule((w) => {
+    w.message(4, (d) => {
+      d.uint32(1, 3);                                    // DECL_ENUM
+      d.message(12, (e) => {
+        e.string(1, "Dato");
+        e.message(2, (i) => i.string(1, "Vacio"));
+        e.message(2, (i) => { i.string(1, "Numero"); i.tag(3, 0).varint(3); });
+      });
+    });
+  });
+
+  const items = (module: Module) => {
+    const decl = module.items[0]!.node;
+    assert.equal(decl.case, "enum");
+    return decl.case === "enum" ? decl.enumDecl.items : [];
+  };
+
+  const original = items(decodeModule(bytes));
+  assert.deepEqual(original[0]!.payloadTypeIds, [], "un item sin datos");
+  assert.deepEqual(original[1]!.payloadTypeIds, [3], "…y uno que sí los lleva");
+
+  const vuelta = items(decodeModule(encodeModule(decodeModule(bytes))));
+  assert.deepEqual(vuelta.map((i) => i.payloadTypeIds), [[], [3]]);
 });

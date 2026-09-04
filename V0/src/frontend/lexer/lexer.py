@@ -108,7 +108,16 @@ class Lexer:
             # 3. dispatch por clase de caracter
             tok = self._dispatch(ch)
             if tok is not None:
-                self.tokens.append(tok)
+                # Dos literales de cadena ADYACENTES son uno solo (como en C,
+                # C++ y Python). Se funden aqui, en O(1) por token y sin
+                # relectura: entre dos tokens solo hubo espacios o comentarios,
+                # que el bucle ya se saltó, así que ser vecinos en la lista es
+                # exactamente ser adyacentes en el fuente.
+                if (tok.type is TokenType.STRING_LIT and self.tokens
+                        and self.tokens[-1].type is TokenType.STRING_LIT):
+                    self.tokens[-1] = strings.join_adjacent(self.tokens[-1], tok)
+                else:
+                    self.tokens.append(tok)
 
         eof_col = self.col
         self.tokens.append(Token(TokenType.EOF, "", None, self.ln, eof_col))

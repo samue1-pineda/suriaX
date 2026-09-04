@@ -16,6 +16,7 @@ import {
   WEB_V1_POLICY,
   withCapabilities,
   withUnits,
+  type Policy,
 } from "../../web/src/target/policy.ts";
 import { checkImage, checkModule } from "../../web/src/target/restrictions.ts";
 import {
@@ -67,8 +68,9 @@ test("IO viaja aunque use punteros: es una unidad confiable del host", () => {
   assert.ok(asLibrary.ok);
 });
 
-test("una librería fuera de la allowlist se rechaza con su posición", () => {
-  const bytes = buildModule((w) => {
+/** Módulo que importa una librería llamada 'MATH' y la referencia. */
+function importaMath() {
+  return buildModule((w) => {
     w.message(4, (d) => {
       d.uint32(1, 1);
       d.uint32(2, 1);
@@ -83,7 +85,13 @@ test("una librería fuera de la allowlist se rechaza con su posición", () => {
       lib.string(2, "MATH.phir");
     });
   });
-  const report = checkModule(loadModule(bytes), WEB_V1_POLICY);
+}
+
+test("una librería fuera de la allowlist se rechaza con su posición", () => {
+  // La allowlist sigue existiendo y una política PUEDE usarla; lo que cambió
+  // es que el perfil v1 ya no la usa (ver el test siguiente).
+  const soloIO: Policy = { ...WEB_V1_POLICY, allowAllUnits: false };
+  const report = checkModule(loadModule(importaMath()), soloIO);
   assert.ok(!report.ok);
   assert.ok(codes(report).includes(WebCode.LIBRARY_DENIED));
   assert.ok(report.deniedUnits.includes("MATH"));
@@ -92,6 +100,17 @@ test("una librería fuera de la allowlist se rechaza con su posición", () => {
   // la referencia de 'Module.libraries' también se revisa (import transitivo).
   assert.equal(report.diagnostics.length, 2);
   assert.ok(report.diagnostics.some((d) => d.line === 1 && d.column === 1));
+});
+
+test("el perfil v1 no rechaza una librería por su nombre", () => {
+  // Antes solo 'IO' podía importarse, y no porque el target no supiera
+  // traducir las demás: el lowering tiraba las unidades antes de llegar al
+  // WIR. Ahora decide la CAPACIDAD — una librería que usa punteros se rechaza
+  // por WEB002 señalando la línea, no por llamarse como se llama.
+  const report = checkModule(loadModule(importaMath()), WEB_V1_POLICY);
+  assert.deepEqual(report.deniedUnits, []);
+  assert.ok(!codes(report).includes(WebCode.LIBRARY_DENIED));
+  assert.ok(report.ok);
 });
 
 test("la librería permitida se reconoce por unidad resuelta, no por lo escrito", () => {
@@ -271,11 +290,13 @@ test("withUnits añade una librería sin tocar el perfil base", () => {
     });
   });
   const module = loadModule(bytes);
-  assert.ok(!checkModule(module, WEB_V1_POLICY).ok);
-  const conMath = withUnits(WEB_V1_POLICY, [{ alias: "MATH", hostPrimitives: [] }]);
+  // sobre una política CON allowlist: 'MATH' no está y se rechaza...
+  const soloIO: Policy = { ...WEB_V1_POLICY, allowAllUnits: false };
+  assert.ok(!checkModule(module, soloIO).ok);
+  const conMath = withUnits(soloIO, [{ alias: "MATH", hostPrimitives: [] }]);
   assert.ok(checkModule(module, conMath).ok);
   // el perfil base no se mutó
-  assert.ok(!checkModule(module, WEB_V1_POLICY).ok);
+  assert.ok(!checkModule(module, soloIO).ok);
 });
 
 test("el mismo diagnóstico no se repite en la misma posición", () => {

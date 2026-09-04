@@ -126,11 +126,56 @@ class CorruptMemoryHandleError(SuriaXRuntimeError):
     severity = "panic"
 
 
+class DivisionByZeroError(SuriaXRuntimeError):
+    """``a / 0`` o ``a % 0``.
+
+    Existe porque el fallo salia como un ``ZeroDivisionError`` de Python: un
+    traceback del intérprete en vez de un diagnóstico del lenguaje, sin
+    posición y sin decirle al usuario que su programa dividió por cero. Un
+    error del programa se reporta como tal; un traceback es un fallo del
+    compilador, y confundirlos hace imposible saber cuál de los dos pasó.
+    """
+    code = "RT016"
+
+
+class MissingReturnError(SuriaXRuntimeError):
+    """Una función con tipo de retorno terminó SIN devolver nada.
+
+    Antes devolvía ``null`` en silencio: un ``fn f() -> int`` entregaba un
+    valor que no es un ``int`` a un lenguaje que no tiene coerciones
+    implícitas ni inferencia, y el error aparecía como un ``null`` impreso a
+    tres funciones de distancia.
+
+    Es de EJECUCIÓN y no de compilación a propósito: decidir estáticamente si
+    todos los caminos devuelven exige tratar los bucles que no terminan como
+    divergentes, y sin eso un ``while`` infinito legítimo se rechazaría. El
+    contrato de cero falsos positivos manda; aquí el fallo se reporta donde
+    ocurre, con su posición.
+    """
+    code = "RT017"
+
+
+class ExternBoundaryError(SuriaXRuntimeError):
+    """Un valor no puede cruzar la frontera de ``#extern``.
+
+    No todo lo que existe en suriaX tiene una representación de máquina que
+    C++ pueda leer: un bloque de ``str`` es una lista de objetos, no un
+    buffer contiguo. Decirlo con el porqué es la diferencia entre un
+    diagnóstico y un volcado de pila de Python.
+
+    Es de EJECUCIÓN porque el tipo del prototipo sí es válido —``str ptr``
+    existe— y lo que falla es el CONTENIDO del bloque, que solo se conoce al
+    llamar.
+    """
+    code = "RT018"
+
+
 __all__ = [
     "SuriaXRuntimeError", "UseAfterMoveError", "DoubleMoveError",
     "UseAfterFreeError", "NullDereferenceError", "InvalidFreeError",
     "UndefinedNameError", "NotCallableError", "MissingIntrinsicError",
     "MissingEntryError", "StepLimitError", "UnsupportedNodeError",
     "InvalidCastRuntimeError", "IndexOutOfRangeError", "NotIndexableError",
-    "CorruptMemoryHandleError",
+    "CorruptMemoryHandleError", "DivisionByZeroError",
+    "MissingReturnError", "ExternBoundaryError",
 ]

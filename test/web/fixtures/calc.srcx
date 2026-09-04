@@ -1,0 +1,44 @@
+/- Fuente del fixture del CODEGEN (calc.phir).
+
+ Cubre exactamente el subconjunto que el codegen v1 traduce:
+   - creación de variables (con y sin inicializador, con sombreado en bloque)
+   - aritmética entera y de punto flotante, y comparaciones
+   - llamadas a funciones del propio módulo, anidadas y con argumentos
+   - sentencias de nivel de módulo (van a __module_init)
+   - impresión de literales por la única librería permitida en el web
+
+ Se regenera con:  python V0/main.py calc.srcx --emit-hir
+-/
+
+#from io #import stdp
+
+fn suma(int a, int b) -> int {
+    return a + b;
+}
+
+fn doble(int x) -> int {
+    return suma(x, x);
+}
+
+fn area(float base, float altura) -> float {
+    return base * altura / 2.0;
+}
+
+fn mayor(int a, int b) -> bool {
+    return a > b;
+}
+
+fn negativo(int x) -> int {
+    return -x;
+}
+
+fn main() -> int {
+    var int a = 20;
+    var int b = 22;
+    var int total = suma(a, b);
+    total = total + doble(1);
+    var int cociente = total / 4;
+    return total + cociente;
+}
+
+stdp.println("suriaX en WebAssembly");

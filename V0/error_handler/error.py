@@ -24,6 +24,25 @@ class Severity:
     #: orden para comparar/ordenar por gravedad.
     ORDER = {"note": 0, "warning": 1, "critical": 2, "panic": 3}
 
+    #: a partir de aqui un diagnostico DETIENE la compilacion.
+    BLOCKING = ORDER["critical"]
+
+
+def blocks(diagnostics) -> bool:
+    """¿Alguno de estos diagnosticos detiene la compilacion?
+
+    Es el UNICO sitio que decide que "detiene". Existe porque la escala de
+    severidad prometia desde el principio que un WARNING deja continuar y el
+    pipeline no lo cumplia: cualquier diagnostico acumulado ponia el codigo
+    de salida en error y el HIR no se emitia. Con eso, declarar algo como
+    aviso no servia de nada — y por eso no habia ni uno.
+    """
+    return any(
+        Severity.ORDER.get(getattr(d, "severity", Severity.CRITICAL),
+                           Severity.BLOCKING) >= Severity.BLOCKING
+        for d in diagnostics
+    )
+
 
 class SourceLocation:
     """Representa la ubicación de un problema en el código fuente.

@@ -29,11 +29,24 @@ import {
   type WirModule,
   type WirStmt,
 } from "../wir/wir.ts";
+import { FORMAT_RUNTIME } from "./runtime.ts";
 
 /** Identificador JS seguro a partir de un nombre de suriaX. */
 function jsName(name: string): string {
   const clean = name.replace(/[^A-Za-z0-9_$]/g, "_");
   return /^[0-9]/.test(clean) ? `_${clean}` : clean;
+}
+
+/**
+ * Nombre JS de una función, desambiguado por su índice — igual que un local.
+ *
+ * El WIR ya cualifica las funciones de librería (`math.basic.add`), pero
+ * `jsName` colapsa los puntos a `_`, así que dos nombres distintos podrían
+ * sanearse al mismo. El índice es la identidad real de una función en el WIR
+ * y no depende de que esa colisión no ocurra nunca.
+ */
+function funcName(index: number, fn: WirFunc): string {
+  return `${jsName(fn.name)}$${index}`;
 }
 
 function localName(index: number, fn: WirFunc): string {
@@ -51,13 +64,35 @@ export function emitJs(module: WirModule): string {
     "// int de suriaX = 64 bits: BigInt con envoltura explícita, como en WASM.",
     "",
     "const wrap = (v) => BigInt.asIntN(64, v);",
+    // 'i64.trunc_sat_f64_s' de WASM, en JS: trunca hacia cero y satura en los
+    // extremos del rango de i64. Sin la saturación, 'BigInt(Infinity)' lanza y
+    // el programa moriría donde el WASM habría seguido con INT64_MAX.
+    "const __I64_MIN = -(2n ** 63n), __I64_MAX = 2n ** 63n - 1n;",
+    "const __truncSat = (v) => {",
+    "  if (Number.isNaN(v)) return 0n;",
+    "  const t = Math.trunc(v);",
+    "  if (t <= -(2 ** 63)) return __I64_MIN;",
+    "  if (t >= 2 ** 63) return __I64_MAX;",
+    "  return BigInt(t);",
+    "};",
     "const __io = { write: (text) => console.log(text) };",
+    // Las globales del módulo: en JS son variables de módulo, que es
+    // exactamente lo que son en WASM. 'const' se emite como 'let' igual: el
+    // que impide reasignarlas es el compilador, y ya lo hizo.
+    ...module.globals.map(
+      (g) => `let ${jsName(g.name)} = ${g.type === WirType.I64 || g.type === WirType.I32
+        ? (g.type === WirType.I64 ? `${g.init}n` : String(g.init))
+        : String(g.init)};`),
+    // La tabla de cadenas constantes: 'str' es un índice en ella.
+    `const __strings = ${JSON.stringify(module.strings.map((s) => s.text))};`,
+    "const __fmtStr = (i) => __strings[Number(i)] ?? \"\";",
+    FORMAT_RUNTIME,
     "",
   ];
 
-  for (const fn of module.funcs) {
-    lines.push(emitFunction(fn, module), "");
-  }
+  module.funcs.forEach((fn, i) => {
+    lines.push(emitFunction(fn, module, i), "");
+  });
 
   const main = module.entry === null ? null : module.funcs[module.entry] ?? null;
   const init = module.init === null ? null : module.funcs[module.init] ?? null;
@@ -70,19 +105,38 @@ export function emitJs(module: WirModule): string {
     "export function run(io = {}) {",
     "  __io.write = io.write ?? ((text) => console.log(text));",
   );
-  if (init !== null) lines.push(`  ${jsName(init.name)}();`);
+  if (init !== null) lines.push(`  ${funcName(module.init!, init)}();`);
   lines.push(
-    main === null ? "  return undefined;" : `  return ${jsName(main.name)}();`,
+    main === null
+      ? "  return undefined;"
+      : `  return ${funcName(module.entry!, main)}();`,
     "}",
     "",
     "export default run;",
   );
+
+  // Las funciones del programa se exportan por su nombre, igual que hace el
+  // WASM: los dos backends salen del MISMO WIR y exponer lo mismo es lo que
+  // permite compararlos función a función. El nombre interno lleva el índice
+  // (dos unidades pueden declarar 'max'); el export usa el nombre saneado, y
+  // si dos se sanean igual gana el primero — no se exporta un nombre
+  // ambiguo, se omite.
+  const exported = new Map<string, string>();
+  module.funcs.forEach((fn, i) => {
+    const name = jsName(fn.name);
+    if (!exported.has(name)) exported.set(name, funcName(i, fn));
+  });
+  if (exported.size > 0) {
+    const items = [...exported].map(([name, internal]) =>
+      name === internal ? name : `${internal} as ${name}`);
+    lines.push("", `export { ${items.join(", ")} };`);
+  }
   return lines.join("\n") + "\n";
 }
 
-function emitFunction(fn: WirFunc, module: WirModule): string {
+function emitFunction(fn: WirFunc, module: WirModule, index: number): string {
   const params = fn.params.map((_, i) => localName(i, fn)).join(", ");
-  const lines = [`function ${jsName(fn.name)}(${params}) {`];
+  const lines = [`function ${funcName(index, fn)}(${params}) {`];
   for (let i = 0; i < fn.locals.length; i++) {
     const index = fn.params.length + i;
     const local = fn.locals[i]!;
@@ -117,6 +171,10 @@ function emitStmt(
   switch (stmt.kind) {
     case "local.set":
       out.push(`${pad}${localName(stmt.index, fn)} = ${emitExpr(stmt.value, fn, module)};`);
+      return;
+    case "global.set":
+      out.push(`${pad}${jsName(module.globals[stmt.index]?.name ?? String(stmt.index))}` +
+               ` = ${emitExpr(stmt.value, fn, module)};`);
       return;
     case "drop":
       out.push(`${pad}${emitExpr(stmt.value, fn, module)};`);
@@ -199,14 +257,33 @@ function emitExpr(expr: WirExpr, fn: WirFunc, module: WirModule): string {
     case "call": {
       const target = module.funcs[expr.func];
       const args = expr.args.map((a) => emitExpr(a, fn, module)).join(", ");
+      if (target !== undefined) {
+        return `${funcName(expr.func, target)}(${args})`;
+      }
       return `${jsName(target?.name ?? "desconocida")}(${args})`;
     }
 
     case "call.host": {
-      // el único host hoy es __write__(ptr, len): en JS no hay memoria lineal,
-      // así que la cadena se resuelve en tiempo de generación.
-      const text = hostText(expr, module);
-      return `__io.write(${JSON.stringify(text)})`;
+      const primitive = module.imports[expr.host];
+      // '__write__(ptr, len)': en JS no hay memoria lineal, así que la cadena
+      // se resuelve en tiempo de GENERACIÓN mirando el data segment. Es el
+      // camino de todo texto constante, y el más barato de los dos.
+      if (primitive === undefined || primitive.name === "__write__") {
+        return `__io.write(${JSON.stringify(hostText(expr, module))})`;
+      }
+      // ...y las demás escriben un VALOR, formateado por el runtime del host.
+      const value = emitExpr(expr.args[0]!, fn, module);
+      const format = HOST_FORMATTERS.get(primitive.name);
+      if (format === undefined) {
+        throw new Error(`primitiva del host sin traducción a JS: ${primitive.name}`);
+      }
+      return `__io.write(${format}(${value}))`;
+    }
+
+    case "seq": {
+      // el valor es el de la última; en JS, el operador coma.
+      const parts = expr.exprs.map((e) => emitExpr(e, fn, module));
+      return parts.length === 1 ? parts[0]! : `(${parts.join(", ")})`;
     }
 
     case "logical": {
@@ -219,12 +296,49 @@ function emitExpr(expr: WirExpr, fn: WirFunc, module: WirModule): string {
         : `(${left} !== 0 ? 1 : (${right} !== 0 ? 1 : 0))`;
     }
 
+    case "global.get":
+      return jsName(module.globals[expr.index]?.name ?? `global${expr.index}`);
+
+    case "convert": {
+      // Las mismas reglas que emite WASM, porque los dos backends tienen que
+      // dar el MISMO resultado (este es el oráculo del otro):
+      //   int -> float   BigInt a Number
+      //   float -> int   trunca hacia cero y SATURA (i64.trunc_sat_f64_s):
+      //                  ni NaN ni un infinito pueden abortar el programa
+      //   int <-> char/bool   los anchos de la máquina de pila (i64 <-> i32)
+      const valor = emitExpr(expr.value, fn, module);
+      if (expr.from === WirType.I64 && expr.type === WirType.F64) {
+        return `Number(${valor})`;
+      }
+      if (expr.from === WirType.F64 && expr.type === WirType.I64) {
+        return `__truncSat(${valor})`;
+      }
+      if (expr.from === WirType.I64 && expr.type === WirType.I32) {
+        return `Number(BigInt.asIntN(32, ${valor}))`;
+      }
+      if (expr.from === WirType.I32 && expr.type === WirType.I64) {
+        return `BigInt(${valor})`;
+      }
+      return valor;   // mismo tipo: el lowering ya no debería pedirla
+    }
+
     default:
       throw new Error(
         `expresión del WIR sin traducción a JS: ${(expr satisfies never as { kind: string }).kind}`,
       );
   }
 }
+
+/** Primitiva del host -> formateador del runtime que la implementa. */
+const HOST_FORMATTERS: ReadonlyMap<string, string> = new Map([
+  ["__write_int__", "__fmtInt"],
+  ["__write_float__", "__fmtFloat"],
+  ["__write_bool__", "__fmtBool"],
+  ["__write_char__", "__fmtChar"],
+  // una cadena viaja como el índice de su constante; el formateador la busca
+  // en la tabla que este mismo módulo emite.
+  ["__write_str__", "__fmtStr"],
+]);
 
 /**
  * Recupera el texto de un `__write__(offset, len)` mirando el data segment.
@@ -298,6 +412,12 @@ export function emitHostModule(module: WirModule, wasm: Uint8Array): string {
 const WASM_BASE64 =
   "${toBase64(wasm)}";
 
+// Las cadenas CONSTANTES del programa, en el orden en que el módulo las
+// numera: una cadena guardada en una variable viaja como su índice aquí.
+const STRINGS = ${JSON.stringify(module.strings.map((s) => s.text))};
+
+${FORMAT_RUNTIME}
+
 function decodeBase64(text) {
   const table = new Uint8Array(128);
   const alphabet = "${B64}";
@@ -332,6 +452,17 @@ export async function instantiate(io = {}) {
         const view = new Uint8Array(memory.buffer, ptr, len);
         write(decoder.decode(view));
       },
+      // ...y las primitivas que escriben un VALOR: el host las formatea, con
+      // el MISMO runtime que usa el backend JS puro (web/src/codegen/runtime.ts).
+      __write_int__(v) { write(__fmtInt(v)); },
+      __write_float__(v) { write(__fmtFloat(v)); },
+      __write_bool__(v) { write(__fmtBool(v)); },
+      __write_char__(v) { write(__fmtChar(v)); },
+      // Una cadena en una VARIABLE viaja como el índice de su constante: el
+      // host tiene la tabla, así que escribirla es mirarla. (Los literales
+      // siguen yendo por '__write__': ahí el offset y la longitud se conocen
+      // al compilar y no hace falta la tabla.)
+      __write_str__(i) { write(STRINGS[i] ?? ""); },
     },
   });
   memory = instance.exports.memory;

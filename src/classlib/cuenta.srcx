@@ -1,0 +1,61 @@
+/- classlib — una CLASE de OOP (sin la P), escrita solo con lo que ya hay.
+
+ No usa ninguna sintaxis nueva: lo que en otro lenguaje serian palabras
+ reservadas ('class', 'private', 'constructor', 'toString', 'finally') aqui
+ son piezas que el lenguaje ya tenia por otros motivos.
+
+   estado          -> los campos del struct
+   constructor     -> una fn que devuelve el valor ya VALIDO (y lanza si no)
+   metodos         -> un bloque '@impl' con receptor explicito
+   destructor      -> el hook '__free__'; corre solo, en toda salida del ambito
+   toString        -> el hook '__print__'
+   invariantes     -> 'throw' dentro del constructor y de los metodos
+
+ Lo que NO hay, y es deliberado: herencia y polimorfismo. Para variar el
+ comportamiento en ejecucion, un 'enum' y un 'match' (ver el 'match' de
+ 'src/aritmetica'), que se comprueba al compilar y no en una vtable.
+-/
+fn __write__(str s) -> void;
+
+// --- estado + encapsulacion ---------------------------------------------
+struct {
+    str nombre;      // "publico": se lee de fuera
+    int saldo;       // "privado" por convencion: solo los metodos lo tocan
+    int movimientos;
+} Cuenta;
+
+// --- "constructor": una fn que devuelve el valor ya valido ---------------
+fn abrir(str nombre, int inicial) -> Cuenta {
+    if (inicial < 0) { throw "no se abre una cuenta en negativo"; };
+    return Cuenta{ nombre: nombre, saldo: inicial, movimientos: 0 };
+}
+
+// --- metodos (receptor explicito) ---------------------------------------
+@impl Cuenta {
+    fn deposita(Cuenta ptr mutable self, int cuanto) -> void {
+        if (cuanto <= 0) { throw "un deposito es positivo"; };
+        self.saldo = self.saldo + cuanto;
+        self.movimientos = self.movimientos + 1;
+    }
+    fn retira(Cuenta ptr mutable self, int cuanto) -> int {
+        if (cuanto > self.saldo) { throw "fondos insuficientes"; };
+        self.saldo = self.saldo - cuanto;
+        self.movimientos = self.movimientos + 1;
+        return cuanto;
+    }
+    fn saldo(Cuenta ptr self) -> int { return self.saldo; }
+}
+
+// --- "destructor" y "toString" como hooks del lenguaje -------------------
+hook fn __free__(Cuenta ptr c) -> void { __write__(f"[cierre de {c.nombre}]\n"); }
+hook fn __print__(Cuenta ptr c) -> void { __write__(f"{c.nombre}: {c.saldo}\n"); }
+
+fn main() -> int {
+    var Cuenta a = abrir("ahorro", 100);
+    a.deposita(50);
+    var int saco = a.retira(30);
+    print(a);
+    __write__(f"saque {saco}, {a.movimientos} movimientos\n");
+    try { a.retira(9999); } catch (str e) { __write__(f"error: {e}\n"); };
+    return a.saldo();
+};

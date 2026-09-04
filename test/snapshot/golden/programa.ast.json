@@ -194,7 +194,8 @@
               "mut": false,
               "args": []
             },
-            "visibility": null
+            "visibility": null,
+            "capacity": null
           },
           {
             "__node__": "ReturnStmt",
@@ -262,6 +263,7 @@
         "mut": false,
         "args": []
       },
+      "type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -442,7 +444,8 @@
                 "inner": null,
                 "mut": false,
                 "args": []
-              }
+              },
+              "nombre_de_item": null
             },
             "transfers": false
           }
@@ -464,6 +467,7 @@
         "mut": false,
         "args": []
       },
+      "type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -537,6 +541,7 @@
                   }
                 }
               ],
+              "type_args": [],
               "restype": {
                 "__node__": "Type",
                 "kind": "NULLABLE",
@@ -585,7 +590,8 @@
               "mut": false,
               "args": []
             },
-            "visibility": null
+            "visibility": null,
+            "capacity": null
           },
           {
             "__node__": "TryStmt",
@@ -649,6 +655,7 @@
                         }
                       }
                     ],
+                    "type_args": [],
                     "restype": {
                       "__node__": "Type",
                       "kind": "ERROR",
@@ -676,7 +683,8 @@
                     "mut": false,
                     "args": []
                   },
-                  "visibility": null
+                  "visibility": null,
+                  "capacity": null
                 }
               ],
               "drops": []
@@ -731,6 +739,7 @@
         "mut": false,
         "args": []
       },
+      "type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null

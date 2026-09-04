@@ -83,6 +83,45 @@ def test_fstring_interpolada_vs_plana():
     )
 
 
+def test_literales_adyacentes_forman_uno_solo():
+    """Como en C, C++ y Python: es la forma natural de partir un mensaje
+    largo en varias líneas. Antes había que escribir '+', lo que pagaba en
+    EJECUCIÓN algo que se sabe al leer el archivo."""
+    tokens, errores = lex('"parte uno, "\n"parte dos"')
+    assert not errores, [e.code for e in errores]
+    assert len(tokens) == 2, "dos literales pegados son UN token (+ EOF)"
+    assert tokens[0].type is TokenType.STRING_LIT
+    assert tokens[0].value.flat() == "parte uno, parte dos"
+    # el valor tiene la MISMA forma que si se hubiera escrito de una vez
+    assert len(tokens[0].value.parts) == 1
+
+
+def test_cada_literal_pegado_conserva_su_propia_regla():
+    """El caso dudoso: pegar f"" con "". El prefijo gobierna SU literal, no
+    la unión — si no, habría que mirar los vecinos para saber qué significa
+    un literal."""
+    tokens, _ = lex('f"vale {x} " "y {y} no"')
+    assert tokens[0].value.is_interpolated, "la parte f sigue interpolando"
+    # la parte plana viaja como texto, llaves incluidas
+    assert "{y} no" in tokens[0].value.flat()
+
+    tokens, _ = lex('"nada {x} " "aqui {y}"')
+    assert not tokens[0].value.is_interpolated, (
+        "dos cadenas planas pegadas siguen sin interpolar")
+
+
+def test_los_caracteres_no_se_concatenan():
+    """``'a' 'b'`` son CHAR_LIT, otro token: igual que en C, no se funden."""
+    tokens, _ = lex("'a' 'b'")
+    assert [t.type for t in tokens[:2]] == [TokenType.CHAR_LIT, TokenType.CHAR_LIT]
+
+
+def test_la_posicion_del_literal_fundido_es_la_del_primero():
+    """Un diagnóstico sobre el literal tiene que apuntar a donde empieza."""
+    tokens, _ = lex('   "uno"\n   "dos"')
+    assert (tokens[0].ln, tokens[0].col) == (1, 4), tokens[0]
+
+
 def test_escapes_en_cadenas():
     tokens, _ = lex(r'"a\nb\tc"')
     assert tokens[0].value.flat() == "a\nb\tc"

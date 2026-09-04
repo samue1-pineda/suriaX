@@ -19,6 +19,22 @@ Nominal
    distintos. Un ``struct { int x; int y; } Punto;`` y un
    ``struct { int x; int y; } Vector;`` no son intercambiables.
 
+   El nombre incluye **de qué unidad viene**: un tipo declarado en una
+   librería se identifica como ``<alias>.<Nombre>``. Dos librerías que
+   declaren cada una un ``Node`` declaran dos tipos distintos, aunque dentro
+   de cada una se siga escribiendo ``Node`` a secas::
+
+      #import a
+      #import b
+      var a.Node n = b.haz();   // error: 'a.Node' no admite un 'b.Node'
+
+   Esto vale también para lo que se indexa POR tipo —hooks, conversiones
+   (``__cast__``), dunders y el filtro de ``catch``—, así que el ``__free__``
+   que corre sobre un valor es siempre el de su librería. Los mensajes de
+   error, en cambio, nombran el tipo como se puede escribir desde donde está
+   el error (``dt.float32``, no el canónico), porque una sugerencia que no se
+   puede teclear no ayuda.
+
 .. _tipos-primitivos:
 
 Tipos primitivos
@@ -30,13 +46,47 @@ Tipos primitivos
    =========  ==========================================================
    Tipo       Descripción
    =========  ==========================================================
-   ``int``    Entero con signo de 64 bits.
+   ``int``    Entero con signo de 64 bits (envuelve al desbordar).
    ``float``  Punto flotante de 64 bits (IEEE-754).
    ``bool``   ``true`` o ``false``.
    ``char``   Un único *code point* Unicode.
    ``str``    Cadena de texto Unicode.
    ``void``   Ausencia de valor; solo como tipo de retorno.
    =========  ==========================================================
+
+No hay veracidad
+~~~~~~~~~~~~~~~~
+
+La condición de un ``if`` o un ``while`` es de tipo ``bool``, y solo ``bool``.
+Un ``int`` no es "verdadero por no ser cero" ni una cadena "verdadera por no
+estar vacía": aceptar ``if (1)`` sería una conversión implícita, y la única
+vía de conversión del lenguaje es ``cast<T>(x)``.
+
+.. code-block:: srcx
+
+   if (n != 0) { ... }      // así
+   if (n) { ... }           // error: la condición es 'int'
+
+Aritmética entera
+~~~~~~~~~~~~~~~~~
+
+La división y el resto **truncan hacia cero**, como en C y como la
+instrucción ``i64.div_s`` de WebAssembly: ``-7 / 2`` es ``-3`` (no ``-4``) y
+``-7 % 2`` es ``-1`` (no ``1``). Las dos convenciones van juntas a propósito,
+porque se sostienen mutuamente: con ellas se cumple la identidad
+
+.. code-block:: text
+
+   (a / b) * b + a % b == a
+
+Mezclarlas —cociente hacia abajo y resto con el signo del dividendo— la rompe.
+La regla vale para **todos los ejecutores**: intérprete, target web y backend
+nativo dan el mismo número para el mismo programa.
+
+Dividir por cero **entre enteros** no tiene respuesta: es un error de
+ejecución (``RT016``). Entre ``float`` sí la tiene y es la de IEEE-754
+(``1.0 / 0.0`` es ``+inf``, ``0.0 / 0.0`` es ``NaN``), así que ahí no hay
+error que reportar.
 
 .. code-block:: srcx
 

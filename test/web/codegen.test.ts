@@ -30,6 +30,8 @@ import {
   functionDecl,
   identifier,
   intLiteral,
+  TYPE_EXTRA,
+  TYPE_INT,
   TYPE_STR,
   TYPE_VOID,
 } from "./helpers.ts";
@@ -306,6 +308,34 @@ test("una condición que no es bool se rechaza en vez de emitir un módulo invá
 });
 
 test("un tipo que el WIR no representa da WEB101", () => {
+  // Un NOMINAL que no es un enum: un 'struct' no cabe en el WIR (no hay
+  // memoria donde ponerlo). 'str' sí cabe desde el codegen v2 —viaja como el
+  // índice de su constante—, así que ya no sirve como ejemplo de lo que falta.
+  const bytes = buildModule(
+    (w) => {
+      w.message(4, (d) => {
+        d.uint32(1, 3);
+        d.message(10, (fn) => {
+          fn.string(1, "f");
+          fn.message(2, (param) => {
+            param.uint32(3, TYPE_EXTRA);
+            param.string(2, "p");
+          });
+          fn.uint32(7, TYPE_VOID);                   // -> void
+          fn.message(4, () => {});
+        });
+      });
+    },
+    2,
+    [(t) => { t.uint32(1, 9); t.string(2, "Punto"); }],   // NOMINAL 'Punto'
+  );
+  const { module, diagnostics } = lowerModule(loadModule(bytes));
+  assert.equal(module, null);
+  assert.deepEqual(diagnostics.map((d) => d.code), [WebCode.CODEGEN_TYPE]);
+  assert.match(diagnostics[0]!.message, /Punto/);
+});
+
+test("un parámetro 'str' SÍ se traduce: es el índice de su constante", () => {
   const bytes = buildModule((w) => {
     w.message(4, (d) => {
       d.uint32(1, 3);
@@ -315,15 +345,14 @@ test("un tipo que el WIR no representa da WEB101", () => {
           param.uint32(3, TYPE_STR);
           param.string(2, "s");
         });
-        fn.uint32(7, TYPE_VOID);                   // -> void
+        fn.uint32(7, TYPE_VOID);
         fn.message(4, () => {});
       });
     });
   });
   const { module, diagnostics } = lowerModule(loadModule(bytes));
-  assert.equal(module, null);
-  assert.deepEqual(diagnostics.map((d) => d.code), [WebCode.CODEGEN_TYPE]);
-  assert.match(diagnostics[0]!.message, /str/);
+  assert.deepEqual(diagnostics, []);
+  assert.equal(module?.funcs[0]?.params[0]?.type, 1);   // WirType.I32
 });
 
 test("imprimir algo que no es un literal da WEB102, no código inventado", () => {
@@ -386,4 +415,48 @@ test("generate() sobre un módulo suelto produce los cuatro artefactos", () => {
   assert.equal(emitJs(result.wir), result.js);
   assert.equal(emitWat(result.wir), result.wat);
   assert.equal(emitHostModule(result.wir, result.wasm), result.host);
+});
+
+test("una variable le gana al import que se llama igual", () => {
+  // 'var int stdp = 3; stdp.println("?")' no es una llamada al módulo: es un
+  // acceso a miembro sobre un entero, y el intérprete lo rechaza con RT011.
+  // El web resolvía el módulo igual y ejecutaba el println, así que el mismo
+  // programa hacía cosas distintas según quién lo corriera.
+  const bytes = buildModule((w) => {
+    w.message(4, functionDecl("main", [
+      // var int stdp = 3;
+      (s: Writer) => {
+        s.uint32(1, 2);
+        s.message(11, (v) => {
+          v.string(3, "stdp");            // name
+          v.message(4, intLiteral(3, 2, 18));  // value
+          v.uint32(5, TYPE_INT);          // type_id
+        });
+      },
+      // stdp.println("x");
+      (s: Writer) => {
+        s.uint32(1, 3);
+        s.message(21, (st) => st.message(1, (e) => {
+          e.uint32(1, 3);
+          e.message(17, (call) => {
+            call.message(1, (callee) => {
+              callee.message(19, (m) => {
+                m.message(1, identifier("stdp", 3, 5));
+                m.string(2, "println");
+              });
+            });
+            call.message(2, (a) => {
+              a.uint32(1, 3);
+              a.message(10, (lit) => { lit.string(1, "str"); lit.string(3, "x"); });
+            });
+          });
+        }));
+      },
+    ]));
+  });
+  const { module, diagnostics } = lowerModule(loadModule(bytes));
+  assert.equal(module, null);
+  const sombra = diagnostics.find((d) => /no un módulo/.test(d.message));
+  assert.ok(sombra, diagnostics.map((d) => `${d.code} ${d.message}`).join("\n"));
+  assert.equal(sombra.code, WebCode.CODEGEN_UNSUPPORTED);
 });

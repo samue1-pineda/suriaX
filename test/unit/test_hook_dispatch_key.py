@@ -23,7 +23,7 @@ for _p in (_REPO_ROOT, _V0):
         sys.path.insert(0, _p)
 
 from runtime.interpreter.hook.dispatch import (hook_key, index_hooks,  # noqa: E402
-                                               ref_key)
+                                               ref_key, type_key)
 from src.HIR.stubs import load_hir_pb2  # noqa: E402
 
 
@@ -150,3 +150,33 @@ def test_el_proyecto_no_viaja_en_el_hir():
     pb = _pb()
     campos = {f.name for f in pb.Module.DESCRIPTOR.fields}
     assert "extensions" not in campos and "project" not in campos
+
+
+# --------------------------------------------------------------------------- #
+# la clave de un TIPO: la que indexa las conversiones
+# --------------------------------------------------------------------------- #
+
+def test_dos_instanciaciones_de_un_generico_no_comparten_clave():
+    """Regresión: ``type_key`` ignoraba ``Type.args``, así que ``Vector<int>``
+    y ``Vector<str>`` producían la MISMA clave y compartían entrada en el
+    índice de conversiones — el genérico volvía a ser decorativo, esta vez en
+    runtime. Los argumentos participan de la identidad del tipo."""
+    pb = _pb()
+    def vector(arg_kind):
+        return pb.Type(kind=pb.NOMINAL, name="Vector",
+                       args=[pb.Type(kind=arg_kind)])
+
+    assert type_key(vector(pb.INT)) != type_key(vector(pb.STR))
+    # ...y el genérico sin argumentos sigue siendo otra cosa distinta
+    assert type_key(pb.Type(kind=pb.NOMINAL, name="Vector")) != \
+        type_key(vector(pb.INT))
+
+
+def test_la_clave_de_un_tipo_sin_genericos_no_cambio():
+    """Lo que ya funcionaba sigue distinguiéndose igual: la regla de punteros
+    es parte de la identidad del tipo."""
+    pb = _pb()
+    ptr = pb.Type(kind=pb.POINTER, inner=pb.Type(kind=pb.INT))
+    ptr_mut = pb.Type(kind=pb.POINTER, inner=pb.Type(kind=pb.INT), mut=True)
+    assert type_key(ptr) != type_key(ptr_mut)
+    assert type_key(None) is None

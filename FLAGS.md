@@ -55,7 +55,7 @@ sub-comandos y `--emit-lang-info` no lo necesitan).
 | `--emit-ast-json [ARCHIVO]` | `<fuente>.ast.json` — el AST-tipado anotado por la Semántica |
 | `--emit-hir [ARCHIVO]` | `<fuente>.phir` — el HIR serializado en protobuf (+ un `.phir` por librería importada). Requiere `protobuf` |
 | `--hir-text` | añade `<fuente>.phir.txt` — el **árbol crudo** del protobuf, para depurar el *formato* (qué tag lleva qué). Para leer el programa, `--hir-pretty` |
-| `--hir-pretty` | escribe `<fuente>.phir.pretty` — la vista **legible** del HIR: una línea por sentencia, expresiones con su tipo resuelto, hooks enlazados y la posición del fuente al margen. Es como se lee *lo que le llegó al intérprete*. Se escribe en streaming (para un programa de 175 k tokens: 306 ms y 1,3 MB, frente a 1,9 s y 20,6 MB del texto protobuf) |
+| `--hir-pretty` | escribe `<fuente>.phir.pretty` — la vista **legible** del HIR: una línea por sentencia, expresiones con su tipo resuelto, hooks enlazados, la **destrucción que inserta el compilador** (`drop`, `⟨transfiere⟩`, `⟨temporal …⟩`) y la posición del fuente al margen. Es como se lee *lo que le llegó al intérprete*. Se escribe en streaming (para un programa de 175 k tokens: 306 ms y 1,3 MB, frente a 1,9 s y 20,6 MB del texto protobuf) |
 | `--emit-stage FASE` | vuelca **una** fase del pipeline (`lexer`, `parser`, `ast`, `sem`, `hir`) a stdout, sin que el archivo traiga `#test`. Mismo contenido que la directiva; lo consume el visualizador de la extensión. Una fase desconocida lista las válidas y sale con 2 |
 | `--dump-symbols-table [ARCHIVO]` | `<fuente>.symbols.mmd` — la tabla de símbolos como diagrama de clases UML (Mermaid `classDiagram`): structs→clases con campos y métodos, enums→`<<enumeration>>`, campos nominales→asociaciones. Lo consume la web de `/documentation`. Solo librería estándar (sin protobuf) |
 
@@ -143,3 +143,22 @@ SURIAX_UPDATE_GOLDEN=1 python test/main.py snapshot   # regenerar golden
 ```
 
 Categorías: `unit`, `grammar`, `negative_tests`, `snapshot`, `e2e`, `fuzz`.
+
+---
+
+## `suriax-hir` — el lector de HIR en C++
+
+El backend nativo ([`backend/`](backend/README.md)). Se construye con
+`cmake --build build --target suriax-hir` y necesita protobuf para C++.
+
+| Bandera | Qué hace |
+|---|---|
+| *(ninguna)* | resumen de la unidad: símbolos, hooks e items. Idéntico al de `python runtime/interpreter/main.py <archivo>.phir` |
+| `--pretty` | la vista **legible**, byte-idéntica a la de `--hir-pretty` del compilador |
+| `--summary` | el resumen, explícito |
+| `--link` | liga las unidades referenciadas (transitivamente) y reporta los índices de hooks y conversiones |
+| `--verify` | recorre el árbol entero y falla si algún nodo llegó sin caso del `oneof` |
+| `--emit-cpp <archivo>` | escribe los bloques `#extern cpp` del programa como una unidad de traducción de C++, con `#line` al `.srcx`. Liga la imagen: recoge también los de las librerías |
+
+Que las dos vistas sean byte-idénticas a las de Python es lo que convierte
+`test/e2e/test_backend_cpp.py` en un diferencial entre consumidores.

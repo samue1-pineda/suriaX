@@ -73,7 +73,12 @@ def scan_directive(lx):
 
 
 def _peek_extern_cpp(src: str, n: int, pos: int) -> bool:
-    """¿Lo que sigue a ``#extern`` es ``cpp`` (con espacios) y luego ``{``?"""
+    """¿Lo que sigue a ``#extern`` es ``cpp``, su ``requires`` opcional y ``{``?
+
+    La clausula ``requires(...)`` va entre medias, asi que hay que saltarla
+    para decidir: sin eso el lexer no reconocia el bloque y acababa
+    tokenizando el C++ como si fuera suriaX.
+    """
     i = pos
     while i < n and src[i] in " \t":
         i += 1
@@ -82,7 +87,77 @@ def _peek_extern_cpp(src: str, n: int, pos: int) -> bool:
     i += 3
     while i < n and src[i] in " \t\r\n":
         i += 1
+    if src.startswith("requires", i):
+        j = i + len("requires")
+        while j < n and src[j] in " \t\r\n":
+            j += 1
+        if j < n and src[j] == "(":
+            cierre = src.find(")", j)
+            if cierre == -1:
+                return False
+            i = cierre + 1
+            while i < n and src[i] in " \t\r\n":
+                i += 1
     return i < n and src[i] == "{"
+
+
+def _scan_requires(lx, i: int) -> int:
+    """``requires("-lX11", "-I/opt/inc")`` tras ``cpp``: banderas de enlazado.
+
+    Se escanea AQUI, dentro del scanner del bloque crudo, y no con el bucle
+    general del lexer, porque este scanner se lleva el control hasta la ``}``
+    de cierre: dejar salir y volver a entrar habria partido en dos un token
+    que se captura de una pieza.
+
+    La lista es de literales de cadena y nada mas, asi que se extraen tal
+    cual y se emiten como STRING corrientes — el parser los lee con el cursor
+    normal. Devuelve la posicion tras el ``)``, o la de entrada si no habia
+    ``requires``.
+    """
+    src = lx.source
+    n = lx.length
+    j = i
+    while j < n and src[j] in " \t\r\n":
+        j += 1
+    if not src.startswith("requires", j):
+        return i
+    k = j + len("requires")
+    while k < n and src[k] in " \t\r\n":
+        k += 1
+    if k >= n or src[k] != "(":
+        return i          # 'requires' sin '(': no es la clausula, no se toca
+
+    lx.jump_to(j)
+    lx.tokens.append(Token(TokenType.IDENTIFIER, "requires", "requires",
+                           lx.ln, lx.col))
+    cierre = src.find(")", k)
+    if cierre == -1:
+        lx.jump_to(n)
+        raise lex_error.UnterminatedExternBlockError(
+            "'requires(' de un '#extern' sin cerrar",
+            line=lx.ln, column=lx.col, file=lx.file,
+        )
+    dentro = src[k + 1:cierre]
+    pos = 0
+    while True:
+        abre = -1
+        for comilla in ('"', "'"):
+            hallado = dentro.find(comilla, pos)
+            if hallado != -1 and (abre == -1 or hallado < abre):
+                abre = hallado
+                delim = comilla
+        if abre == -1:
+            break
+        fin = dentro.find(delim, abre + 1)
+        if fin == -1:
+            break
+        texto = dentro[abre + 1:fin]
+        lx.jump_to(k + 1 + abre)
+        lx.tokens.append(Token(TokenType.STRING_LIT, delim + texto + delim, texto,
+                               lx.ln, lx.col))
+        pos = fin + 1
+    lx.jump_to(cierre + 1)
+    return cierre + 1
 
 
 def _scan_extern_block(lx) -> None:
@@ -106,8 +181,11 @@ def _scan_extern_block(lx) -> None:
     cpp_tok = Token(TokenType.IDENTIFIER, "cpp", "cpp", lx.ln, cpp_col)
     lx.tokens.append(cpp_tok)
 
-    # ubicar la '{' de apertura
+    # requisitos NATIVOS de la unidad, si los declara
     i += 3  # saltar 'cpp'
+    i = _scan_requires(lx, i)
+
+    # ubicar la '{' de apertura
     while i < n and src[i] in " \t\r\n":
         i += 1
     lx.jump_to(i)            # actualiza ln/col hasta la '{'

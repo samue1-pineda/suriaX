@@ -6,10 +6,14 @@
 # paquetes del sistema (apt/pacman/brew) o desde llvm.org. Se lista aqui como
 # referencia de version; compilerconfig.py lo detecta via 'llvm-config'.
 
-#backend / IR 
-llvm-22            # toolchain LLVM 22 (instalar por el sistema, ver how_to_run.md)
-protobuf           # serializacion del HIR (frontend Python <-> backend C++)
-                   # requiere tambien 'protoc' (compilador .proto) por el sistema
+#backend / IR
+#   El HIR ya NO necesita protobuf ni protoc: se serializa a mano contra el
+#   propio hir.proto (V0/src/HIR/{schema,wire}.py). Ver PROTOBUF_BRIDGE.md
+#   secc. 2 — el motivo es que protoc y el runtime se instalan por vias
+#   distintas y tienen que ser compatibles entre si, cosa que nada garantiza.
+protobuf           # OPCIONAL: solo para la comprobacion cruzada del codec
+                   # (test_hir_reproducible); sin el, esa prueba se salta y
+                   # todo lo demas funciona igual
 
 # interoperabilidad C++
 pybind11           # bindings Python <-> C++
@@ -17,3 +21,7 @@ pybind11           # bindings Python <-> C++
 # config
 pyyaml             # formato de compilacion (.suriaX_config.yaml)
 
+# playground (playground/server.py)
+#   El servidor NO añade dependencias: usa 'http.server' de la biblioteca
+#   estandar. Necesita node 22+ en el sistema para el panel de WebAssembly
+#   — sin node ese panel lo dice, no se queda vacio.

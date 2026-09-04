@@ -4,10 +4,24 @@ Solo I/O de localización (``os.path.isfile``) — ni parseo ni semántica. Es
 la parte más caliente del linker (se ejecuta por cada ``#import``), así que
 todo aquí es O(1) en stats por candidato, sin listar directorios.
 
-**Rutas de búsqueda**, en orden: (1) el directorio del fuente que importa,
-(2) las rutas de ``libraries.libsrx_paths`` del ``.suriaX_config.yaml``,
-resueltas RELATIVAS A LA RAÍZ DEL PROYECTO (``config["_root"]``, el
-directorio del yaml) — nunca al CWD del proceso. Default: ``./lib``.
+**Rutas de búsqueda**, en orden:
+
+1. el directorio del fuente que importa;
+2. las rutas de ``libraries.libsrx_paths`` del ``.suriaX_config.yaml``,
+   resueltas RELATIVAS A LA RAÍZ DEL PROYECTO (``config["_root"]``, el
+   directorio del yaml) — nunca al CWD del proceso. Default: ``./lib``;
+3. la **librería estándar que trae el compilador**.
+
+El tercer escalón separa dos cosas que estaban mezcladas: las librerías que
+trae el COMPILADOR (``io``, ``mem``, ``array``…) y las que escribe el
+USUARIO. Sin él, ``io`` solo se encontraba si el proyecto tenía su propia
+copia de ``lib/`` al lado del fuente — así que un programa fuera del
+repositorio no compilaba aunque solo usara la stdlib, y cada prueba tenía que
+copiarse el árbol entero.
+
+Va el ÚLTIMO a propósito: una librería del usuario con el mismo nombre gana
+siempre. La stdlib es un respaldo, no una prioridad, y así un proyecto puede
+sustituir cualquier pieza sin tocar el compilador.
 
 **Archivo padre de un paquete**: una carpeta es un paquete si contiene
 ``main.libsrx`` (convención) o ``<carpeta>.libsrx`` (compatibilidad
@@ -30,6 +44,35 @@ from typing import List, Optional, Tuple
 # 'libraries.libsrx_paths' en config/yaml_config.py — el linker no importa
 # el paquete config/ para mantenerse independiente; main.py pasa la config).
 _DEFAULT_PATHS: Tuple[str, ...] = ("./lib",)
+
+#: Variable de entorno que fija dónde vive la stdlib. Existe para el día en
+#: que el compilador se instale fuera de su árbol de fuentes: entonces el
+#: cálculo de abajo deja de valer y esto es lo que lo dice.
+STDLIB_ENV = "SURIAX_STDLIB"
+
+
+def stdlib_path() -> Optional[str]:
+    """El ``lib/`` que trae el compilador, o ``None`` si no está.
+
+    Se deriva de la ubicación de ESTE archivo
+    (``<raiz>/V0/src/linker_p/resolver.py`` -> ``<raiz>/lib``) y no de la
+    configuración: la pregunta "¿dónde estoy instalado?" no es del proyecto
+    del usuario, es del compilador. Mezclarlas es lo que obligaba a que cada
+    proyecto declarara la stdlib en su yaml.
+
+    ``None`` en vez de una ruta inventada: si el árbol no está donde se
+    espera, es mejor que el diagnóstico de "no se encontró" liste las rutas
+    reales a que liste una que no existe.
+    """
+    desde_entorno = os.environ.get(STDLIB_ENV)
+    if desde_entorno:
+        ruta = os.path.abspath(os.path.expanduser(desde_entorno))
+        return ruta if os.path.isdir(ruta) else None
+    # <raiz>/V0/src/linker_p/resolver.py -> <raiz>
+    raiz = os.path.abspath(os.path.join(os.path.dirname(__file__),
+                                        "..", "..", ".."))
+    ruta = os.path.join(raiz, "lib")
+    return ruta if os.path.isdir(ruta) else None
 
 LIBSRX_EXT = ".libsrx"
 SRCX_EXT = ".srcx"
@@ -65,8 +108,13 @@ def _project_resolve(config: Optional[dict], path: str) -> str:
 
 
 def search_paths(source_path: Optional[str], config: Optional[dict]) -> List[str]:
-    """Rutas de búsqueda en orden: dir del fuente, luego la configuración
-    (resuelta contra la raíz del proyecto, nunca contra el CWD)."""
+    """Rutas de búsqueda, en orden: dir del fuente, la configuración del
+    proyecto (resuelta contra su raíz, nunca contra el CWD) y, al final, la
+    stdlib del compilador.
+
+    Sin duplicados: la stdlib no se repite si el proyecto ya la declaró, y
+    así el diagnóstico de "no se encontró" no lista dos veces la misma ruta.
+    """
     paths: List[str] = []
     if source_path:
         paths.append(os.path.dirname(os.path.abspath(source_path)))
@@ -75,7 +123,11 @@ def search_paths(source_path: Optional[str], config: Optional[dict]) -> List[str
         configured = (config.get("libraries") or {}).get("libsrx_paths")
     for p in configured if configured else _DEFAULT_PATHS:
         paths.append(_project_resolve(config, p))
-    return paths
+    stdlib = stdlib_path()
+    if stdlib is not None:
+        paths.append(stdlib)
+    vistas: set = set()
+    return [p for p in paths if not (p in vistas or vistas.add(p))]
 
 
 def _name_candidates(lib: str) -> Tuple[str, ...]:

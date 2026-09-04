@@ -22,6 +22,7 @@ from .symbol_table import Scope, ScopeKind, Symbol, SymbolTable
 class SemanticContext:
     __slots__ = (
         "table",
+        "unit",
         "scope",
         "current_fn",
         "errors",
@@ -39,8 +40,15 @@ class SemanticContext:
         *,
         source_path: Optional[str] = None,
         config: Optional[dict] = None,
+        unit: str = "",
     ) -> None:
         self.table = table
+        # UNIDAD que se está analizando: el alias de su '#export' ('' = el
+        # programa principal). Es lo que hace ÚNICA la identidad de un tipo:
+        # un 'Node' declarado aquí se llama 'a.Node' en todo el pipeline, y
+        # así deja de compartir su '__free__' con el 'Node' de otra librería
+        # (ver 'qualify').
+        self.unit = unit
         # scope ACTUAL: empieza en el global; push/pop lo mueven por la
         # cadena 'parent' (los scopes cerrados se descartan, no se guardan).
         self.scope: Scope = table.global_scope
@@ -85,13 +93,52 @@ class SemanticContext:
     # ------------------------------------------------------------------ #
     # pila de scopes (via cadena 'parent', sin lista auxiliar)
     # ------------------------------------------------------------------ #
-    def push_scope(self, kind: ScopeKind) -> Scope:
-        self.scope = Scope(kind=kind, parent=self.scope)
+    def push_scope(self, kind: ScopeKind, label: str = "") -> Scope:
+        """Abre un scope hijo. ``label`` dice DE QUIÉN es (``'main'``, el
+        ``while`` de la línea 8): no lo mira ninguna decisión semántica, es
+        lo que permite dibujar después el árbol de scopes con nombres en vez
+        de con números sueltos.
+
+        Cada scope queda además REGISTRADO en la tabla. El resolver los
+        apila y los desapila igual que antes —la resolución sigue subiendo
+        por ``parent``—, pero al terminar el análisis ya no se han perdido:
+        una tabla de símbolos es un árbol, y hasta ahora solo sobrevivía su
+        raíz.
+        """
+        self.scope = Scope(kind=kind, parent=self.scope,
+                           sid=len(self.table.scopes), label=label)
+        self.table.scopes.append(self.scope)
         return self.scope
+
+    def usar(self, symbol: Symbol, ln: int, col: int) -> None:
+        """Anota que ``symbol`` se USA en esa posición.
+
+        Se llama donde un nombre se RESUELVE, que es el único sitio que sabe
+        a qué símbolo apunta: dos variables distintas se escriben igual, y
+        buscar el nombre en el fuente después contestaría las dos. Con esto
+        la tabla de símbolos puede decir, de cada entrada, dónde se declaró y
+        dónde se usa — que es la mitad que le faltaba para ser útil.
+        """
+        self.table.uses.setdefault(id(symbol), []).append((ln, col))
 
     def pop_scope(self) -> None:
         assert self.scope.parent is not None, "pop del scope global"
         self.scope = self.scope.parent
+
+    def qualify(self, name: str) -> str:
+        """El nombre CANÓNICO de un tipo declarado en esta unidad.
+
+        Un tipo es único por (unidad, nombre), no por nombre a secas: los
+        hooks, las conversiones y los dunders se indexan por ese nombre, así
+        que sin la unidad dos ``Node`` de librerías distintas comparten
+        entrada y despacha el que se cargara primero — en silencio.
+
+        Un nombre que YA viene calificado se devuelve tal cual: nombra un
+        tipo de otra unidad, y esa unidad ya lo calificó.
+        """
+        if not self.unit or "." in name:
+            return name
+        return f"{self.unit}.{name}"
 
     def error(self, exc: Any) -> None:
         self.errors.append(exc)

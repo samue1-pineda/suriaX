@@ -483,6 +483,12 @@ class RestrictionChecker {
         );
         this.#checkExpr(node.operand);
         return;
+      case "moveExpr":
+        // el mismo motivo que la sentencia 'move x;': transferir exige
+        // invalidar el origen en ejecución, y el web aún no lo hace cumplir.
+        this.#deny(Capability.MOVE, WebCode.MOVE, "'move' como expresión", expr);
+        this.#checkExpr(node.operand);
+        return;
       case "cast":
         this.#checkType(node.type, `el destino de 'cast<${formatType(node.type)}>'`, expr);
         this.#checkExpr(node.value);

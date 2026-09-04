@@ -169,9 +169,20 @@ test("un oneof sin variante se marca 'none', no se adivina", () => {
 });
 
 test("typeKey distingue lo que el sistema de tipos distingue", () => {
-  const ptr = { kind: TypeKind.POINTER, name: "", mut: false,
-                inner: { kind: TypeKind.INT, name: "", inner: null, mut: false } };
+  const int = { kind: TypeKind.INT, name: "", inner: null, mut: false, args: [] };
+  const ptr = { kind: TypeKind.POINTER, name: "", mut: false, inner: int, args: [] };
   const ptrMut = { ...ptr, mut: true };
   assert.notEqual(typeKey(ptr), typeKey(ptrMut), "'ptr T' y 'ptr mutable T' difieren");
   assert.equal(typeKey(null), "");
+
+  // Regresión: los argumentos de un genérico participan de la identidad del
+  // tipo. Sin ellos en la clave, 'Vector<int>' y 'Vector<str>' compartían
+  // entrada en el índice de conversiones y el genérico era decorativo.
+  const str = { kind: TypeKind.STR, name: "", inner: null, mut: false, args: [] };
+  const vecInt = { kind: TypeKind.NOMINAL, name: "Vector", inner: null,
+                   mut: false, args: [int] };
+  const vecStr = { ...vecInt, args: [str] };
+  assert.notEqual(typeKey(vecInt), typeKey(vecStr),
+                  "'Vector<int>' y 'Vector<str>' son tipos distintos");
+  assert.equal(formatType(vecInt), "Vector<int>");
 });

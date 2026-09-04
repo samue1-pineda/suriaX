@@ -49,6 +49,8 @@ EXT024 = "EXT024"  # (owner, nombre) declarado dos veces
 EXT025 = "EXT025"  # argumento no literal (el escaneo NO ejecuta código)
 EXT026 = "EXT026"  # argumento desconocido en el decorador
 EXT027 = "EXT027"  # colisión con el vocabulario fijo del compilador
+EXT028 = "EXT028"  # C++ pedido desde una firma PURA (negado por defecto)
+EXT029 = "EXT029"  # contrato con C++ incompleto o sin declarar explícitamente
 
 
 class Location:

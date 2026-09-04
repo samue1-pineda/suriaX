@@ -26,6 +26,9 @@ dist/
 
 # --- configuracion y entorno local ---
 .suriaX_config.yaml
+# variables del playground: la PLANTILLA ('.env.example') si se versiona, el
+# archivo real no — puede llevar valores de una instalacion concreta.
+.env
 .vscode/
 .idea/
 .DS_Store
@@ -34,6 +37,8 @@ dist/
 out/
 dumps/
 log/
+# volcados del backend web (los genera el compilador web, como './dumps')
+.web/
 # HIR serializado y sus vistas: se regeneran con --emit-hir. Los golden de la
 # suite estan bajo test/ y se anulan mas abajo.
 *.phir
@@ -54,6 +59,13 @@ documentation/web/
 # copias que conf.py hace del repo hacia el sitio (se rehacen en cada build)
 documentation/source/repo/
 
+# --- ejercicios LOCALES ---
+# Programas con los que se prueba el compilador a mano, en la raiz. NO son
+# pruebas del compilador (esas viven en 'test/' y no dependen de archivos
+# sueltos): son de quien desarrolla, y cambian a cada rato.
+/a.srcx
+/b.srcx
+
 # --- restos de las pruebas ---
 # test/e2e/test_web_wasm.py crea su temporal EN LA RAIZ (el linker necesita
 # resolver './lib' desde ahi). Se borra solo; esto cubre una corrida cortada.
@@ -65,3 +77,4 @@ node_modules/
 # --- .web/: cache y volcados del compilador web, nunca codigo (ver su readme) ---
 .web/*
 !.web/readme.md
+.env

@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
 from ..context import ParserContext
 from ..cursor import Cursor
 from .block import parse_block
-from .types import parse_type
+from .types import parse_type, parse_type_params
 
 
 def parse_function_decl(cursor: Cursor, ctx: ParserContext,
@@ -61,6 +61,11 @@ def parse_function_decl(cursor: Cursor, ctx: ParserContext,
             f"'{name_tok.lexeme}' no la tiene",
             line=name_tok.ln, column=name_tok.col,
         )
+    # 'fn make<T>(...)': los parametros de tipo van pegados al NOMBRE, igual
+    # que en 'struct { ... } Vector<T>;'. Aqui no hay ambiguedad con la
+    # comparacion —esto es una DECLARACION, no una expresion—, asi que se
+    # consumen directamente.
+    type_params = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.L_PAREN)
     params = _parse_param_list(cursor, ctx)
     cursor.expect(TokenType.R_PAREN)
@@ -69,7 +74,7 @@ def parse_function_decl(cursor: Cursor, ctx: ParserContext,
     return ast.FunctionDecl(ln=tok.ln, col=tok.col, name=name_tok.lexeme,
                              params=params, return_type=return_type, body=body,
                              dunder=dunder, specifier=specifier,
-                             visibility=visibility)
+                             visibility=visibility, type_params=type_params)
 
 
 def _parse_return_type(cursor: Cursor, ctx: ParserContext, fn_tok) -> ast.TypeExpr:

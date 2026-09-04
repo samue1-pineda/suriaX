@@ -12,11 +12,63 @@ símbolos exportados y detecta imports circulares. El frontend
 
 ## Regla central
 
-> Un módulo se llama como su **alias** (`#export`), no como su archivo ni
-> como su carpeta.
+> Un módulo se llama como su **alias** (`#export`), y ese alias tiene que
+> coincidir con el nombre del archivo o de la carpeta.
 
-`lib/io/main.libsrx` con `#export package as IO` se importa como `IO`. El
-nombre de archivo solo sirve para **localizarlo en disco**.
+El alias es el nombre PÚBLICO: es el que se escribe en el `#import` y el que
+prefija todo lo que la librería exporta. El nombre de archivo es lo que la
+localiza en disco. **Los dos tienen que decir lo mismo**, y el loader lo
+exige (`SEM010`): un `cualquiera.libsrx` que termine en `#export as OTRO`
+declararía un nombre que nadie puede importar — `#import OTRO` no encuentra
+el archivo y `#import cualquiera` encuentra un archivo que exporta otra cosa.
+
+La única holgura es el *case* de una carpeta: `#import IO` encuentra `io/`,
+porque un directorio en minúsculas es una convención del sistema de archivos
+y no una decisión del programa.
+
+`lib/io/main.libsrx` con `#export package as IO` se importa como `IO`.
+
+## Identidad de un tipo
+
+> Un tipo se identifica por **(unidad, nombre)**, no por su nombre a secas.
+> Su nombre canónico es `<alias>.<Nombre>`.
+
+Un `struct Node` declarado en `a.libsrx` se llama `a.Node` en todo el
+pipeline — también dentro de la propia `a`, donde se sigue *escribiendo*
+`Node`. El símbolo queda registrado bajo los dos nombres; quien lo consulta
+por el canónico y quien lo escribe corto encuentran el mismo tipo.
+
+No es cosmética. Los **hooks**, la tabla de **conversiones** (`__cast__`),
+los **dunders** y el filtro de `catch` se indexan por ese nombre: mientras
+fue el nombre corto, dos librerías que declararan `Node` compartían entrada y
+el `__free__` que corría lo decidía el orden de carga, sin diagnóstico. En un
+lenguaje cuyo modelo es la propiedad, destruir con el destructor equivocado
+es el peor fallo que el sistema de módulos puede tener.
+
+Los DIAGNÓSTICOS, en cambio, nombran el tipo **como se puede escribir desde
+donde está el error**: la sugerencia útil es `cast<dt.float32>(...)`, no
+`cast<dt_variables.float32>(...)`, porque el segundo nombre no existe en el
+archivo del usuario. Identidad para el compilador, nombre escribible para
+quien lee el mensaje.
+
+*Límite conocido*: el calificador es el alias del `#export`, no la ruta
+completa de la unidad (`vector`, no `array.vector`). Dos paquetes distintos
+con un submódulo del mismo alias que declare un tipo del mismo nombre
+seguirían colisionando.
+
+### Los hooks de un tipo viven con el tipo
+
+Declarar un hook para un tipo de OTRA unidad se rechaza:
+
+```srcx
+#import a
+hook fn __len__(a.P ptr p) -> int { ... }   // error: 'a.P' es de otra unidad
+```
+
+El motivo es el mismo de arriba: la tabla de despacho es una sola, así que
+dos librerías colgándole un `__free__` al mismo tipo ajeno dejarían la
+elección al orden de carga. Declararlo donde se declara el tipo, o envolver
+el tipo ajeno en uno propio.
 
 ## Estructura
 

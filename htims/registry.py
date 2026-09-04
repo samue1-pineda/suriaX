@@ -90,8 +90,9 @@ class ExtensionSet:
             "modules": [m.to_dict() for m in self.modules],
             "hooks": [
                 {"name": h.name, "owner": h.owner, "params": list(h.params),
-                 "returns": h.returns, "logic": h.logic, "module": h.module,
-                 "file": h.file, "line": h.line, "column": h.column}
+                 "returns": h.returns, "logic": h.logic, "cxx": h.cxx,
+                 "module": h.module, "file": h.file, "line": h.line,
+                 "column": h.column}
                 for h in self.hooks
             ],
         }

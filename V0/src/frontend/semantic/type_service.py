@@ -113,12 +113,17 @@ def canonical_name(symbol: Symbol, written: str = "") -> str:
     esta traduccion el par no se encuentra y el tipo queda inservible fuera
     de su libreria.
 
-    Para un struct/enum ``Symbol.type`` ES su nominal, de ahi sale el nombre.
-    Pero un alias ``const type int8`` tiene ``Symbol.type`` = metatipo
-    (``TypeKind.META``), no un nominal: ahi la fuente correcta es
-    ``Symbol.name``, que YA es el nombre declarado. ``written`` solo queda
-    como red de seguridad si el simbolo no trae ninguno de los dos.
+    ``Symbol.type_name`` es la fuente cuando el simbolo declara un tipo: lo
+    fija ``collect`` ya calificado con su unidad, y sirve igual para un
+    struct/enum que para un alias ``const type int8`` — cuyo ``Symbol.type``
+    es el metatipo y no un nominal del que sacar el nombre.
+
+    Para los que no lo traen (parametros de tipo, simbolos importados) se
+    cae a ``Symbol.type`` si es nominal y luego a ``Symbol.name``.
+    ``written`` es la ultima red si el simbolo no trae ninguno.
     """
+    if symbol.type_name:
+        return symbol.type_name
     t = symbol.type
     if t is not None and t.kind is TypeKind.NOMINAL:
         return t.name
@@ -128,21 +133,28 @@ def canonical_name(symbol: Symbol, written: str = "") -> str:
 def canonical(t: Optional[Type], scope: Scope) -> Optional[Type]:
     """Reescribe el NUCLEO nominal de ``t`` con su nombre canonico.
 
-    ``dt.int8 ptr`` -> ``int8 ptr``. Los envoltorios (``ptr``/``?``/``error``)
-    y los argumentos de un generico se conservan. Un tipo sin nucleo nominal
-    cualificado se devuelve TAL CUAL, sin construir nada — el caso comun.
+    ``dt.int8 ptr`` -> ``dt_variables.int8 ptr``, y tambien al reves: dentro
+    de la libreria que lo declara, ``int8`` -> ``dt_variables.int8``. Los
+    envoltorios (``ptr``/``?``/``error``) y los argumentos de un generico se
+    conservan, canonicalizando tambien los argumentos — ``Vector<Node>`` y
+    ``Vector<a.Node>`` tienen que dar el mismo tipo o el generico volveria a
+    unificar lo que no debe.
+
+    NO se puede atajar por "no lleva punto": la calificacion se AÑADE tanto
+    como se quita desde que un tipo se llama ``a.Node`` tambien dentro de
+    ``a`` (ver ``SemanticContext.qualify``).
     """
     if t is None:
         return None
     if t.kind is TypeKind.NOMINAL:
-        if "." not in (t.name or ""):
-            return t
         result = lookup_type_path(t.name, scope)
         if result.status is not TypeLookup.OK or result.symbol is None:
             return t
         name = canonical_name(result.symbol, t.name)
-        return t if name == t.name else Type(TypeKind.NOMINAL, name=name,
-                                             args=t.args)
+        args = tuple(canonical(a, scope) for a in t.args)
+        if name == t.name and all(x is y for x, y in zip(args, t.args)):
+            return t
+        return Type(TypeKind.NOMINAL, name=name, args=args)
     if t.inner is None:
         return t
     inner = canonical(t.inner, scope)
@@ -250,10 +262,20 @@ def _posee(t: Optional[Type], scope: Scope, table: SymbolTable,
     # ('struct { S s; } S;'): es un tipo de tamano infinito y no deberia
     # existir, pero esta pasada no es quien lo rechaza y no puede colgarse por
     # ello. La recursion normal (a traves de punteros) ya paro en la regla 1.
-    if simbolo.name in visitados:
+    #
+    # La clave es el TIPO, no su nombre: 'Caja<int>' y 'Caja<R>' comparten
+    # nombre y son tipos distintos, asi que marcar por nombre habria cortado
+    # el recorrido de 'Caja<Caja<R>>' en el nivel de fuera y perdido el
+    # destructor de dentro.
+    if t in visitados:
         return False
-    visitados.add(simbolo.name)
-    return any(_posee(campo.type, scope, table, visitados)
+    visitados.add(t)
+    # Regla 3 SOBRE EL TIPO CONCRETO: el campo de un generico se declara como
+    # 'T' y 'T' no resuelve a nada; sin sustituir, 'Caja<R>' no poseia nada
+    # aunque 'R' tuviera '__free__', y su destructor no se ejecutaba nunca.
+    # Es la misma sustitucion que hace falta para leer cualquier campo suyo.
+    mapa = bindings(simbolo, t)
+    return any(_posee(substitute(campo.type, mapa), scope, table, visitados)
                for campo in simbolo.members.values())
 
 
@@ -273,27 +295,43 @@ def infinite_size_path(name: str, scope: Scope) -> Optional[Tuple[str, ...]]:
     Devuelve el camino (``("s",)``, ``("b", "a")``) para que el diagnóstico
     pueda señalar por dónde se cierra el ciclo, no solo que existe.
     """
-    return _camino_infinito(name, scope, name, ())
+    return _camino_infinito(Type(TypeKind.NOMINAL, name=name), scope, name,
+                            (), set())
 
 
-def _camino_infinito(actual: str, scope: Scope, objetivo: str,
-                     visitados: Tuple[str, ...]) -> Optional[Tuple[str, ...]]:
-    simbolo = resolve_nominal(actual, scope)
+def _camino_infinito(actual: Optional[Type], scope: Scope, objetivo: str,
+                     ruta: Tuple[str, ...],
+                     vistos: set) -> Optional[Tuple[str, ...]]:
+    """``ruta`` son los CAMPOS recorridos; ``vistos``, los TIPOS ya abiertos.
+
+    Son dos cosas distintas y antes eran una sola: la guarda comparaba el
+    nombre de un TIPO contra la lista de nombres de CAMPO, así que un ciclo
+    ajeno al objetivo (``A`` -> ``B`` -> ``C`` -> ``B``) no se detenía y el
+    recorrido se colgaba salvo que campo y tipo se llamaran igual.
+    """
+    if actual is None or actual.name is None:
+        return None
+    simbolo = resolve_nominal(actual.name, scope)
     if simbolo is None or simbolo.kind is not SymbolKind.STRUCT:
         return None
+    if actual in vistos:
+        return None           # otro ciclo, ajeno a 'objetivo': lo reporta el suyo
+    vistos = vistos | {actual}
+    # El campo de un generico se declara como 'T': sin sustituir, un ciclo que
+    # pasa POR el generico ('struct { Caja<S> c; } S;') era invisible y el
+    # tipo de tamano infinito se aceptaba.
+    mapa = bindings(simbolo, actual)
     for campo in (simbolo.members or {}).values():
-        t = campo.type
+        t = substitute(campo.type, mapa)
         while t is not None and (t.kind is TypeKind.NULLABLE
                                  or t.kind is TypeKind.ERROR):
             t = t.inner
         if t is None or t.kind is not TypeKind.NOMINAL or t.name is None:
             continue          # primitivo, puntero: tamano conocido
         if t.name == objetivo:
-            return visitados + (campo.name,)
-        if t.name in visitados:
-            continue          # otro ciclo, ajeno a 'objetivo': lo reporta el suyo
-        hallado = _camino_infinito(t.name, scope, objetivo,
-                                   visitados + (campo.name,))
+            return ruta + (campo.name,)
+        hallado = _camino_infinito(t, scope, objetivo, ruta + (campo.name,),
+                                   vistos)
         if hallado is not None:
             return hallado
     return None
@@ -312,23 +350,28 @@ def _leaf(name: Optional[str]) -> Optional[str]:
 
 
 def _same_nominal(a: Optional[Type], b: Optional[Type]) -> bool:
-    """¿``a`` y ``b`` nombran el MISMO tipo nominal, salvo la calificación?
+    """¿``a`` y ``b`` son el MISMO tipo nominal?
 
-    ``point.Point`` (calificado como lo ve el consumidor) y ``Point`` (sin
-    calificar dentro de la librería que lo declara) son el mismo tipo: se
-    comparan por nombre-HOJA. La identidad nominal fina —resuelta hasta la
-    declaración, distinguiendo dos ``Point`` de librerías distintas— es cosa
-    de la Fase 3; con la resolución solo-por-nombre de hoy, el nombre-hoja es
-    la mejor unificación disponible (ver ``types_ast`` cab.).
+    Por nombre COMPLETO, y ahí está la identidad: un tipo declarado en una
+    librería se llama ``a.Node`` en todo el pipeline —dentro de su propia
+    unidad también— porque ``SemanticContext.qualify`` lo califica al
+    declararlo. Los dos lados llegan ya canónicos, así que no hay
+    calificación que perdonar.
+
+    Antes se comparaba el nombre-HOJA, porque la librería declaraba ``Node``
+    y el consumidor escribía ``a.Node``: eso resolvía la asimetría, pero
+    unificaba también los ``Node`` de DOS librerías distintas — y como los
+    hooks, las conversiones y los dunders se indexan por ese nombre, el
+    ``__free__`` que corría dependía del orden de carga, en silencio.
 
     Los ARGUMENTOS de un genérico entran en la comparación y lo hacen
-    INVARIANTE: ``Vector<int>`` y ``Vector<str>`` comparten nombre-hoja y aun
+    INVARIANTE: ``Vector<int>`` y ``Vector<str>`` comparten nombre y aun
     así son tipos distintos. Sin esta parte el genérico sería decorativo —
     ``Vector<T>`` daría una garantía que el checker no comprueba.
     """
     return (a is not None and b is not None
             and a.kind is TypeKind.NOMINAL and b.kind is TypeKind.NOMINAL
-            and _leaf(a.name) == _leaf(b.name)
+            and a.name == b.name
             and len(a.args) == len(b.args)
             and all(_mismo_tipo(x, y) for x, y in zip(a.args, b.args)))
 

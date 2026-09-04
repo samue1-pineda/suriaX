@@ -220,6 +220,11 @@ class Assignment(Expression):
 class Call(Expression):
     callee: Expression
     args: List[Expression] = field(default_factory=list)
+    type_args: List[TypeExpr] = field(default_factory=list)
+    """ARGUMENTOS DE TIPO escritos en la llamada: ``make<int>(4)`` -> el
+    ``TypeExpr`` de ``int``. Vacio en una llamada corriente y tambien cuando
+    el generico se resuelve por los argumentos (``primero(1)``): esto es lo
+    que se ESCRIBIO, no lo que se dedujo."""
     restype: Optional[Type] = None
     valor_constante: Optional[int] = None
     """La llamada se RESOLVIO a un entero en compilacion (``min(dt.int8)`` ->
@@ -252,6 +257,14 @@ class MemberAccess(Expression):
     obj: Expression
     member: str
     restype: Optional[Type] = None
+    nombre_de_item: Optional[str] = None
+    """``TType.PLUS.name`` -> ``"PLUS"``, resuelto al COMPILAR.
+
+    El nombre de un item de enum se conoce sin ejecutar nada, asi que el
+    emisor pone la cadena y ningun consumidor del HIR se entera de que hubo
+    un acceso a miembro. Es el mismo trato que reciben ``min``/``max`` sobre
+    un tipo de libreria (ver ``Call.valor_constante``). ``None`` en cualquier
+    otro acceso."""
 
 
 @dataclass(slots=True)
@@ -362,6 +375,14 @@ class VarDecl(Statement):
     visibility: Optional[str] = None
     """Reserva de visibilidad; solo aplica a un binding de NIVEL SUPERIOR
     (ver ``FunctionDecl.visibility``). En una variable local queda ``None``."""
+    capacity: Optional[Expression] = None
+    """Capacidad ESCRITA de un contenedor: la ``n`` de ``int vec.Vector v[n];``.
+
+    La declaracion con corchetes es AZUCAR — el parser la convierte en el
+    ``var`` y la llamada al constructor que ya existian—, pero la capacidad se
+    conserva aqui para que la Semantica pueda avisar cuando un ``push`` se
+    salga de lo reservado sin esperar a la ejecucion. Es informativa: ninguna
+    fase la necesita para producir codigo."""
 
 
 @dataclass(slots=True)
@@ -481,6 +502,23 @@ class MoveStmt(Statement):
 
 
 @dataclass(slots=True)
+class MoveExpr(Expression):
+    """``move x`` en posicion de EXPRESION: transfiere y DEVUELVE el valor.
+
+    Es la forma con la que el modelo de memoria se escribe de verdad
+    (``var Buffer b = move origen;``, ``consumir(move b)``): sin ella no habia
+    manera de ligar un valor que POSEE recursos a otro nombre, porque ligarlo
+    a secas deja dos duenos del mismo recurso y su destructor corre dos veces.
+    La documentacion la usaba desde el principio; el parser no la tenia.
+
+    ``MoveStmt`` sigue existiendo para la forma de sentencia (``move x;``),
+    que invalida sin llevarse el valor a ningun sitio.
+    """
+    operand: Expression
+    restype: Optional[Type] = None
+
+
+@dataclass(slots=True)
 class ThrowStmt(Statement):
     """``throw expression;`` -- inicia la propagacion de un error.
 
@@ -556,6 +594,11 @@ class FunctionDecl(Declaration):
     pasadas que recorren el cuerpo (``scope_resolver``, ``memory_check``) lo
     saltan cuando es ``None``; la firma (params/retorno) se valida igual."""
     return_restype: Optional[Type] = None
+    type_params: List[str] = field(default_factory=list)
+    """PARAMETROS DE TIPO del generico: ``fn make<T>(int n) -> T ptr;`` ->
+    ``["T"]``. Van tras el NOMBRE, igual que en un ``struct``/``type``: el
+    lenguaje pone siempre junto al nombre lo que identifica la declaracion.
+    Vacio en una funcion corriente."""
     dunder: Optional[str] = None
     """Nombre "dunder" SIN guiones (p. ej. ``"free"`` para ``fn __free__``)
     cuando ``name`` vino de un token ``DUNDER``; ``None`` para una funcion con
@@ -676,6 +719,10 @@ class ImplDecl(Declaration):
     posteriores nunca ven un ``ImplDecl``, solo los métodos ya marcados."""
     type_name: str
     methods: List[FunctionDecl] = field(default_factory=list)
+    type_params: List[str] = field(default_factory=list)
+    """``@impl Vector<T> { ... }``: los parametros del tipo, para que los
+    metodos puedan nombrar ``T`` en su firma. Se declaran como tipos opacos
+    igual que los del ``struct``, y por el mismo motivo."""
 
 
 @dataclass(slots=True)
@@ -757,6 +804,11 @@ class FromDirective(Declaration):
 class ExternBlock(Declaration):
     target: str  # hoy solo 'cpp'
     raw: str
+    #: banderas que ESTA unidad necesita para compilar/enlazar su C++
+    #: (``requires("-lX11")``). Las declara quien trae el C++ porque es quien
+    #: sabe de qué depende; el linker las suma a las del proyecto, así que un
+    #: consumidor no tiene que averiguar las dependencias de sus librerías.
+    requires: List[str] = field(default_factory=list)
 
 
 # ============================================================================

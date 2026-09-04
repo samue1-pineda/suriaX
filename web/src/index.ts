@@ -200,7 +200,11 @@ export function compile(
   const prepared = prepare(mainBytes, mainPath, resolve, options);
   if (prepared.image === null) return { ...prepared, codegen: null };
 
-  const codegen = generateFromImage(prepared.image);
+  // la MISMA política que contuvo la imagen decide qué unidades son del host
+  // y no se traducen: si las dos discreparan, el codegen intentaría bajar el
+  // cuerpo de una librería que la contención dio por confiable.
+  const codegen = generateFromImage(prepared.image,
+                                    options.policy ?? WEB_V1_POLICY);
   return {
     ...prepared,
     diagnostics: [...prepared.diagnostics, ...codegen.diagnostics],

@@ -144,6 +144,14 @@ export interface Type {
   readonly inner: Type | null;
   /** Solo `POINTER`: `ptr mutable T` (escribible) vs `ptr T` (solo lectura). */
   readonly mut: boolean;
+  /**
+   * Solo `NOMINAL`: los argumentos de un genérico (`Vector<int>`).
+   * Participan de la IDENTIDAD del tipo — `Vector<int>` y `Vector<str>` son
+   * tipos distintos. El decodificador los descartaba en silencio, así que
+   * las dos instanciaciones llegaban al web como el mismo tipo y `typeKey`
+   * las metía en la misma entrada del índice de conversiones.
+   */
+  readonly args: readonly Type[];
 }
 
 /** `message Symbol` (renombrado: `Symbol` es un global de JS). */
@@ -236,6 +244,13 @@ export type ExprNode =
   | { readonly case: "sizeof"; readonly type: Type | null; readonly hook: HookRef | null }
   /** `&x` con la mutabilidad YA resuelta por la Semántica. */
   | { readonly case: "addrOf"; readonly operand: Expr; readonly mut: boolean }
+  /**
+   * `move x` en posición de EXPRESIÓN: transfiere y entrega el valor.
+   * Distinto de `MoveStmt`, que invalida sin llevarse nada. El target web
+   * deniega los dos por igual (`WEB006`): mover exige invalidar el origen en
+   * ejecución, y el web aún no lo hace cumplir.
+   */
+  | { readonly case: "moveExpr"; readonly operand: Expr }
   | {
       readonly case: "cast";
       readonly type: Type | null;
@@ -363,6 +378,17 @@ export interface StructDecl {
 export interface EnumItem {
   readonly name: string;
   readonly value: Expr | null;
+  /**
+   * Tipos del PAYLOAD (`Numero(int)`), como índices en `Module.types`.
+   *
+   * Vacío = el item es una constante entera. No vacío = el enum es un tipo
+   * SUMA y sus valores dejan de ser enteros. El `.proto` lo dice con estas
+   * palabras y este lector lo ignoraba: sin el campo, `Numero(int)` y `ROJO`
+   * llegaban idénticos y un backend los habría traducido igual — el mismo
+   * error que se coló con `Type.args`, donde `Vector<int>` y `Vector<str>`
+   * colisionaban por no leer un campo que el `.proto` sí declaraba.
+   */
+  readonly payloadTypeIds: readonly number[];
 }
 
 export interface EnumDecl {
@@ -453,7 +479,13 @@ export const EMPTY_SYMBOL_TABLE: SymbolTable = {
 
 export const EMPTY_BLOCK: Block = { statements: [] };
 
-/** `Type` -> notación de suriaX (`int ptr mutable`, `T?`). Espejo de `loader.format_type`. */
+/**
+ * `Type` -> notación de suriaX (`int ptr mutable`, `T?`, `Vector<int>`).
+ * Espejo de `V0/src/HIR/pretty.format_type`, que es la definición de
+ * referencia. Se escribe TODO lo que participa de la identidad del tipo: los
+ * argumentos de un genérico incluidos, porque `Vector<int>` y `Vector<str>`
+ * son tipos distintos.
+ */
 export function formatType(t: Type | null): string {
   if (t === null || t.kind === TypeKind.TYPE_UNSPECIFIED) return "<?>";
   switch (t.kind) {
@@ -464,7 +496,9 @@ export function formatType(t: Type | null): string {
     case TypeKind.ERROR:
       return t.inner === null ? "error" : `error ${formatType(t.inner)}`;
     case TypeKind.NOMINAL:
-      return t.name;
+      return t.args.length === 0
+        ? t.name
+        : `${t.name}<${t.args.map(formatType).join(", ")}>`;
     default:
       return TYPE_KIND_NAMES[t.kind] ?? "<?>";
   }
@@ -477,7 +511,8 @@ export function formatType(t: Type | null): string {
  */
 export function typeKey(t: Type | null): string {
   if (t === null || t.kind === TypeKind.TYPE_UNSPECIFIED) return "";
-  return `${t.kind}:${t.name}:${t.mut ? 1 : 0}:(${typeKey(t.inner)})`;
+  const args = t.args.map(typeKey).join(",");
+  return `${t.kind}:${t.name}:${t.mut ? 1 : 0}:(${typeKey(t.inner)}):[${args}]`;
 }
 
 /** Clave del índice de hooks: `(owner, kind)` en una sola cadena. */

@@ -1,0 +1,26 @@
+#from io #import stdp
+
+#extern cpp{
+#include <iostream>
+#include <string>
+
+extern "C" void saluda(const char* quien) {
+    std::cout << "C++ dice: hola, " << quien << std::endl;
+}
+
+extern "C" long long suma(long long a, long long b) {
+    std::cout << "C++ suma " << a << " + " << b << std::endl;
+    return a + b;
+}
+}
+
+fn saluda(str quien) -> void;
+fn suma(int a, int b) -> int;
+
+fn main() -> int {
+    stdp.println("-- suriaX arranca");
+    saluda("mundo");
+    var int r = suma(20, 22);
+    stdp.println(f"-- suriaX recibio {r}");
+    return r;
+}

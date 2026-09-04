@@ -509,10 +509,21 @@ significado: formato/longitud lógica) se dejaron **fuera** de
 Un hook está **sobrecargado por tipo dueño** (`__free__` puede existir una
 vez por cada `struct`/`enum` distinto) — no encaja en `Scope.values`
 (namespace plano de una sola entrada por nombre). Se añadió
-`SymbolTable.hooks: dict[(str, HookKind), Symbol]`, con su propia detección
-de colisión: **mismo** tipo + mismo `HookKind` → `DuplicateHookError`;
-mismo `HookKind` en **tipos distintos** → coexisten sin conflicto (probado:
-`__free__(Punto ptr)` y `__free__(Texto ptr)` a la vez, dos entradas).
+`SymbolTable.hooks: dict[(str, HookKind, str), Symbol]`, con su propia
+detección de colisión: **mismo** tipo + mismo `HookKind` →
+`DuplicateHookError`; mismo `HookKind` en **tipos distintos** → coexisten sin
+conflicto (probado: `__free__(Punto ptr)` y `__free__(Texto ptr)` a la vez,
+dos entradas).
+
+El dueño es el nombre **canónico** del tipo, calificado con su unidad
+(`a.Node`), no el nombre corto. Es lo que hace que "tipos distintos" incluya
+el caso de dos librerías que declaran un `Node` cada una: con el nombre
+corto compartían entrada y el hook que corría lo decidía el orden de carga,
+en silencio. Ver `linker_p/readme.md`, *Identidad de un tipo*.
+
+Por lo mismo, un hook cuyo dueño pertenece a **otra unidad** se rechaza
+(`SEM006`): la tabla de despacho es una sola, y dos librerías extendiendo el
+mismo tipo ajeno volverían a dejar la elección al orden de carga.
 
 ### 12.4 Errores nuevos (`error_handler/SemanticError.py`, creado en esta
 misma entrega junto con el resto de la taxonomía prevista en la secc. 2)

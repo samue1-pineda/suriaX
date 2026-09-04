@@ -35,7 +35,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 from .declarations import HookDecl, scan_file, scan_files
-from .decl import HookSpec, hook
+from .decl import HookSpec, hook, signature, signature_extends
 from .errors import ExtensionError, Location
 from .manifest import MANIFEST_FNAME, Manifest
 from .registry import ExtensionModule, ExtensionSet, build
@@ -91,4 +91,5 @@ __all__ = [
     "ExtensionError", "ExtensionModule", "ExtensionSet", "HookDecl",
     "HookSpec", "Location", "Manifest",
     "build", "discover", "hook", "of", "scan_file", "scan_files",
+    "signature", "signature_extends",
 ]

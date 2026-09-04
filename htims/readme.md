@@ -82,16 +82,44 @@ gramática. A cambio, cada diagnóstico sale con línea y columna reales.
 
 ```python
 # extensions/calls/physics.py
-from htims import hook
+from htims import signature
 
 PROJECT = "MiJuego"
 
-@hook("__gravity__", owner="Body",
-      params=["Body ptr mutable", "float"], returns="void",
-      logic="gravity_cpp")
+@signature("__gravity__", owner="Body",
+           params=["Body ptr mutable", "float"], returns="void")
 def gravity(body, dt):
     body.vy = body.vy - 9.8 * dt      # implementación de referencia
 ```
+
+## Dos decoradores: bajar a C++ se escribe
+
+La línea que los separa es una sola pregunta: **¿el hook necesita salir del
+proceso?** `@signature` declara el que se resuelve dentro del lenguaje —opera
+sobre valores de suriaX y su cuerpo Python es la referencia—; pedirle lógica
+nativa es `EXT028`.
+
+`@signature_extends` declara el que sí la necesita (una ventana, un descriptor
+del sistema, memoria cruda) y **exige decirlo**: `cxx=True` no tiene valor por
+defecto, y sin él la declaración se rechaza (`EXT029`).
+
+```python
+@signature_extends("__win_open__", owner="Ventana",
+                   params=["int", "int"], returns="Ventana ptr mutable",
+                   cxx=True, logic="win_open_cpp")
+def win_open(w, h):
+    raise NotImplementedError("lo implementa logic_dir/win_open.cpp")
+```
+
+El opt-in **es** la verificación. Un hook que baja a C++ deja de ser
+comprobable por el compilador —su cuerpo vive fuera de su alcance—, así que
+sacarlo del lenguaje tiene que ser una decisión escrita y no lo que ocurre al
+copiar una declaración de otro sitio. Por eso `logic` sin `cxx=True` no es un
+descuido que se perdone: es un error con su posición.
+
+`@hook` es el nombre anterior de `@signature` y sigue importando para no
+romper extensiones ya escritas. Se escanea con las reglas nuevas, así que
+tampoco por ahí se cuela un C++ implícito.
 
 El compilador **nunca importa este archivo**: lo lee con `ast.parse` y mira la
 forma del decorador (`declarations.py`). Compilar un `.srcx` no debe ejecutar
@@ -108,10 +136,10 @@ tendrá que validar contra el `hook fn __gravity__(...)` escrito en `.srcx`.
 Aquí solo se comprueba que esté presente y sea una cadena — parsear el tipo es
 del frontend, que es quien tiene la gramática.
 
-El decorador `@hook` existe de verdad (`decl.py`) para que el archivo sea
-Python legítimo: importable, comprobable por un linter y ejecutable por los
-tests del propio usuario. No registra nada en ninguna tabla global; solo anota
-la función. El registro real pertenece a la VM+JIT.
+Los decoradores existen de verdad (`decl.py`) para que el archivo sea Python
+legítimo: importable, comprobable por un linter y ejecutable por los tests del
+propio usuario. No registran nada en ninguna tabla global; solo anotan la
+función. El registro real pertenece a la VM+JIT.
 
 ## Configuración a mano
 
@@ -172,6 +200,8 @@ hostil.
 | `EXT025` | argumento no literal (el escaneo no ejecuta código) |
 | `EXT026` | argumento desconocido en el decorador |
 | `EXT027` | colisión con el vocabulario fijo del compilador |
+| `EXT028` | una firma PURA pide lógica nativa (C++ negado por defecto) |
+| `EXT029` | contrato con C++ incompleto: falta `cxx=True` o falta `logic` |
 
 ## Fronteras
 
@@ -259,7 +289,8 @@ En orden de dependencia:
 | `manifest.py` | parser de `extends.srcx` con línea/columna |
 | `declarations.py` | escaneo `ast.parse` de los `.py` → `HookDecl` |
 | `registry.py` | `ExtensionSet`: fusión de fuentes, índices, serialización |
-| `decl.py` | el decorador `@hook` que el usuario escribe |
+| `decl.py` | los decoradores `@signature` / `@signature_extends` |
+| `utils/` | herramientas para quien ESCRIBE hooks (ver su `readme.md`) |
 | `errors.py` | familia `EXT0xx` |
 | `__init__.py` | `discover(config)` — la puerta que usa el compilador |
 

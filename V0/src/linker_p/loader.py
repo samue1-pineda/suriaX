@@ -101,7 +101,11 @@ def parse_and_collect(
     from ..frontend.semantic.context import SemanticContext
     from ..frontend.semantic.symbol_table import SymbolTable
 
-    lib_ctx = SemanticContext(SymbolTable(), source_path=path, config=config)
+    # la unidad se pasa ANTES de recolectar: los tipos que declare esta
+    # librería nacen ya calificados ('a.Node'), que es lo que los distingue
+    # de los homónimos de otra (ver 'SemanticContext.qualify').
+    lib_ctx = SemanticContext(SymbolTable(), source_path=path, config=config,
+                              unit=export.alias)
     collect.run(program, lib_ctx)
     if notes is not None and lib_ctx.notes:
         notes.extend(lib_ctx.notes)
@@ -115,6 +119,14 @@ def parse_and_collect(
         errors.extend(lib_ctx.errors)
 
     scope = lib_ctx.table.global_scope
+    # El contrato PUBLICO de la libreria se expresa en nombres canonicos.
+    #
+    # Las anotaciones se resuelven sintacticamente ('parser/typed_ast'), asi
+    # que 'fn haz() -> Node' sale de aqui como 'Node' a secas mientras que el
+    # tipo que declara ya se llama 'a.Node'. Sin esta pasada el consumidor
+    # veria dos tipos donde hay uno.
+    _canonicalizar(scope.values, scope)
+    _canonicalizar(scope.types, scope)
     # el nombre publico ES el del '#export': ni el del archivo ni el de su
     # carpeta (regla central del linker, ver 'packages.py').
     #
@@ -145,6 +157,29 @@ def _without_internal(symbols: dict) -> dict:
     filtra por el Symbol VALOR, no por la clave."""
     return {key: sym for key, sym in symbols.items()
             if getattr(sym, "visibility", None) != "internal"}
+
+
+def _canonicalizar(simbolos, scope, vistos=None) -> None:
+    """Reescribe los tipos de ``simbolos`` con su nombre canonico, en sitio.
+
+    En sitio y no copiando porque el mismo ``Symbol`` esta referenciado desde
+    varios sitios (el scope y los ``members`` de su tipo): copiar dejaria
+    unos actualizados y otros no. ``vistos`` corta los tipos recursivos.
+    """
+    from ..frontend.semantic import type_service
+
+    if vistos is None:
+        vistos = set()
+    for symbol in simbolos.values():
+        if id(symbol) in vistos:
+            continue
+        vistos.add(id(symbol))
+        symbol.type = type_service.canonical(symbol.type, scope)
+        if symbol.param_types is not None:
+            symbol.param_types = tuple(
+                type_service.canonical(p, scope) for p in symbol.param_types)
+        if symbol.members:
+            _canonicalizar(symbol.members, scope, vistos)
 
 
 def _validated_export(program: ast.Program, path: str, errors: List,

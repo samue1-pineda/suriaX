@@ -1,0 +1,50 @@
+/- calc — el conductor del frontend aritmético de la V1.
+
+ Hace lo que hace `V0/main.py`, en pequeño: coge un texto, lo pasa por las
+ dos etapas y enseña el resultado o el diagnóstico. La diferencia es que este
+ está escrito EN suriaX.
+
+ Se corre desde un directorio que tenga `lib/` con la stdlib y este paquete:
+
+   suri src/aritmetica/calc.srcx
+-/
+
+#from io #import stdp
+#import aritmetica.frontend as fe
+#import array.vector as vec
+
+/- Una expresión: se analiza, y sale el valor o el error. -/
+fn evaluar(str fuente) -> int {
+    var fe.Parser p = fe.parser_de(fuente);
+    var int valor = fe.evaluar(&p);
+    if (p.fallo) {
+        fe.mostrar_error(&p, fuente);
+        return 0;
+    }
+    stdp.println(f"{fuente} = {valor}");
+    return valor;
+}
+
+fn main() -> int {
+    stdp.println("-- expresiones validas");
+    evaluar("12 + 34 * 2");
+    evaluar("(1 + 2) * (3 + 4)");
+    evaluar("100 / 7 % 5");
+    evaluar("-(2 + 3) * -2");
+    evaluar("2 * 3 + 4 * 5");
+
+    stdp.println("");
+    stdp.println("-- errores");
+    evaluar("1 + ");
+    evaluar("(1 + 2");
+    evaluar("1 2");
+    evaluar("10 / 0");
+    evaluar("2 $ 3");
+
+    stdp.println("");
+    stdp.println("-- tokens de '7*(1+2)'");
+    var vec.Vector<fe.Token> ts = fe.tokenizar("7*(1+2)");
+    fe.mostrar_tokens(&ts);
+
+    return 0;
+}

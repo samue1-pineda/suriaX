@@ -1,4 +1,4 @@
-/- vector — VECTOR de CAPACIDAD FIJA de enteros, con MÉTODOS (@impl).
+/- vector — VECTOR de CAPACIDAD FIJA, GENÉRICO, con MÉTODOS (@impl).
 
  Filosofía libsrX: el vector es una LIBRERÍA sobre las primitivas de 'mem'
  (__reserve__ + indexación cruda 'buf[i]'), no un tipo mágico del compilador.
@@ -6,87 +6,144 @@
  con el receptor explícito 'Vector ptr [mutable] self':
 
    #import array.vector as vec
-   var vec.Vector v = vec.make(6);   // 6 espacios FIJOS, 0 elementos
-   v.push(10);                        // v.get(0) == 10
+   var vec.Vector<int> v = vec.make<int>(6);   // 6 espacios FIJOS, 0 elementos
+   v.push(10);                                  // v.get(0) == 10
    v.push(20);
-   v.get(1);                          // 20
-   v.len();                           // 2
-   v.pop();                           // 20 (quita el último)
+   v.get(1);                                    // 20
+   v.len();                                     // 2
+   v.pop();                                     // 20 (quita el último)
 
- CAPACIDAD FIJA: 'make(cap)' reserva 'cap' espacios y NO crece; 'push' sobre un
- vector lleno LANZA. 'v nums[5]' (azúcar de declaración con tamaño) y 'v[i]'
- (azúcar de indexado por el hook __index__) llegan en un paso posterior; hoy se
- usa 'vec.make(n)' y 'v.get(i)'.
+ El elemento es un parámetro de tipo, así que 'Vector<str>' o 'Vector<Punto>'
+ son el MISMO código: lo único que cambia es qué guarda cada celda.
 
- [REVISAR] MONOMÓRFICO (int): espera genéricos para 'T'.
+ DOS CONSTRUCTORES, un solo tipo:
+
+   vec.make<T>(n)      capacidad FIJA de n; 'push' sobre lleno LANZA.
+   vec.dynamic<T>(n)   n inicial; al llenarse duplica, copia y suelta el viejo.
+
+ La azúcar de declaración 'int vec.Vector v[5];' baja a 'make', o sea que fija:
+ el número que se escribe ahí es una reserva que el usuario pidió, y el
+ compilador promete avisar si se pasa (SEM033 cuando lo ve, 'throw' cuando no).
+ Un vector que creciera en silencio haría falsa esa promesa. Para todo lo demás
+ —listas que no saben su tamaño de antemano— está 'dynamic'.
+
+ El indexado 'v[i]' funciona en las dos formas (hooks __index__/__index_set__).
 -/
 
 #import mem
 
 struct {
-    int ptr mutable datos;   // bloque contiguo reservado con mem.reserve
+    T ptr mutable datos;     // bloque contiguo reservado con mem.reserve<T>
     int len;                 // elementos en uso
-    int cap;                 // capacidad FIJA del bloque
-} Vector;
+    int cap;                 // espacios reservados ahora mismo
+    bool fija;               // ¿la capacidad es un LÍMITE o solo el tamaño de hoy?
+} Vector<T>;
 
-// constructor: vector vacío con capacidad FIJA 'cap' (usa 1 si te pasan 0).
-// 'make' es una funcion normal de la libreria, no sintaxis: suriaX no tiene
-// constructores. 'new' dejo de ser palabra reservada al retirarse las regiones.
-fn make(int cap) -> Vector {
+// constructor de capacidad FIJA: 'cap' espacios y ni uno más; 'push' sobre un
+// vector lleno LANZA.
+//
+// Sigue siendo el constructor por convención ('vec.Vector' -> 'vec.make') y
+// por eso es el que fija: es a donde baja la azúcar de declaración
+// 'int vec.Vector v[8];', y ahí el número que escribió el usuario es una
+// RESERVA que pidió, no una sugerencia. Que crezca en silencio convertiría en
+// mentira el diagnóstico que promete avisar cuando se pasa (SEM033 al
+// compilar, 'throw' al ejecutar). Para un vector que crece está 'dynamic'.
+fn make<T>(int cap) -> Vector<T> {
     var int real = cap;
     if (cap < 1) { real = 1; }
-    return Vector{ datos: mem.reserve(real), len: 0, cap: real };
+    return Vector<T>{ datos: mem.reserve<T>(real), len: 0, cap: real,
+                      fija: true };
+}
+
+// constructor que CRECE: 'inicial' es el primer bloque, no un límite. Al
+// llenarse reserva el doble, copia y suelta el viejo.
+//
+// Duplicar (y no crecer de uno en uno) es lo que hace que N 'push' cuesten
+// O(N) en total y no O(N²): cada elemento se copia como mucho una vez por
+// duplicación, y las duplicaciones son logarítmicas.
+fn dynamic<T>(int inicial) -> Vector<T> {
+    var int real = inicial;
+    if (inicial < 1) { real = 1; }
+    return Vector<T>{ datos: mem.reserve<T>(real), len: 0, cap: real,
+                      fija: false };
 }
 
 // métodos del tipo: 'v.push(x)', 'v.pop()', ... (receptor explícito 'self').
-@impl Vector {
-    // agrega 'x' al final. Capacidad FIJA: si está lleno, LANZA (no crece).
-    fn push(Vector ptr mutable self, int x) -> void {
-        if (self.len == self.cap) { throw "push sobre un vector lleno (capacidad fija)"; }
+@impl Vector<T> {
+    // agrega 'x' al final. Si está lleno: LANZA si la capacidad es fija,
+    // crece si no.
+    fn push(Vector<T> ptr mutable self, T x) -> void {
+        if (self.len == self.cap) {
+            if (self.fija) { throw "push sobre un vector lleno (capacidad fija)"; }
+            self.grow();
+        }
         self.datos[self.len] = x;
         self.len = self.len + 1;
     }
 
+    // reserva el doble, copia lo que hay y SUELTA el bloque viejo.
+    //
+    // El 'release' no es opcional: sin él cada duplicación abandonaría un
+    // bloque, y un lenguaje cuyo modelo es la propiedad no puede fugar en su
+    // contenedor más usado. Va al final a propósito — mientras se copia, el
+    // bloque viejo todavía es el único que tiene los datos.
+    fn grow(Vector<T> ptr mutable self) -> void {
+        var int nueva = self.cap * 2;
+        var T ptr mutable mayor = mem.reserve<T>(nueva);
+        mem.copy<T>(mayor, self.datos, self.len);
+        var T ptr mutable viejo = self.datos;
+        self.datos = mayor;
+        self.cap = nueva;
+        mem.release<T>(viejo);
+    }
+
     // quita y devuelve el último; 'throw' si el vector está vacío.
-    fn pop(Vector ptr mutable self) -> int {
+    fn pop(Vector<T> ptr mutable self) -> T {
         if (self.len == 0) { throw "pop sobre un vector vacío"; }
         self.len = self.len - 1;
         return self.datos[self.len];
     }
 
     // elemento en 'i' (mem verifica límites: RT013 si i está fuera de rango).
-    fn get(Vector ptr self, int i) -> int {
+    fn get(Vector<T> ptr self, int i) -> T {
         return self.datos[i];
     }
 }
 
 // indexado 'v[i]' (lectura): el hook __index__ se dispara con la sintaxis '[]'
 // sobre un Vector. Es un hook del set fijo, va fuera del bloque @impl.
-hook fn __index__(Vector ptr self, int i) -> int {
+hook fn __index__(Vector<T> ptr self, int i) -> T {
     return self.datos[i];
 }
 
 // escritura por indice 'v[i] = x' (dentro del rango ya reservado; mem verifica
 // limites con RT013). Complementa __index__ para un indexado completo.
-hook fn __index_set__(Vector ptr mutable self, int i, int x) -> void {
+hook fn __index_set__(Vector<T> ptr mutable self, int i, T x) -> void {
     self.datos[i] = x;
 }
 
-@impl Vector {
+@impl Vector<T> {
 
     // reemplaza el elemento en 'i' por 'x'.
-    fn set(Vector ptr mutable self, int i, int x) -> void {
+    fn set(Vector<T> ptr mutable self, int i, T x) -> void {
         self.datos[i] = x;
     }
 
     // cantidad de elementos en uso.
-    fn len(Vector ptr self) -> int {
+    fn len(Vector<T> ptr self) -> int {
         return self.len;
     }
 
-    // capacidad FIJA (cuántos espacios se reservaron).
-    fn cap(Vector ptr self) -> int {
+    // espacios reservados ahora mismo (en uno dinámico, sube al crecer).
+    fn cap(Vector<T> ptr self) -> int {
         return self.cap;
+    }
+
+    // ¿su capacidad es un límite? 'true' en los de 'make', 'false' en los de
+    // 'dynamic'. Lo publica para que quien recibe un vector ajeno pueda saber
+    // si un 'push' suyo puede lanzar.
+    fn fixed(Vector<T> ptr self) -> bool {
+        return self.fija;
     }
 }
 

@@ -65,13 +65,32 @@ def default_config() -> dict:
         ),
         "optimization": "O0",  # O0 | O1 | O2 | O3
 
-        # --- toolchain: rutas que el backend nativo usa para enlazar ---
+        # --- toolchain: lo que hace falta para COMPILAR, no para usar el
+        # compilador. Todo lo de aqui es del compilador (suriaX); las
+        # herramientas que lo rodean (suriniX) no ponen nada en esta seccion.
+        #
         # El target nativo es la VM de bytecode con JIT; LLVM no esta en la
         # ruta de generacion de codigo (ver ARCHITECTURE.md), asi que aqui no
         # hay nada suyo que configurar.
         "toolchain": {
             "linker": deps.detect_linker(),
             "sysroot": os.environ.get("SURIAX_SYSROOT", ""),
+
+            # --- '#extern cpp' / '#extern c': un COMPILADOR, no un build
+            # system. Traer codigo de C++ no puede exigirle al usuario un
+            # CMake ni un Makefile: se detecta el compilador que ya tiene y
+            # se invoca. Vacio = detectar; escrito = usar ese y no buscar.
+            "cxx_compiler": deps.detect_cxx(),
+            "c_compiler": deps.detect_cc(),
+            # rutas de cabeceras para los bloques '#extern' (cada una entra
+            # como '-I<ruta>'). Aqui va lo que un tercero instalo en un sitio
+            # que el compilador no mira por defecto.
+            "include_c_paths": [],
+            # banderas que el USUARIO anade a la compilacion de sus bloques.
+            # Es donde vive '-lGL', '-lX11' o '-pthread': dependen de la
+            # maquina y de lo que el bloque use, no del lenguaje.
+            "cxx_flags": [],
+            "c_flags": [],
         },
 
         # --- target detallado: triple/arch/artefacto + opciones wASM ---

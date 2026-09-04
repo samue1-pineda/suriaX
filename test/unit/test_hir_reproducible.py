@@ -122,6 +122,49 @@ def test_dos_procesos_emiten_los_mismos_bytes():
         "programa: la serialización no es reproducible")
 
 
+def test_el_codec_propio_coincide_con_google_protobuf():
+    """El `.phir` que escribimos es protobuf DE VERDAD, no un formato parecido.
+
+    Desde que el HIR se serializa a mano (``src/HIR/wire.py``, ver
+    ``PROTOBUF_BRIDGE.md``), el emisor y el lector del proyecto son del mismo
+    autor: podrían compartir un malentendido del formato y las pruebas de ida
+    y vuelta pasarían igual. Esta es la que no puede: los bytes los parsea
+    ``google.protobuf`` con el descriptor generado del ``.proto``, y se
+    comprueba que re-serializarlos dé el MISMO mensaje.
+
+    No compara bytes: el orden de las entradas de un ``map`` no es parte del
+    dato, y protobuf ni siquiera lo garantiza estable entre implementaciones
+    (este codec sí lo fija, por clave). Lo que tiene que coincidir es el
+    mensaje.
+
+    Se SALTA si la librería o el stub generado no están — que es justamente
+    el punto de haberlos quitado: el proyecto ya no los necesita para
+    funcionar, solo para esta comprobación cruzada.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("google.protobuf") is None:
+        return
+    stub = os.path.join(_REPO_ROOT, "V0", "src", "HIR", "gen", "hir_pb2.py")
+    if not os.path.isfile(stub):
+        return
+
+    spec = importlib.util.spec_from_file_location("hir_pb2_real", stub)
+    real = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("hir_pb2_real", real)
+    try:
+        spec.loader.exec_module(real)
+    except Exception:
+        return          # gencode y runtime incompatibles: no es lo que se prueba
+
+    nuestros, _modulo = _emitir()
+    a = real.Module()
+    a.ParseFromString(nuestros)                  # falla si los bytes no valen
+    b = real.Module()
+    b.ParseFromString(a.SerializeToString(deterministic=True))
+    assert a == b, "protobuf no reconstruye el mismo mensaje desde nuestros bytes"
+
+
 def test_el_emisor_es_el_unico_que_serializa():
     """Frontera: el conocimiento de ``google.protobuf`` se queda en el
     paquete HIR (lo dice el docstring de ``module_to_text``, y durante un
@@ -135,7 +178,11 @@ def test_el_emisor_es_el_unico_que_serializa():
             if not name.endswith(".py"):
                 continue
             path = os.path.join(carpeta, name)
-            if path.endswith(os.path.join("HIR", "emmit_IR.py")):
+            # 'emmit_IR' es el emisor; 'wire' es el codec que IMPLEMENTA
+            # 'SerializeToString'. La regla es sobre quien lo LLAMA —nadie
+            # debe saltarse el emisor— no sobre quien lo define.
+            if path.endswith(os.path.join("HIR", "emmit_IR.py")) \
+                    or path.endswith(os.path.join("HIR", "wire.py")):
                 continue
             with open(path, encoding="utf-8") as fh:
                 if "SerializeToString" in fh.read():

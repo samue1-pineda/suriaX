@@ -59,6 +59,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
 include(SuriaXOptions)
 include(SuriaXNativeModule)
 include(SuriaXDiscover)
+include(SuriaXBackend)
 
 # Python + pybind11 se resuelven una vez para TODOS los módulos (buscarlos por
 # módulo era el mayor coste de configuración del esquema anterior).
@@ -83,6 +84,14 @@ if(suriax_native_targets)
 endif()
 
 # ---------------------------------------------------------------------------
+# backend C++: el lector del HIR, entrada del futuro lowering a MIR
+# ---------------------------------------------------------------------------
+suriax_add_backend(
+    ROOT  "${CMAKE_CURRENT_SOURCE_DIR}/backend"
+    PROTO "${CMAKE_CURRENT_SOURCE_DIR}/V0/src/HIR/proto/hir.proto"
+)
+
+# ---------------------------------------------------------------------------
 # suite de pruebas del repo (frontend Python + backend web) desde CMake
 # ---------------------------------------------------------------------------
 if(Python3_EXECUTABLE)
@@ -95,6 +104,11 @@ if(Python3_EXECUTABLE)
     if(suriax_native_targets)
         # con memoria nativa disponible, la suite la ejercita: compilar antes.
         add_dependencies(suriax-test suriax-native)
+    endif()
+    if(TARGET suriax-hir)
+        # el test diferencial del lector C++ compara su salida con la de
+        # Python: sin el binario, se salta y no prueba nada.
+        add_dependencies(suriax-test suriax-hir)
     endif()
 endif()
 

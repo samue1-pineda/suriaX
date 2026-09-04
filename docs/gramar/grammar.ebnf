@@ -87,7 +87,11 @@ from_dir       = "#from" lib_name "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";"
 
 (* interoperabilidad C++: el cuerpo se captura crudo (RAW_BLOCK).           *)
 (* "cpp" aquí = IDENTIFIER('cpp'), tampoco es keyword (ver lexer).          *)
-extern_block   = "#extern" "cpp" RAW_BLOCK ;                        (* [OK] *)
+extern_block   = "#extern" "cpp" [ requires_cl ] RAW_BLOCK ;         (* [OK] *)
+requires_cl    = "requires" "(" STRING { "," STRING } ")" ;          (* [OK] *)
+                                       (* banderas que ESTA unidad necesita  *)
+                                       (* para compilar/enlazar su C++; el   *)
+                                       (* linker las suma a las del proyecto *)
                  (* RAW_BLOCK = "{" ?texto C++ crudo, llaves balanceadas? "}" *)
 
 (* ----------------------------- funciones -------------------------------- *)
@@ -113,8 +117,12 @@ trait_method   = [ specifier ] "fn" ( IDENTIFIER | DUNDER )
                  "(" [ trait_params ] ")" [ "->" type ] ";" ;
 trait_params   = type { "," type } ;   (* TIPOS sin nombre; 'self' = el tipo que hara @impl *)
 
-function_decl  = "fn" ( IDENTIFIER | DUNDER )                       (* [OK]  "->" = ARROW *)
+function_decl  = "fn" ( IDENTIFIER | DUNDER ) type_params           (* [OK]  "->" = ARROW *)
                  "(" [ param_list ] ")" [ "->" type ] ( block | ";" ) ;
+                                       (* 'type_params' hace la funcion GENERICA:     *)
+                                       (* 'fn make<T>(int n) -> Vector<T>'. Van pegados*)
+                                       (* al NOMBRE, como en struct/type. Aqui no hay  *)
+                                       (* ambiguedad con '<': es una DECLARACION.      *)
                                        (* El 'specifier' opcional ('hook'/'dunder',  *)
                                        (* secc. top_level) va DELANTE de 'fn' y EXIGE *)
                                        (* que el nombre sea DUNDER ('__x__'). Un      *)
@@ -212,6 +220,13 @@ qualifier      = "const" | "var" ;    (* sin qualifier = 'var' (mutable, estilo 
 (* use-after-move que el analisis estatico conservador no ve.                 *)
 (* 'free' (mas abajo) destruye ANTES del cierre del ambito.                  *)
 move_stmt      = "move" expression ";" ;                            (* [OK] *)
+(* ...y 'move' TAMBIEN es una expresion: 'var Buffer b = move origen;'.     *)
+(* Las dos formas transfieren; la diferencia es que la expresion ENTREGA el *)
+(* valor. Sin ella no habia forma de ligar a otro nombre algo que posee     *)
+(* recursos —ligarlo a secas deja dos duenos y su destructor corre dos      *)
+(* veces (SEM032)—, y el modelo de memoria documentado la usaba desde el    *)
+(* principio.                                                               *)
+move_expr      = "move" unary ;                                     (* [OK] *)
 
 if_stmt        = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ] ;  (* [OK] *)
 while_stmt     = "while" "(" expression ")" block ;                 (* [OK] *)
@@ -269,8 +284,12 @@ unary          = ( "not" | "-" ) unary                       (* 'move' es senten
 
 postfix        = ( primary | struct_literal )
                  { ( "." IDENTIFIER
-                   | "(" [ arg_list ] ")"
+                   | [ type_args ] "(" [ arg_list ] ")"
                    | "[" expression "]" ) } ;
+                                       (* 'type_args' antes de '(' instancia una       *)
+                                       (* funcion generica: 'make<int>(4)'. Misma       *)
+                                       (* ambiguedad y misma resolucion que el literal  *)
+                                       (* de un generico (ver 'struct_literal').        *)
 
 (* instanciación de un struct nominal: ÚNICA forma nativa de construir un   *)
 (* valor de struct (sin 'alloc'). Se reconoce cuando un NOMBRE va          *)
@@ -283,8 +302,9 @@ postfix        = ( primary | struct_literal )
 (* que la librería lo declaró.                                             *)
 (* Un GENERICO escribe sus argumentos: 'Caja<int>{ v: 1 }'. Es la UNICA     *)
 (* posicion del lenguaje donde '<' es ambiguo (comparacion vs argumentos de  *)
-(* tipo) y se resuelve mirando: solo son argumentos si tras el '>' viene un  *)
-(* '{'. Si no, el parser retrocede y el '<' vuelve a ser el operador.        *)
+(* tipo) y se resuelve mirando QUE HAY TRAS EL '>': un '{' abre un literal   *)
+(* y un '(' una llamada generica ('make<int>(4)'). Cualquier otra cosa y el   *)
+(* parser retrocede: el '<' vuelve a ser el operador que siempre fue.        *)
 struct_literal = IDENTIFIER { "." IDENTIFIER } [ type_args ]
                  "{" [ field_init { "," field_init } [ "," ] ] "}" ;
 field_init     = IDENTIFIER ":" expression ;
@@ -383,7 +403,14 @@ digit          = "0" … "9" ;
 (* con '{{' y '}}' como llave literal. OJO: el lexer NO parsea 'expression'  *)
 (* dentro de '{ }'; captura el texto crudo (Interp) y su análisis queda      *)
 (* para el parser. Ambas formas producen el mismo token STRING_LIT.          *)
-STRING_LIT     = plain_string | f_string ;                         (* [OK] *)
+(*                                                                          *)
+(* CONCATENACIÓN: dos o más literales ADYACENTES forman uno solo (como en C, *)
+(* C++ y Python), y los funde el LEXER — es como se parte un mensaje largo   *)
+(* en varias líneas sin pagar una concatenación en ejecución. Cada literal   *)
+(* conserva SU regla: 'f"a{x}" "{y}"' interpola {x} y no {y}, porque la      *)
+(* interpolación ya se resolvió al escanear cada uno. Los CHAR_LIT NO se     *)
+(* concatenan (son otro token, igual que en C).                             *)
+STRING_LIT     = ( plain_string | f_string ) { plain_string | f_string } ;  (* [OK] *)
 plain_string   = '"' { plain_char | escape } '"' ;
 f_string       = "f" '"' { str_char | interp | escape } '"' ;
 interp         = "{" ?texto crudo de la expresión? "}" ;

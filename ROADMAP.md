@@ -94,7 +94,10 @@
   librería (`vec<int>`) [x]
 - `#test <fase>` tolerante: case-insensitive, objetivo desconocido lista
   las fases disponibles [x]
-- Lector de HIR en C++ (entrada del lowering a MIR) [ ]
+- Lector de HIR en C++ (entrada del lowering a MIR) [x]
+  (`backend/`: fail-fast de esquema, tabla de símbolos, module linker y
+  `switch` exhaustivo por `oneof`; sus vistas son byte-idénticas a las de
+  Python y `test/e2e/test_backend_cpp.py` lo comprueba)
 
 ## Fase 5.5: Intérprete tree-walk (consume HIR)
 
@@ -131,7 +134,7 @@
 
 ## Fase 6: Backend C++ 
 
-- Lector de HIR en C++ [ ]
+- Lector de HIR en C++ [x] (`backend/`, ver Fase 5)
 - **MIR lowering**: control de flujo explícito; verificación final de
   propiedad y **préstamos** (tiempos de vida de `ptr`) sobre el MIR [ ]
 - **VM de bytecode + JIT**: el target NATIVO estándar (LLVM queda fuera del
@@ -140,7 +143,10 @@
   primero funcionando) [ ]
 - Targets por `compilerconfig`: `IS_WEB`→wASM, `IS_WIN32`→.exe, `IS_LINUX`→.o [ ]
 - **Linker** por plataforma (Linux web y Windows) [ ]
-- Integración del C++ de `#extern cpp{}` vía bindings (pybind11) [ ]
+- Integración del C++ de `#extern cpp{}` vía bindings (pybind11) [ / ]
+  (el viaje está hecho: `suriax-hir --emit-cpp` produce la unidad de
+  traducción con `#line` al `.srcx`, verificada compilándola de verdad;
+  falta enlazarla, que depende de la VM)
 - `#test mir` / `#test bytecode` (volcado de cada IR) [ ]
 
 ## Fase 7: Visualizaciones integradas  
@@ -148,6 +154,10 @@
 >para debugging se desarrollaran algunas visualizaciones pero la version final y pulida espera a la version web
 
 - Volcado por etapa: **tokens, AST, HIR, MIR, bytecode** [ / ]
+  (todo lo que existe se ve ya en [`playground/`](playground/README.md): los
+  tokens con su posición, el AST y el AST-tipado como árbol, la tabla de
+  símbolos como diagrama de clases, el HIR en su vista legible y el
+  WebAssembly como `.wat`. Falta el MIR, que no existe)
 - Formatos: texto, **JSON** (consumible por herramientas) y **DOT/Graphviz**
   (árboles y CFG) [ / ]
 - Visualización del **CFG** del MIR y del flujo de propiedad (`move`/drop) [ ]
@@ -156,10 +166,30 @@
 
 ## Fase 8: Playground (web)  
 
-- Compilación a **wASM** junto a Emscripten [ ]
-- Editor web con ejecución del frontend en el navegador [ ]
-- Visualizaciones integradas en el playground[ ]
-- Compartir snippets / ejemplos [ ]
+> Vive en [`playground/`](playground/README.md) y se despliega en Railway
+> (`Procfile`). El frontend **no** se reimplementó en TypeScript: la página
+> pide las fases al compilador de verdad (`driver/artifacts`), que es lo que
+> evita tener dos respuestas para la misma pregunta.
+
+- Editor web con las fases del compilador [x]
+- Visualizaciones integradas en el playground [x]
+  (tokens con resaltado de su línea al pasar el ratón, AST y AST-tipado como
+  árbol plegable, símbolos como diagrama de clases, HIR legible, `.wat`)
+- Ejecutar el programa desde la página [ ]
+  (el intérprete corre en el servidor: ejecutar código de cualquiera exige
+  aislamiento y límites, que es otra decisión)
+- Compartir snippets / ejemplos [ / ] (hay ejemplos cargables; falta compartir)
+- Compilación del propio frontend a wASM junto a Emscripten [ ]
+  (dejaría de hacer falta el servidor; no es necesario para que la página
+  funcione)
+
+> **Bloqueado por genéricos de FUNCIÓN** (`fn make<T>(...)`), que no existen:
+> los genéricos de TIPO sí. Sin ellos `lib/array/vector` no puede dejar de ser
+> monomórfico de `int` (el tipo puede ser genérico; su fábrica y sus métodos,
+> no), y los **literales de arreglo** (`[1,2,3]`) tampoco tienen respuesta
+> buena — la natural es `Vector<T>`. El diseño está fijado: instanciación
+> EXPLÍCITA (`make<int>()`), porque no hay inferencia por decisión registrada.
+> El análisis completo, con lo que cuesta cada uno, está en `c_errorstfix.md`.
 
 ## Fase 9: Librerías nativas (libsrX)  
 

@@ -145,6 +145,35 @@ def detect_linker() -> str:
     return ""
 
 
+def detect_cxx() -> str:
+    """El compilador de C++ del sistema, o ``""``.
+
+    ``#extern cpp`` se compila con ESTO y con nada más: el usuario no tiene
+    que traer un sistema de build. Se respeta ``CXX`` como en cualquier
+    proyecto de C++, y si no está se prueban los dos habituales.
+    """
+    desde_entorno = os.environ.get("CXX")
+    if desde_entorno:
+        return shutil.which(desde_entorno) or ""
+    for name in ("g++", "clang++"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return ""
+
+
+def detect_cc() -> str:
+    """El compilador de C del sistema, o ``""`` (espejo de :func:`detect_cxx`)."""
+    desde_entorno = os.environ.get("CC")
+    if desde_entorno:
+        return shutil.which(desde_entorno) or ""
+    for name in ("gcc", "clang", "cc"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return ""
+
+
 def machine_arch() -> str:
     return platform.machine()
 
@@ -153,4 +182,5 @@ __all__ = [
     "IS_WIN32", "IS_LINUX", "IS_MACOS", "IS_WEB",
     "DependencyError", "check_dependencies", "ensure_dependencies",
     "detect_target_triple", "default_artifact", "detect_linker", "machine_arch",
+    "detect_cxx", "detect_cc",
 ]

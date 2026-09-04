@@ -22,6 +22,7 @@ from typing import Any, List, Optional
 
 from .enviroment.environment import Frame
 from .errors import (
+    DivisionByZeroError, MissingReturnError,
     IndexOutOfRangeError, InvalidCastRuntimeError, InvalidFreeError,
     MissingIntrinsicError, NotCallableError, NotIndexableError,
     NullDereferenceError, StepLimitError, SuriaXRuntimeError,
@@ -34,7 +35,7 @@ from .memory.pointer import Cell, CellState, Pointer
 from .values import (
     EnumNamespace, EnumValue, FunctionValue, Namespace, StructValue,
     TypeValue, VariantCtor,
-    format_value,
+    copy_on_bind, format_value,
 )
 
 
@@ -43,6 +44,17 @@ class _Return(Exception):
 
     def __init__(self, value: Any) -> None:
         self.value = value
+
+
+def _void_kind_value() -> int:
+    """El valor de ``TypeKind.VOID``, leído del esquema (no cableado)."""
+    from V0.src.HIR.stubs import load_hir_pb2
+    return load_hir_pb2().TypeKind.Value("VOID")
+
+
+#: se resuelven una vez por proceso: el enum del esquema no cambia en caliente.
+_VOID_KIND = None
+_POINTER_KIND = None
 
 
 class _Break(Exception):
@@ -72,6 +84,7 @@ class Thrown(Exception):
 # TypeKind del esquema (valores estables del .proto; ver hir.proto)
 _TK_BOOL, _TK_INT, _TK_FLOAT, _TK_CHAR, _TK_STR = 2, 3, 4, 5, 6
 _TK_NOMINAL = 9   # espejo de TypeKind.NOMINAL en el esquema del HIR
+_SK_ENUM = 3      # espejo de SymbolKind.ENUM
 
 
 class Evaluator:
@@ -109,6 +122,7 @@ class Evaluator:
         self._index_set_kind = _hk.Value("INDEX_SET")
         self._len_kind = _hk.Value("LEN")
         self._eq_kind = _hk.Value("EQ")
+
         self._stmt_dispatch = {
             "block": self._stmt_block,
             "var_decl": self._stmt_var_decl,
@@ -139,6 +153,7 @@ class Evaluator:
             "member": self._expr_member,
             "sizeof": self._expr_sizeof,
             "cast_expr": self._expr_cast,
+            "move_expr": self._expr_move,
             "struct_literal": self._expr_struct_literal,
         }
 
@@ -178,20 +193,80 @@ class Evaluator:
 
         frame = Frame(parent=unit.globals_frame)
         for param, value in zip(decl.params, args):
-            frame.define(param.name, Cell(value, name=param.name))
+            # Semántica de VALOR: el llamado recibe SU copia, así que mutar
+            # un parámetro no toca lo del llamador. Un parámetro declarado
+            # 'ptr' NO se copia: un puntero es un préstamo, y copiarlo
+            # rompería justo lo que existe para permitir — que un hook o un
+            # método muten el receptor. Lo decide el TIPO DECLARADO, que es
+            # quien lo dice en el lenguaje.
+            frame.define(param.name,
+                         Cell(value if self._es_prestamo(unit, param)
+                              else copy_on_bind(value), name=param.name))
         result = None
+        devolvio = False
         previa = self.unit
         self.unit = unit
         try:
             self._exec_block(decl.body, Frame(parent=frame))
         except _Return as ret:
             result = ret.value
+            devolvio = True
         finally:
             self.unit = previa
             self.depth -= 1
+        # Caerse por el final de una función con tipo de retorno entregaba
+        # 'null' en silencio. El tipo de retorno viaja en el HIR, así que aquí
+        # se sabe que faltaba un valor.
+        if not devolvio and self._devuelve_valor(unit, decl):
+            raise MissingReturnError(
+                f"la función '{decl.name}' terminó sin devolver un valor y su "
+                "tipo de retorno no es 'void'",
+                ln=ln, col=col,
+            )
         if self.trace_exec:
             self.emit(f"[ret ] {decl.name} -> {format_value(result)}")
         return result
+
+    @staticmethod
+    def _es_prestamo(unit, param) -> bool:
+        """¿El parámetro está declarado como puntero (un préstamo)?
+
+        El pool de tipos es de la UNIDAD, igual que en el retorno: se resuelve
+        contra la unidad donde vive la función, no contra la del llamador.
+        """
+        global _POINTER_KIND
+        if _POINTER_KIND is None:
+            from V0.src.HIR.stubs import load_hir_pb2
+            _POINTER_KIND = load_hir_pb2().TypeKind.Value("POINTER")
+        type_id = param.type_id
+        types = unit.module.types
+        if type_id == 0 or type_id >= len(types):
+            return False
+        return types[type_id].kind == _POINTER_KIND
+
+    @staticmethod
+    def _devuelve_valor(unit, decl) -> bool:
+        """¿``decl`` declara un tipo de retorno distinto de ``void``?
+
+        El pool de tipos es de la UNIDAD, así que el ``type_id`` se resuelve
+        contra el de la unidad donde vive la función — no contra el del
+        llamador. Resolverlo en la unidad equivocada daba a ``printf`` de
+        ``IO.stdpf`` un tipo de retorno que no era el suyo.
+
+        El índice 0 del pool es "sin tipo" y ``void`` es un tipo con nombre:
+        los dos significan "no hay valor que devolver", pero por motivos
+        distintos, así que se preguntan los dos.
+        """
+        global _VOID_KIND
+        if _VOID_KIND is None:
+            _VOID_KIND = _void_kind_value()
+        type_id = decl.return_type_id
+        if type_id == 0:
+            return False
+        types = unit.module.types
+        if type_id >= len(types):
+            return False
+        return types[type_id].kind != _VOID_KIND
 
     # ------------------------------------------------------------------ #
     # statements
@@ -300,7 +375,9 @@ class Evaluator:
     def _stmt_var_decl(self, stmt, frame: Frame) -> None:
         vd = stmt.var_decl
         value = self.eval_expr(vd.value, frame) if vd.HasField("value") else None
-        frame.define(vd.name, Cell(value, name=vd.name))
+        # ...misma regla que en los parámetros: ligar un struct a un nombre
+        # nuevo lo COPIA. El único tipo que refiere a otro sitio es 'ptr'.
+        frame.define(vd.name, Cell(copy_on_bind(value), name=vd.name))
 
     def _stmt_type_decl(self, stmt, frame: Frame) -> None:
         td = stmt.type_decl
@@ -456,28 +533,53 @@ class Evaluator:
     def _stmt_continue(self, stmt, frame: Frame) -> None:
         raise _Continue()
 
-    def _stmt_move(self, stmt, frame: Frame) -> None:
-        target = stmt.move_stmt.target
+    def _expr_move(self, expr, frame: Frame) -> Any:
+        """``move x`` como EXPRESION: LEE el valor y luego invalida el origen.
+
+        El orden importa: leer primero es lo que distingue esta forma de la
+        sentencia. Una celda movida no se puede leer (``RT001``), así que
+        invalidar antes se llevaría por delante el valor que hay que entregar.
+
+        El valor se devuelve **sin copiar**: es el mismo objeto, que es
+        justamente lo que significa transferirlo. Quien lo reciba lo liga tal
+        cual — la copia de ``copy_on_bind`` solo aplica a lo que se comparte,
+        y aquí no queda nadie con quien compartir.
+        """
+        target = expr.move_expr.operand
+        value = self.eval_expr(target, frame)
+        self._invalidar(target, frame, ln=expr.ln, col=expr.col)
+        return value
+
+    def _invalidar(self, target, frame: Frame, *, ln: int, col: int) -> None:
+        """Marca como MOVIDA la celda que nombra ``target``.
+
+        La comparten la sentencia y la expresión: las dos transfieren, y que
+        el drop del bloque respete la transferencia no puede depender de en
+        qué posición se escribió el ``move``.
+        """
         if target.WhichOneof("node") == "identifier":
-            cell = frame.lookup(target.identifier.name, ln=stmt.ln, col=stmt.col)
-            cell.move_out(ln=stmt.ln, col=stmt.col)
+            cell = frame.lookup(target.identifier.name, ln=ln, col=col)
+            cell.move_out(ln=ln, col=col)
             if self.trace:
                 self.emit(f"[mem] move '{cell.name}' (celda invalidada)  "
-                          f"{stmt.ln}:{stmt.col}")
+                          f"{ln}:{col}")
             return
         # forma compuesta ('move p.x'): el CAMPO tiene su propia celda, asi
         # que la transferencia se marca ahi. Sin esto el drop del bloque
         # bajaria a ese campo y destruiria lo que ya se habia entregado.
         cell = self._ruta_local(target, frame)
         if cell is not None:
-            cell.move_out(ln=stmt.ln, col=stmt.col)
+            cell.move_out(ln=ln, col=col)
             if self.trace:
                 self.emit(f"[mem] move campo '{cell.name}' (celda invalidada)  "
-                          f"{stmt.ln}:{stmt.col}")
+                          f"{ln}:{col}")
             return
         # ruta dinamica ('move a[i].x'): sus lecturas si se verifican; el
         # rastreo fino queda para el MIR (mismo criterio que memory_check).
         self.eval_expr(target, frame)
+
+    def _stmt_move(self, stmt, frame: Frame) -> None:
+        self._invalidar(stmt.move_stmt.target, frame, ln=stmt.ln, col=stmt.col)
 
     def _stmt_free(self, stmt, frame: Frame) -> None:
         node = stmt.free_stmt
@@ -616,7 +718,7 @@ class Evaluator:
         operand = self.eval_expr(node.operand, frame)
         if node.op == "not":
             return not operand
-        return -operand  # '-'
+        return self._arith(-operand)  # '-' (negar INT_MIN también desborda)
 
     def _expr_addr_of(self, expr, frame: Frame) -> Pointer:
         node = expr.addr_of
@@ -639,6 +741,31 @@ class Evaluator:
             ln=expr.ln, col=expr.col,
         )
 
+    @staticmethod
+    def _wrap64(value: int) -> int:
+        """El ``int`` de suriaX es de 64 bits CON SIGNO: envuelve al desbordar.
+
+        Python no tiene ese límite, así que sin esto el intérprete daba
+        9223372036854775808 donde el target web —que sí envuelve, con
+        ``BigInt.asIntN(64, …)``— daba el mínimo negativo, y donde una VM
+        nativa dará lo mismo que el web. Es el MISMO argumento que ya obligó
+        a que ``%`` tome el signo del dividendo: dos targets del mismo
+        programa no pueden dar números distintos.
+
+        Y además evitaba un fallo peor: guardar el valor desbordado en una
+        celda del backend nativo reventaba con un error de pybind11
+        ("Unable to cast Python instance of type int to C++ type"), porque
+        ahí una celda es un ``int64_t`` de verdad. Un error del binding no es
+        un diagnóstico del lenguaje.
+        """
+        value &= 0xFFFFFFFFFFFFFFFF
+        return value - 0x10000000000000000 if value >= 0x8000000000000000 else value
+
+    @classmethod
+    def _arith(cls, value: Any) -> Any:
+        """Resultado de una operación aritmética, envuelto si es entero."""
+        return cls._wrap64(value) if type(value) is int else value
+
     def _expr_binary(self, expr, frame: Frame) -> Any:
         node = expr.binary
         op = node.op
@@ -651,17 +778,48 @@ class Evaluator:
         left = self.eval_expr(node.left, frame)
         right = self.eval_expr(node.right, frame)
         if op == "+":
-            return left + right
+            return self._arith(left + right)
         if op == "-":
-            return left - right
+            return self._arith(left - right)
         if op == "*":
-            return left * right
+            return self._arith(left * right)
         if op == "/":
             # división entera para ints (idioma 'i / 3 * 3 == i' de los
             # ejemplos); real para floats — el tipado fuerte ya garantizó
             # operandos homogéneos.
+            #
+            # Dividir por cero es un ERROR solo entre ENTEROS: ahí no hay
+            # respuesta y la instrucción del hardware trapea. Entre flotantes
+            # sí la hay y está en la norma que el lenguaje declara seguir —
+            # IEEE-754 dice '1.0 / 0.0 == +inf'—, así que lanzar ahí inventaba
+            # un error donde el target web (y cualquier FPU) daba un valor.
+            if right == 0 and isinstance(left, int) \
+                    and not isinstance(left, bool):
+                raise DivisionByZeroError(
+                    "división por cero", ln=expr.ln, col=expr.col)
             if isinstance(left, int) and not isinstance(left, bool):
-                return left // right
+                # TRUNCA HACIA CERO (como C y como 'i64.div_s', no como el
+                # '//' de Python, que redondea hacia abajo): '-7 / 2' es -3,
+                # no -4. Es la misma decisión que ya estaba tomada dos casos
+                # más abajo para el resto — y tenía que serlo, porque las dos
+                # operaciones se sostienen mutuamente: con este cociente y
+                # aquel resto se cumple '(a/b)*b + a%b == a', que con el
+                # cociente de Python NO se cumplía ('-9' en vez de '-7').
+                cociente = abs(left) // abs(right)
+                if (left < 0) != (right < 0):
+                    cociente = -cociente
+                # ...y la división también desborda, en un solo punto:
+                # INT_MIN / -1 no cabe en 64 bits con signo.
+                return self._wrap64(cociente)
+            # IEEE-754 a mano: el '/' de Python lanza tambien entre flotantes,
+            # asi que el infinito con signo (y el NaN de '0.0/0.0') se
+            # construyen aqui. Es lo que hace la FPU y lo que ya hacia el
+            # target web.
+            if right == 0:
+                if left == 0:
+                    return math.nan
+                signo = math.copysign(1.0, left) * math.copysign(1.0, right)
+                return math.copysign(math.inf, signo)
             return left / right
         if op == "%":
             # resto CON EL SIGNO DEL DIVIDENDO (como C, no como Python):
@@ -669,10 +827,17 @@ class Evaluator:
             # de resto del hardware, que hace justo esto; si el intérprete
             # usara el '%' de Python, los dos targets darían números distintos
             # para el mismo programa.
+            # mismo criterio que la división: entre flotantes, IEEE-754 da
+            # NaN y no hay error que reportar.
+            if right == 0 and isinstance(left, int) \
+                    and not isinstance(left, bool):
+                raise DivisionByZeroError(
+                    "resto de una división por cero", ln=expr.ln, col=expr.col)
             if isinstance(left, int) and not isinstance(left, bool):
                 resto = abs(left) % abs(right)
                 return -resto if left < 0 else resto
-            return math.fmod(left, right)
+            # 'fmod(x, 0.0)' lanza en Python; IEEE-754 dice NaN.
+            return math.nan if right == 0 else math.fmod(left, right)
         if op == "==":
             eq = self._dispatch_eq(left, right, expr)
             return (left == right) if eq is None else eq
@@ -826,6 +991,20 @@ class Evaluator:
         # 'v[i]' sobre un tipo NOMINAL con hook __index__: despacha al hook
         # (v.gr. un vector de librería). El indexado crudo de puntero/bloque
         # sigue por _element_cell.
+        # 's[i]' sobre una CADENA: nativo, igual que 'len(s)'. Una cadena es
+        # inmutable y sus elementos son code points, asi que el indice cuenta
+        # CARACTERES y no bytes — es lo mismo que cuenta 'len', y contar dos
+        # cosas distintas con la misma cadena habria sido la trampa.
+        if isinstance(base, str):
+            if not isinstance(idx, int) or isinstance(idx, bool):
+                raise IndexOutOfRangeError(
+                    f"el indice de una cadena es un entero, no "
+                    f"{format_value(idx)}", ln=expr.ln, col=expr.col)
+            if idx < 0 or idx >= len(base):
+                raise IndexOutOfRangeError(
+                    f"indice {idx} fuera de la cadena (longitud {len(base)})",
+                    ln=expr.ln, col=expr.col)
+            return base[idx]
         if isinstance(base, StructValue):
             bound = self.image.hooks.get(hook_key(base.type_name, self._index_kind))
             if bound is not None:
@@ -901,6 +1080,16 @@ class Evaluator:
         # Hace falta el par completo porque un tipo puede declarar VARIAS
         # conversiones ('int -> int8' y 'float -> int8'), y el HookRef del
         # nodo —(dueño, clase, nombre)— no las distingue.
+        # 'cast<TType>(1)' hacia un ENUM sin payload: el valor ya ES el
+        # entero, asi que la conversion no transforma nada — solo le pone
+        # nombre, y el nombre es cosa de la compilacion. La Semantica ya
+        # comprobo que el literal sea uno de los declarados; aqui no queda
+        # trabajo. Va ANTES de la tabla para que un enum no necesite declarar
+        # un '__cast__' que no haria nada.
+        if self._es_enum(node.type) and isinstance(value, int) \
+                and not isinstance(value, bool):
+            return value
+
         destino = type_key(node.type)
         bound = self.image.casts.get((self._tipo_de(node.value), destino))
         if bound is not None:
@@ -923,6 +1112,22 @@ class Evaluator:
             f"sin conversión registrada para este par (valor: "
             f"{format_value(value)})", ln=expr.ln, col=expr.col,
         )
+
+    def _es_enum(self, tipo) -> bool:
+        """¿``tipo`` nombra un enum SIN payload de la unidad activa?
+
+        La respuesta esta en la tabla de simbolos que el HIR ya transporta
+        (``Module.symbols.types``), asi que no hace falta un dato nuevo en el
+        esquema ni que el frontend marque el nodo: el interprete pregunta lo
+        mismo que pregunto la Semantica.
+        """
+        if tipo.kind != _TK_NOMINAL or not tipo.name:
+            return False
+        sym = self.unit.module.symbols.types.get(tipo.name)
+        if sym is None or sym.kind != _SK_ENUM:
+            return False
+        # con payload el enum es un tipo suma: sus valores no son enteros.
+        return not any(m.param_types for m in sym.members.values())
 
     def _tipo_de(self, expr):
         """Clave del tipo estático de ``expr``, resuelta contra el pool de la

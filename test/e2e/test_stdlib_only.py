@@ -2,8 +2,10 @@
 
 Contrato del proyecto (``how_to_run.md`` secc. 3): compilar y ver los
 diagnósticos EN CONSOLA debe funcionar con una instalación pelada de Python.
-Solo la fase HIR (y por tanto la ejecución) exige ``protobuf``, y su ausencia
-debe producir un mensaje accionable — nunca un traceback.
+Desde que el ``.phir`` se escribe a mano contra el propio ``hir.proto``
+(``src/HIR/{schema,wire}.py``), eso vale para el compilador ENTERO: ni
+siquiera la fase HIR necesita ``protobuf``, y tampoco un ``protoc`` del
+sistema.
 
 Se comprueba de verdad: se lanza el compilador en un subproceso donde
 ``yaml``/``google.protobuf`` están BLOQUEADOS a nivel de importación.
@@ -79,15 +81,28 @@ def test_directivas_test_funcionan_sin_dependencias():
         assert marca in out, f"#test {fase} no volcó su salida:\n{out[:200]}"
 
 
-def test_hir_sin_protobuf_falla_con_mensaje_accionable():
-    """Sin protobuf, --emit-hir aborta con instrucciones, no con traceback."""
+def test_el_hir_se_emite_SIN_protobuf():
+    """``--emit-hir`` funciona con ``google.protobuf`` oculto.
+
+    Antes abortaba pidiendo instalarlo, y como emitir el HIR es parte de
+    compilar, la dependencia era de hecho obligatoria para todo — además de
+    exigir un ``protoc`` del sistema cuya versión tuviera que ser compatible
+    con el runtime de pip. Desde que el ``.phir`` se escribe a mano contra el
+    propio ``hir.proto`` (``src/HIR/{schema,wire}.py``), el compilador entero
+    no necesita nada instalado.
+
+    Que esos bytes sean protobuf DE VERDAD lo comprueba
+    ``test_hir_reproducible.test_el_codec_propio_coincide_con_google_protobuf``
+    (y, de punta a punta, el backend C++, que enlaza libprotobuf y los lee).
+    """
     code, out, err = _run_without_deps(
         "fn main() -> int { return 0; };", "--emit-hir",
     )
     combined = out + err
-    assert code == 3, f"debe salir con 3 (dependencia faltante), salió {code}"
-    assert "protobuf" in combined, combined
+    assert code == 0, f"debía compilar sin protobuf, salió {code}:\n{combined}"
     assert "Traceback" not in combined, f"no debe haber traceback:\n{combined}"
+    assert "protobuf" not in combined, (
+        f"ya no debería pedir protobuf:\n{combined}")
 
 
 def test_el_frontend_no_importa_modulos_externos():

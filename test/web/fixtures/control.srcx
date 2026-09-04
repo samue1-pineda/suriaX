@@ -1,0 +1,80 @@
+/- Fuente del fixture de CONTROL DE FLUJO (control.phir).
+
+ Cubre lo que el codegen v2 añadió sobre el subconjunto inicial:
+   - 'if' / 'else' / 'else if' encadenado
+   - 'while' con 'break' y 'continue'
+   - 'and' / 'or' de CORTOCIRCUITO (el lado derecho no siempre se evalúa)
+   - 'not' y comparaciones
+   - variables declaradas DENTRO de un bucle (se reinicializan cada vuelta)
+
+ Se regenera con:  python V0/main.py control.srcx --emit-hir
+-/
+
+#from io #import stdp
+
+fn abs(int x) -> int {
+    if (x < 0) {
+        return -x;
+    }
+    return x;
+}
+
+fn clasificar(int n) -> int {
+    if (n < 0) {
+        return -1;
+    } else if (n == 0) {
+        return 0;
+    } else {
+        return 1;
+    }
+}
+
+fn suma_hasta(int n) -> int {
+    var int total = 0;
+    var int i = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+/- 'continue' salta los pares; 'break' corta al llegar al tope. -/
+fn suma_impares(int tope) -> int {
+    var int total = 0;
+    var int i = 0;
+    while (true) {
+        i = i + 1;
+        if (i > tope) {
+            break;
+        }
+        var int resto = i - (i / 2) * 2;
+        if (resto == 0) {
+            continue;
+        }
+        total = total + i;
+    }
+    return total;
+}
+
+fn en_rango(int x) -> bool {
+    return x > 3 and x < 10;
+}
+
+fn extremo(int x) -> bool {
+    return x < 0 or x > 100;
+}
+
+fn negado(bool b) -> bool {
+    return not b;
+}
+
+fn main() -> int {
+    var int a = abs(-5);
+    if (en_rango(a)) {
+        stdp.println("en rango");
+    } else {
+        stdp.println("fuera de rango");
+    }
+    return suma_hasta(10) - a + clasificar(7);
+}

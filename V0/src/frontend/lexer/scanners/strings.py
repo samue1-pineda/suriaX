@@ -11,7 +11,13 @@
    literal dentro de una f-string se escribe ``{{`` o ``}}`` (estilo
    f-string de Python).
  - caracteres: delimitados por comillas simples ``'x'`` (un solo code point,
-   sin interpolacion).
+   sin interpolacion). NO se concatenan entre si: son ``CHAR_LIT``, otro
+   token, igual que en C.
+
+Dos literales de cadena ADYACENTES forman uno solo (``"parte uno " "parte
+dos"``), como en C, C++ y Python. La fusion la hace el lexer
+(:func:`join_adjacent`), que es donde no cuesta nada: con ``+`` el mismo
+resultado exigia una concatenacion en ejecucion.
 
 Ambas formas de cadena producen el mismo ``TokenType.STRING_LIT`` con un
 :class:`StringValue` como valor: las fases posteriores distinguen por
@@ -63,6 +69,40 @@ def _string_end(src: str, n: int, pos: int) -> int:
             return pos + 1
         pos += 1
     return pos
+
+
+def join_adjacent(left: Token, right: Token) -> Token:
+    """Funde dos ``STRING_LIT`` adyacentes en uno solo.
+
+    Dos literales pegados forman uno, como en C, C++ y Python: es la forma
+    natural de partir un mensaje largo en varias lineas, y hacerlo aqui no
+    cuesta nada — con ``+`` costaba una concatenacion en EJECUCION para algo
+    que se sabe al leer el archivo.
+
+    La regla que decide el caso dudoso —pegar una ``f""`` con una ``""``— es
+    que **cada literal conserva la suya**: la interpolacion ya se resolvio al
+    escanear cada uno por separado, asi que ``f"a{x}" "b"`` interpola ``{x}``
+    y ``f"a" "{x}"`` NO interpola nada (en una cadena plana ``{`` es un
+    caracter). El prefijo gobierna su propio literal, no la union. Cualquier
+    otra regla obligaria a mirar los vecinos para saber que significa un
+    literal.
+
+    Los segmentos de texto contiguos se funden: la union tiene la MISMA forma
+    que habria tenido un solo literal escrito de una vez.
+    """
+    parts = list(left.value.parts)
+    for part in right.value.parts:
+        if isinstance(part, str) and parts and isinstance(parts[-1], str):
+            parts[-1] += part
+        else:
+            parts.append(part)
+    # posicion y linea: las del PRIMER literal, que es donde empieza el valor.
+    return Token(
+        TokenType.STRING_LIT,
+        f"{left.lexeme} {right.lexeme}",
+        StringValue(tuple(parts)),
+        left.ln, left.col,
+    )
 
 
 def scan_string(lx) -> Token:

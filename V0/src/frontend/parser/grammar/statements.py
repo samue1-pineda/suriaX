@@ -174,15 +174,130 @@ def parse_var_decl(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
             "una variable se lee sin ejecutar el compilador en la cabeza)",
             line=type_expr.ln, column=type_expr.col,
         )
+    # 'int vec.Vector val[8];' -- declaracion de CONTENEDOR: lo que se leyo
+    # como tipo era el ELEMENTO y lo que sigue es el contenedor.
+    contenedor = _contenedor_tras_elemento(cursor, ctx)
     name_tok = cursor.expect_name()
+
+    capacidad = None
+    if cursor.check(TokenType.L_BRACKET):
+        cursor.advance()
+        capacidad = pratt.parse_expression(cursor, ctx)
+        cursor.expect(TokenType.R_BRACKET)
 
     value = None
     if cursor.match(TokenType.ASSIGN):
         value = pratt.parse_expression(cursor, ctx)
 
     cursor.expect(TokenType.SEMICOLON)
+
+    if contenedor is not None or capacidad is not None:
+        return _decl_de_contenedor(start_tok, qualifier, type_expr, contenedor,
+                                    name_tok, capacidad, value)
     return ast.VarDecl(ln=start_tok.ln, col=start_tok.col, qualifier=qualifier,
                         type=type_expr, name=name_tok.lexeme, value=value)
+
+
+def _contenedor_tras_elemento(cursor: Cursor, ctx: ParserContext):
+    """El CONTENEDOR de ``int vec.Vector val[8];``, o ``None``.
+
+    Una declaracion corriente tiene un solo tipo (``int val``); la de un
+    contenedor tiene dos (``int vec.Vector val``). Se distinguen mirando: si
+    tras el primer tipo viene algo que TAMBIEN parsea como tipo y despues un
+    nombre, era la forma de contenedor. Si no, el cursor vuelve exactamente
+    donde estaba.
+
+    El retroceso esta acotado —nunca cruza el nombre— y no registra errores
+    en ``ctx``, igual que el de los argumentos de tipo de un generico
+    (``expressions/nud._type_args_de_generico``), que es el otro sitio del
+    parser donde una forma se decide mirando y no adivinando.
+    """
+    if not cursor.check(TokenType.IDENTIFIER):
+        return None
+    inicio = cursor.pos
+    try:
+        contenedor = parse_type(cursor, ctx)
+    except ParseError.ParseError:
+        cursor.pos = inicio
+        return None
+    if cursor.peek().type in (TokenType.IDENTIFIER, TokenType.DUNDER):
+        return contenedor
+    if cursor.check(TokenType.L_BRACKET):
+        # 'int vec.Vector[10];' -- es la forma de CONTENEDOR sin su nombre.
+        # Sin este caso el retroceso tomaba 'vec' por el nombre y el error
+        # salia en el '.' ("se esperaba SEMICOLON, se encontro DOT"), que
+        # apunta al sintoma y no a lo que falta.
+        raise ParseError.MissingTypeAnnotationError(
+            f"falta el NOMBRE de la variable: '{_texto_de_tipo(contenedor)}' "
+            f"es el contenedor y '[...]' su capacidad, pero no dice como se "
+            f"llama. Escribe '<tipo> {_texto_de_tipo(contenedor)} <nombre>[...]'",
+            line=cursor.peek().ln, column=cursor.peek().col,
+        )
+    cursor.pos = inicio
+    return None
+
+
+def _decl_de_contenedor(start_tok, qualifier, elemento, contenedor, name_tok,
+                        capacidad, value) -> ast.VarDecl:
+    """``int vec.Vector val[8];`` -> el ``var`` y la llamada que ya existian.
+
+    Es AZUCAR y se deshace aqui a proposito: la Semantica, el HIR, el
+    interprete y los backends siguen viendo exactamente lo mismo que ven hoy
+    para ``var vec.Vector<int> val = vec.make<int>(8);``. Una construccion
+    nueva en el AST habria obligado a cada consumidor a aprenderla para no
+    producir nada distinto.
+
+    El CONSTRUCTOR es ``make`` en el modulo del contenedor: ``vec.Vector`` ->
+    ``vec.make``. Es una convencion de la libreria, no del compilador — el
+    mismo criterio que hace que ``print`` viva en ``IO`` y no en la gramatica.
+    """
+    ln, col = name_tok.ln, name_tok.col
+    if contenedor is None:
+        # 'int val[8];' sin contenedor: no hay a quien pedirle el espacio.
+        raise ParseError.MissingTypeAnnotationError(
+            f"'{name_tok.lexeme}[...]' reserva espacio, pero no dice EN QUE: "
+            f"escribe el contenedor entre el tipo del elemento y el nombre "
+            f"('{_texto_de_tipo(elemento)} vec.Vector {name_tok.lexeme}[...]')",
+            line=ln, column=col)
+
+    tipo = _instanciar(contenedor, elemento)
+    if value is None:
+        if capacidad is None:
+            raise ParseError.MissingTypeAnnotationError(
+                f"'{name_tok.lexeme}' declara un contenedor sin capacidad ni "
+                f"valor: escribe cuantos espacios reserva "
+                f"('{name_tok.lexeme}[8]') o inicializalo con '='",
+                line=ln, column=col)
+        value = _llamada_al_constructor(contenedor, elemento, capacidad, ln, col)
+    return ast.VarDecl(ln=start_tok.ln, col=start_tok.col, qualifier=qualifier,
+                       type=tipo, name=name_tok.lexeme, value=value,
+                       capacity=capacidad)
+
+
+def _instanciar(contenedor, elemento):
+    """``vec.Vector`` + ``int`` -> el ``TypeExpr`` de ``vec.Vector<int>``."""
+    if not isinstance(contenedor, ast.NominalTypeExpr):
+        raise ParseError.MissingTypeAnnotationError(
+            "el contenedor de una declaracion con '[...]' tiene que ser un "
+            "tipo con nombre ('vec.Vector'), no un puntero ni un nullable",
+            line=contenedor.ln, column=contenedor.col)
+    return ast.NominalTypeExpr(ln=contenedor.ln, col=contenedor.col,
+                               name=contenedor.name, args=[elemento])
+
+
+def _llamada_al_constructor(contenedor, elemento, capacidad, ln, col):
+    """``vec.Vector`` -> la llamada ``vec.make<int>(n)``."""
+    modulo, _, _hoja = contenedor.name.rpartition(".")
+    callee: ast.Expression = ast.Identifier(ln=ln, col=col, name="make")
+    if modulo:
+        base: ast.Expression = ast.Identifier(ln=ln, col=col, name=modulo)
+        callee = ast.MemberAccess(ln=ln, col=col, obj=base, member="make")
+    return ast.Call(ln=ln, col=col, callee=callee, args=[capacidad],
+                    type_args=[elemento])
+
+
+def _texto_de_tipo(t) -> str:
+    return t.name if isinstance(t, ast.NominalTypeExpr) else "<tipo>"
 
 
 def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,

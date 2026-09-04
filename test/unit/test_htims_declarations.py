@@ -34,13 +34,14 @@ def _codes(errors):
 
 
 _VALID = '''
-from htims import hook
+from htims import signature_extends
 
 PROJECT = "MiJuego"
 
 
-@hook("__gravity__", owner="Body", params=["Body ptr mutable", "float"],
-      returns="void", logic="gravity_cpp")
+@signature_extends("__gravity__", owner="Body",
+                   params=["Body ptr mutable", "float"], returns="void",
+                   cxx=True, logic="gravity_cpp")
 def gravity(body, dt):
     """cae"""
 '''
@@ -265,13 +266,100 @@ def test_htims_no_importa_el_frontend():
     """La frontera del módulo, comprobada sobre el código fuente."""
     import htims
     folder = os.path.dirname(os.path.abspath(htims.__file__))
-    for name in sorted(os.listdir(folder)):
-        if not name.endswith(".py"):
-            continue
-        with open(os.path.join(folder, name), encoding="utf-8") as fh:
-            source = fh.read()
-        for prohibido in ("from src.", "import src.", "from V0", "import V0",
-                          "from config", "import config"):
-            assert prohibido not in source, (
-                f"htims/{name} importa '{prohibido}': la capa dejaría de ser "
-                "independiente de V0/ y config/")
+    # RECURSIVO: 'utils/' es del mismo paquete y le vale la misma frontera.
+    for base, dirs, names in os.walk(folder):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in sorted(n for n in names if n.endswith(".py")):
+            ruta = os.path.join(base, name)
+            with open(ruta, encoding="utf-8") as fh:
+                source = fh.read()
+            relativa = os.path.relpath(ruta, os.path.dirname(folder))
+            for prohibido in ("from src.", "import src.", "from V0",
+                              "import V0", "from config", "import config"):
+                assert prohibido not in source, (
+                    f"{relativa} importa '{prohibido}': la capa dejaría de ser "
+                    "independiente de V0/ y config/")
+
+
+# --------------------------------------------------------------------------- #
+# bajar a C++ se ESCRIBE: negado por defecto
+# --------------------------------------------------------------------------- #
+# La verificación es el opt-in. Un hook cuya lógica vive en logic_dir deja de
+# ser comprobable por el compilador —su cuerpo está fuera de su alcance—, así
+# que sacarlo del lenguaje tiene que ser una decisión escrita y no lo que
+# ocurre al copiar una declaración de otro sitio.
+
+def test_una_firma_pura_no_puede_pedir_cpp():
+    _project, decls, errors = _scan(
+        'from htims import signature\n'
+        '@signature("__g__", owner="B", returns="void", logic="g_cpp")\n'
+        'def g(b): pass\n')
+    assert _codes(errors) == ["EXT028"], _codes(errors)
+    assert decls == []
+    assert "signature_extends" in errors[0].message, \
+        "el error dice cuál es el decorador que sí puede"
+
+
+def test_extends_sin_optin_se_rechaza():
+    _project, decls, errors = _scan(
+        'from htims import signature_extends\n'
+        '@signature_extends("__g__", owner="B", returns="void",\n'
+        '                   logic="g_cpp")\n'
+        'def g(b): pass\n')
+    assert _codes(errors) == ["EXT029"], _codes(errors)
+    assert decls == []
+
+
+def test_cxx_false_explicito_tampoco_vale():
+    """Escribir 'cxx=False' y esperar C++ es un contrasentido: se reporta."""
+    _project, _decls, errors = _scan(
+        'from htims import signature_extends\n'
+        '@signature_extends("__g__", owner="B", returns="void",\n'
+        '                   cxx=False, logic="g_cpp")\n'
+        'def g(b): pass\n')
+    assert _codes(errors) == ["EXT029"], _codes(errors)
+
+
+def test_cxx_sin_simbolo_no_tiene_nada_que_ligar():
+    _project, _decls, errors = _scan(
+        'from htims import signature_extends\n'
+        '@signature_extends("__g__", owner="B", returns="void", cxx=True)\n'
+        'def g(b): pass\n')
+    assert _codes(errors) == ["EXT029"], _codes(errors)
+    assert "logic=" in errors[0].message
+
+
+def test_una_firma_pura_no_es_cxx():
+    _project, decls, errors = _scan(
+        'from htims import signature\n'
+        '@signature("__g__", owner="B", returns="void")\n'
+        'def g(b): pass\n')
+    assert errors == [], _codes(errors)
+    assert decls[0].cxx is False and decls[0].logic == ""
+
+
+def test_el_contrato_cpp_completo_se_acepta():
+    _project, decls, errors = _scan(
+        'from htims import signature_extends\n'
+        '@signature_extends("__g__", owner="B", params=["int"],\n'
+        '                   returns="void", cxx=True, logic="g_cpp")\n'
+        'def g(b, n): pass\n')
+    assert errors == [], _codes(errors)
+    assert decls[0].cxx is True and decls[0].logic == "g_cpp"
+
+
+def test_el_alias_hook_sigue_escaneando_con_las_reglas_nuevas():
+    """'@hook' se mantiene para no romper extensiones ya escritas, pero no es
+    una puerta trasera al C++ implícito."""
+    _project, decls, errors = _scan(
+        'from htims import hook\n'
+        '@hook("__g__", owner="B", returns="void")\n'
+        'def g(b): pass\n')
+    assert errors == [], _codes(errors)
+    assert decls[0].name == "__g__" and decls[0].cxx is False
+
+    _project, _decls, errors = _scan(
+        'from htims import hook\n'
+        '@hook("__g__", owner="B", returns="void", logic="g_cpp")\n'
+        'def g(b): pass\n')
+    assert _codes(errors) == ["EXT028"], _codes(errors)

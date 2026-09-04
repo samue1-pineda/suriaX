@@ -28,6 +28,19 @@ derecha para poder cruzarla con el código::
 ``--hir-text`` no desaparece: sigue siendo la herramienta para depurar el
 *wire format* (qué tag lleva qué), que es una pregunta distinta.
 
+**La destrucción también se ve, y nadie la escribió.** Los ``drop`` al cerrar
+un bloque, la marca ``⟨transfiere⟩`` de un retorno que cede la propiedad y el
+``⟨temporal …⟩`` de un valor que nadie recibe son decisiones del frontend que
+viajan en el HIR. En un lenguaje cuyo modelo de memoria es la característica
+principal, "¿qué decidió el compilador que hay que destruir aquí?" es justo
+la pregunta que se le hace a esta vista::
+
+    fn main() -> int
+      var R a = R{id: 1}                                      @14:5
+      fabrica()  ⟨temporal __free__ de R⟩:R                   @16:5
+      return 0                                                @17:5
+      drop a  ⟨hook __free__ de R⟩
+
 **El pool no se ve, y ese es el punto.** Desde el esquema v2 los nodos
 guardan un ``type_id``; aquí se resuelve contra ``Module.types`` y se imprime
 ``Punto ptr mutable``, no ``#7``. Plegar el artefacto lo hizo más pequeño sin
@@ -52,17 +65,30 @@ _POS_COL = 66
 def format_type(t, pb) -> str:
     """``Type`` protobuf -> notación de suriaX (``int ptr mutable``, ``T?``).
 
-    Fuente ÚNICA de la notación: la comparte el resumen del intérprete
-    (``runtime/interpreter/loader.summarize``), para que un tipo no se
-    escriba de dos maneras según quién lo imprima.
+    Fuente ÚNICA de la notación para los lectores del HIR: la importan el
+    resumen del intérprete (``runtime/interpreter/loader``) y la copian
+    ``web/src/hir/schema.formatType`` y ``backend/src/view.cpp`` — un tipo no
+    puede escribirse de dos maneras según quién lo imprima.
+
+    Todo lo que participa de la IDENTIDAD del tipo se escribe. Que no fuera
+    así costaba información en las dos preguntas que más se hacen al depurar:
+    ``error int`` se veía como ``error`` (el tipo del valor, perdido) y
+    ``Vector<int>`` como ``Vector`` (justo la distinción que hace que el
+    genérico no sea decorativo).
     """
     kind = pb.TypeKind.Name(t.kind)
     if kind == "POINTER":
         return format_type(t.inner, pb) + (" ptr mutable" if t.mut else " ptr")
     if kind == "NULLABLE":
         return format_type(t.inner, pb) + "?"
+    if kind == "ERROR":
+        # 'error' sola (sin inner) es un tipo legítimo: solo error.
+        return f"error {format_type(t.inner, pb)}" if t.HasField("inner") else "error"
     if kind == "NOMINAL":
-        return t.name
+        if not t.args:
+            return t.name
+        args = ", ".join(format_type(a, pb) for a in t.args)
+        return f"{t.name}<{args}>"
     if kind == "TYPE_UNSPECIFIED":
         return "<?>"
     return kind.lower()
@@ -132,8 +158,7 @@ class _Printer:
         if which == "call":
             args = ", ".join(self.expr(a) for a in e.call.args)
             call = f"{self.expr(e.call.callee)}({args})"
-            hook = self._hook(e.call.hook)
-            return call + hook
+            return call + self._hook(e.call.hook) + self._temp(e.call.temp_drop)
         if which == "index":
             return f"{self.expr(e.index.obj)}[{self.expr(e.index.index)}]"
         if which == "member":
@@ -145,6 +170,8 @@ class _Printer:
         if which == "sizeof":
             return (f"sizeof({format_type(e.sizeof.type, self.pb)})"
                     f"{self._hook(e.sizeof.hook)}")
+        if which == "move_expr":
+            return f"move {self.expr(e.move_expr.operand)}"
         if which == "addr_of":
             marca = "&mut " if e.addr_of.mut else "&"
             return f"{marca}{self.expr(e.addr_of.operand)}"
@@ -153,7 +180,8 @@ class _Printer:
                 f"{name}: {self.expr(value)}"
                 for name, value in zip(e.struct_literal.field_names,
                                        e.struct_literal.values))
-            return f"{e.struct_literal.type_name}{{{campos}}}"
+            return (f"{e.struct_literal.type_name}{{{campos}}}"
+                    + self._temp(e.struct_literal.temp_drop))
         if which == "interp":
             partes = []
             for part in e.interp.parts:
@@ -184,6 +212,16 @@ class _Printer:
         nombre = hook.hook_name or self._hook_kind_name(hook.kind)
         return f"  ⟨hook {nombre} de {hook.owner_type}⟩"
 
+    def _temp(self, hook) -> str:
+        """El ``__free__`` de un valor que POSEE recursos y que nadie recibe:
+        el frontend lo ata a la expresión para que muera al terminar la
+        sentencia. Se marca distinto del hook disparado por la sintaxis
+        porque responde a otra pregunta."""
+        if not hook.owner_type:
+            return ""
+        nombre = hook.hook_name or self._hook_kind_name(hook.kind)
+        return f"  ⟨temporal {nombre} de {hook.owner_type}⟩"
+
     def _hook_kind_name(self, kind: int) -> str:
         cached = self._kind_names.get(kind)
         if cached is None:
@@ -195,6 +233,14 @@ class _Printer:
     def block(self, b, indent: int) -> None:
         for stmt in b.statements:
             self.stmt(stmt, indent)
+        # Los drops los INSERTA el compilador al cerrar el bloque: nadie los
+        # escribe. Verlos es la única forma de contestar "¿qué decidió el
+        # frontend que hay que destruir aquí?" sin leer el protobuf crudo —
+        # y en un lenguaje cuyo modelo de memoria es la característica
+        # principal, esa es justo la pregunta.
+        for drop in b.drops:
+            self.line(f"drop {'.'.join(drop.path)}{self._hook(drop.hook)}",
+                      indent=indent)
 
     def stmt(self, s, indent: int) -> None:
         which = s.WhichOneof("node")
@@ -214,7 +260,11 @@ class _Printer:
         elif which == "return_stmt":
             valor = (f" {self.expr(s.return_stmt.value)}"
                      if s.return_stmt.HasField("value") else "")
-            self.line(f"return{valor}", ln=ln, col=col, indent=indent)
+            # 'transfers': la propiedad pasa al llamador y el ámbito que lo
+            # tenía NO debe destruirlo. Es una decisión del frontend, y sin
+            # verla los drops de arriba parecen incompletos.
+            marca = "  ⟨transfiere⟩" if s.return_stmt.transfers else ""
+            self.line(f"return{valor}{marca}", ln=ln, col=col, indent=indent)
         elif which == "if_stmt":
             self._if(s.if_stmt, indent, ln, col)
         elif which == "while_stmt":
@@ -248,8 +298,14 @@ class _Printer:
         elif which == "try_stmt":
             self.line("try", ln=ln, col=col, indent=indent)
             self.block(s.try_stmt.try_block, indent + 1)
-            self.line(f"catch {s.try_stmt.catch_name}", indent=indent)
-            self.block(s.try_stmt.catch_block, indent + 1)
+            # las ramas se prueban EN ORDEN y el filtro es opcional: una rama
+            # sin 'type' atrapa cualquier valor. Imprimir el tipo importa
+            # porque es lo que decide cuál rama gana.
+            for rama in s.try_stmt.catches:
+                filtro = (f"{format_type(rama.type, self.pb)} "
+                          if rama.HasField("type") else "")
+                self.line(f"catch ({filtro}{rama.name})", indent=indent)
+                self.block(rama.block, indent + 1)
         elif which == "type_decl":
             t = s.type_decl
             valor = f" = {self.expr(t.value)}" if t.HasField("value") else ""
@@ -300,9 +356,16 @@ class _Printer:
                       col=d.col)
             self.out.write("\n")
         elif which == "enum_decl":
+            # Una variante con PAYLOAD no es un entero sino un constructor que
+            # se invoca. Escribir sus tipos es lo que distingue 'Numero(int)'
+            # de un 'Numero' auto-numerado — sin ellos las dos formas del enum
+            # se leen igual, que es justo lo que el esquema evita.
             items = ", ".join(
-                item.name + (f" = {self.expr(item.value)}"
-                             if item.HasField("value") else "")
+                item.name
+                + ("(" + ", ".join(self.type_of(t) for t in item.payload_type_ids) + ")"
+                   if item.payload_type_ids
+                   else (f" = {self.expr(item.value)}"
+                         if item.HasField("value") else ""))
                 for item in d.enum_decl.items)
             self.line(f"enum {d.enum_decl.name} {{ {items} }}", ln=d.ln, col=d.col)
             self.out.write("\n")

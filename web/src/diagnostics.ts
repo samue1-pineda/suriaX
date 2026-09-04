@@ -58,9 +58,21 @@ export const WebCode = {
 
   /** Construcción fuera del subconjunto que el codegen v1 traduce. */
   CODEGEN_UNSUPPORTED: "WEB100",
-  /** Tipo que el WIR no representa (solo int, float, bool y void). */
+  /**
+   * Tipo que el WIR no representa: int, float, bool, char, void, `str` y los
+   * `enum` SIN payload sí caben; un struct o un puntero, no.
+   */
   CODEGEN_TYPE: "WEB101",
-  /** Cadena que no es un literal directo en un `print`. */
+  /**
+   * Cadena CALCULADA (`a + b`, `cast<str>(x)`) donde hace falta su valor.
+   *
+   * Las CONSTANTES sí son valores de pleno derecho: se guardan en variables,
+   * se pasan, se devuelven y se comparan con `==`, porque cada una viaja como
+   * el índice de su constante en el módulo. Lo que falta es *fabricar* una
+   * —concatenar, formatear—, que necesita un runtime con memoria dinámica; y
+   * con ello el orden (`a < b`), que sobre índices contestaría por orden de
+   * aparición en el fuente en vez de alfabético.
+   */
   CODEGEN_STRING: "WEB102",
 } as const;
 export type WebCode = (typeof WebCode)[keyof typeof WebCode];

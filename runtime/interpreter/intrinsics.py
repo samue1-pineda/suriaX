@@ -58,6 +58,27 @@ def _suriax_copy(dst: Any, src: Any, n: Any) -> None:
         dst.cells[i].write(src.cells[i].read())
 
 
+def _suriax_release(block: Any) -> None:
+    """``__release__(bloque)`` -> el bloque deja de ser válido.
+
+    No devuelve memoria al sistema —de eso se encarga el recolector de
+    Python, y en el backend nativo lo hará el asignador de verdad—: lo que
+    hace es marcar cada celda como LIBERADA, que es el invariante que le
+    importa al lenguaje. Así un acceso posterior falla con el
+    ``UseAfterFreeError`` que ya existe, en vez de leer un bloque que su
+    dueño creía haber soltado.
+
+    Es lo que permite que un contenedor CREZCA sin fugar: reservar mayor,
+    copiar y soltar el viejo (ver ``lib/mem/main.libsrx``).
+    """
+    if not isinstance(block, Block):
+        raise NotIndexableError(
+            "__release__ opera sobre un bloque de __reserve__ "
+            f"(recibió {block!r})")
+    for cell in block.cells:
+        cell.free()
+
+
 # --------------------------------------------------------------------------- #
 # tipos de ancho fijo (lib/d_types): conversiones NATIVAS
 # --------------------------------------------------------------------------- #
@@ -148,8 +169,18 @@ ANCHOS: Dict[str, int] = {
 
 
 def lookup_cast(destino: str) -> Callable[[Any], Any] | None:
-    """Conversión nativa hacia el tipo nominal ``destino``, si el host la trae."""
-    return CASTS.get(destino)
+    """Conversión nativa hacia el tipo nominal ``destino``, si el host la trae.
+
+    Se indexa por el nombre SIMPLE del tipo, no por el calificado con su
+    unidad (``dt_variables.int8`` -> ``int8``). La identidad calificada es
+    del compilador: sirve para que dos tipos homónimos de librerías distintas
+    no compartan hooks. El host, en cambio, no aporta "la conversión del
+    int8 de esa librería", aporta "la conversión a un entero de 8 bits" —
+    una propiedad del ancho, que es lo que el nombre nombra. Atarla a una
+    unidad concreta obligaría a cablear aquí el nombre de la librería que
+    hoy lo declara.
+    """
+    return CASTS.get(destino.rsplit(".", 1)[-1])
 
 
 REGISTRY: Dict[str, Callable[..., Any]] = {
@@ -163,6 +194,7 @@ REGISTRY: Dict[str, Callable[..., Any]] = {
     # compilador (mismo patrón prototipo+intrínseco que __write__).
     "__reserve__": _suriax_reserve,
     "__copy__": _suriax_copy,
+    "__release__": _suriax_release,
 }
 
 

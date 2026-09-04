@@ -23,6 +23,21 @@ import {
   type WirStmt,
 } from "../wir/wir.ts";
 
+/**
+ * Instrucción de conversión, por par origen->destino.
+ *
+ * La clave se arma con los números de `WirType` porque es la forma directa de
+ * indexar un par; el emisor binario tiene la MISMA tabla en opcodes, y las
+ * dos salen del mismo sitio del lowering.
+ */
+const CONVERSION: Readonly<Record<string, string>> = {
+  [`${WirType.I64}->${WirType.F64}`]: "f64.convert_i64_s",
+  // saturante: un NaN o un infinito no pueden abortar el módulo
+  [`${WirType.F64}->${WirType.I64}`]: "i64.trunc_sat_f64_s",
+  [`${WirType.I64}->${WirType.I32}`]: "i32.wrap_i64",
+  [`${WirType.I32}->${WirType.I64}`]: "i64.extend_i32_s",
+};
+
 /** WIR -> texto WAT. */
 export function emitWat(module: WirModule): string {
   const lines: string[] = [
@@ -47,6 +62,14 @@ export function emitWat(module: WirModule): string {
     for (const str of module.strings) {
       lines.push(`  (data (i32.const ${str.offset}) ${JSON.stringify(str.text)})`);
     }
+  }
+
+  for (const global of module.globals) {
+    const tipo = typeName(global.type);
+    const decl = global.mutable ? `(mut ${tipo})` : tipo;
+    const valor = global.type === WirType.F64
+      ? `f64.const ${global.init}` : `${tipo}.const ${global.init}`;
+    lines.push(`  (global $${global.name} ${decl} (${valor}))`);
   }
 
   for (const fn of module.funcs) {
@@ -103,6 +126,11 @@ function emitStmt(
     case "local.set":
       emitExpr(stmt.value, fn, module, out, depth);
       out.push(`${pad}local.set ${localRef(stmt.index, fn)}   ;; línea ${stmt.pos.ln}`);
+      return;
+    case "global.set":
+      emitExpr(stmt.value, fn, module, out, depth);
+      out.push(`${pad}global.set $${module.globals[stmt.index]?.name ?? stmt.index}` +
+               `   ;; línea ${stmt.pos.ln}`);
       return;
     case "drop":
       emitExpr(stmt.value, fn, module, out, depth);
@@ -219,6 +247,16 @@ function emitExpr(
       }
       out.push(`${pad}end`);
       return;
+
+    case "global.get":
+      out.push(`${pad}global.get $${module.globals[expr.index]?.name ?? expr.index}`);
+      return;
+
+    case "convert": {
+      emitExpr(expr.value, fn, module, out, depth);
+      out.push(`${pad}${CONVERSION[`${expr.from}->${expr.type}`] ?? ";; conversión desconocida"}`);
+      return;
+    }
 
     default:
       out.push(`${pad};; (sin representación WAT: ${(expr satisfies never as { kind: string }).kind})`);

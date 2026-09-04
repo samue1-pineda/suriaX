@@ -6,7 +6,7 @@
     export_dir   = "#export" ( [ "as" ] IDENTIFIER
                              | "package" "as" IDENTIFIER ) [ ";" ]
     from_dir     = "#from" lib_name "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ]
-    extern_block = "#extern" "cpp" RAW_BLOCK
+    extern_block = "#extern" "cpp" [ "requires" "(" STRING { "," STRING } ")" ] RAW_BLOCK
     lib_name     = IDENTIFIER { "." IDENTIFIER }
 
 ``as``, ``cpp`` y ``package`` NO son keywords reservadas: son ``IDENTIFIER``
@@ -165,6 +165,24 @@ def parse_from_dir(cursor: Cursor, ctx: ParserContext) -> ast.FromDirective:
             line=import_tok.ln, column=import_tok.col,
         )
     name_tok = cursor.expect(TokenType.IDENTIFIER)
+    if cursor.check(TokenType.DOT):
+        # '#from vector #import vector.Vector': lo que se trae es UN miembro,
+        # y un miembro no se cualifica — el modulo del que sale ya se dijo en
+        # el '#from'. Sin este caso el '.' llegaba al motor de expresiones y
+        # salia 'token inesperado en expresion: DOT', que ni siquiera nombra
+        # la directiva.
+        punto = cursor.peek()
+        miembro = cursor.peek(1)
+        sugerido = (miembro.lexeme
+                    if miembro.type is TokenType.IDENTIFIER else "<miembro>")
+        raise ParseError.UnknownDirectiveError(
+            f"'#from {lib} #import {name_tok.lexeme}.{sugerido}': el miembro "
+            f"que se trae no lleva el modulo delante, que ya lo dijo el "
+            f"'#from'. Escribe '#from {name_tok.lexeme} #import {sugerido}' "
+            f"si '{name_tok.lexeme}' es el modulo, o '#import {lib}.{name_tok.lexeme}' "
+            f"para traerlo entero",
+            line=punto.ln, column=punto.col,
+        )
     alias = _match_as_alias(cursor)
     cursor.match(TokenType.SEMICOLON)
     return ast.FromDirective(ln=tok.ln, col=tok.col, lib=lib,
@@ -179,8 +197,15 @@ def _parse_extern_block(cursor: Cursor, ctx: ParserContext) -> ast.ExternBlock:
             f"objetivo de '#extern' no soportado: '{target_tok.lexeme}' (solo 'cpp')",
             line=target_tok.ln, column=target_tok.col,
         )
+    # 'requires("-lX11", ...)': el lexer ya emitio IDENTIFIER + los STRING
+    requiere: list = []
+    if cursor.check(TokenType.IDENTIFIER) and cursor.peek().lexeme == "requires":
+        cursor.advance()
+        while cursor.check(TokenType.STRING_LIT):
+            requiere.append(cursor.advance().value)
     raw_tok = cursor.expect(TokenType.RAW_BLOCK)
-    return ast.ExternBlock(ln=tok.ln, col=tok.col, target=target_tok.lexeme, raw=raw_tok.value)
+    return ast.ExternBlock(ln=tok.ln, col=tok.col, target=target_tok.lexeme,
+                           raw=raw_tok.value, requires=requiere)
 
 
 __all__ = ["parse_directive", "parse_import_dir", "parse_from_dir"]

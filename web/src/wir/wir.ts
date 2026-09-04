@@ -163,6 +163,24 @@ export type WirExpr =
       readonly args: readonly WirExpr[];
     }
   /**
+   * Varias expresiones en orden; el valor es el de la última.
+   *
+   * Existe por los f-strings: `println(f"total {x}")` no construye una cadena
+   * sino que ESCRIBE sus segmentos en orden (el texto literal, luego el
+   * valor, luego el salto). Sin un runtime de cadenas —memoria dinámica,
+   * concatenación y formateo de `float` en WASM a mano— esa es la forma
+   * honesta de imprimir un valor calculado, y además evita la reserva que un
+   * runtime de cadenas haría solo para tirarla.
+   *
+   * En una máquina de pila es concatenar el código de cada una; en JS, el
+   * operador coma. Ninguno de los dos backends necesita nada nuevo.
+   */
+  | {
+      readonly kind: "seq";
+      readonly type: WirType;
+      readonly exprs: readonly WirExpr[];
+    }
+  /**
    * `and` / `or` de CORTOCIRCUITO. No es un `binary` porque no lo es: el
    * lado derecho solo se evalúa si hace falta, y eso en una máquina de pila
    * no es una instrucción sino un `if` con resultado. Modelarlo como binario
@@ -174,6 +192,28 @@ export type WirExpr =
       readonly op: "and" | "or";
       readonly left: WirExpr;
       readonly right: WirExpr;
+    }
+  /**
+   * `cast<T>(x)` entre tipos NUMÉRICOS: el valor cambia de representación.
+   *
+   * No es un `unary`: un unario devuelve el tipo de su operando y esto
+   * existe justamente para no devolverlo. Lleva el tipo de ORIGEN además del
+   * de destino porque en una máquina de pila la instrucción depende de los
+   * dos (`i64 -> f64` no es la misma que `f64 -> i64`), y reconstruir el
+   * origen mirando dentro del operando sería adivinar en el emisor lo que el
+   * lowering ya sabía.
+   */
+  | {
+      readonly kind: "convert";
+      readonly type: WirType;
+      readonly from: WirType;
+      readonly value: WirExpr;
+    }
+  /** Lectura de una variable de módulo (`WirModule.globals`). */
+  | {
+      readonly kind: "global.get";
+      readonly type: WirType;
+      readonly index: number;
     };
 
 // --------------------------------------------------------------------------- //
@@ -191,6 +231,8 @@ export type WirExpr =
 export type WirStmt =
   /** Declaración o asignación: `local[index] = value`. */
   | { readonly kind: "local.set"; readonly pos: WirPos; readonly index: number; readonly value: WirExpr }
+  /** Escritura de una variable de módulo. */
+  | { readonly kind: "global.set"; readonly pos: WirPos; readonly index: number; readonly value: WirExpr }
   /** Expresión evaluada por sus efectos; su resultado se descarta. */
   | { readonly kind: "drop"; readonly pos: WirPos; readonly value: WirExpr }
   | { readonly kind: "return"; readonly pos: WirPos; readonly value: WirExpr | null }
@@ -258,6 +300,12 @@ export interface WirModule {
   readonly imports: readonly WirHostImport[];
   readonly funcs: readonly WirFunc[];
   readonly strings: readonly WirString[];
+  /**
+   * Variables de nivel de MÓDULO. No son locales de `__module_init`: viven
+   * mientras vive el módulo y las ve cualquier función, que es justo lo que
+   * un local no puede hacer. WebAssembly tiene su propia sección para esto.
+   */
+  readonly globals: readonly WirGlobal[];
   /** Bytes de memoria lineal que ocupan las cadenas. */
   readonly dataSize: number;
   /** Índice de `main`, o `null` si el programa no la declara. */
@@ -267,6 +315,23 @@ export interface WirModule {
    * (las que el intérprete ejecuta antes de `main`) agrupadas en una función.
    */
   readonly init: number | null;
+}
+
+/**
+ * Una variable de módulo.
+ *
+ * `mutable` no es cosmético: WebAssembly lo lleva en el binario y una global
+ * inmutable no admite `global.set`, así que un `const` del programa se
+ * convierte en un `const` del módulo y el validador lo hace cumplir. Es de
+ * las pocas veces que una garantía del lenguaje sobrevive tal cual hasta el
+ * binario.
+ */
+export interface WirGlobal {
+  readonly name: string;
+  readonly type: WirType;
+  readonly mutable: boolean;
+  /** Valor INICIAL: WASM solo admite una constante aquí. */
+  readonly init: bigint | number;
 }
 
 /** Índice de una función en `WirModule.funcs` a partir de su nombre. */

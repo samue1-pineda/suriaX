@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import assert_output  # noqa: E402
+from helpers import assert_output, run_program, run_source  # noqa: E402
 
 W = "fn __write__(str s) -> void;\n"
 #: un tipo con destructor: imprime al morir, que es como se observa el drop.
@@ -34,9 +34,56 @@ def _run(body: str, expected: str, extra: str = "") -> None:
                   expected)
 
 
+#: un contenedor que POSEE otro con destructor. La regla (ver
+#: ``scope_resolver._aplanar_drops``) es que quien declara ``__free__`` se
+#: hace cargo también de sus campos — y por eso hace falta un aviso cuando se
+#: olvida de uno.
+_CONTENEDOR = (
+    'struct {{ str n; R r; }} C;\n'
+    'hook fn __free__(C ptr mutable c) -> void {{ __write__("cierro\\n"); {} }};\n'
+)
+
+
 # --------------------------------------------------------------------------- #
 # lo básico
 # --------------------------------------------------------------------------- #
+
+def test_un_destructor_que_olvida_un_campo_lo_dice():
+    """La regla "quien declara ``__free__`` se hace cargo de sus campos" es
+    razonable pero SILENCIOSA: olvidar uno era una fuga que nada reportaba.
+
+    Se avisa (``NOTE002``), no se rechaza: el campo podría soltarse por una
+    vía que esta comprobación no ve."""
+    code, _out, err = run_source(
+        W + R + _CONTENEDOR.format("") +
+        'fn main() -> int { var C c = C{ n: "x", r: R{ id: 1 } }; return 0; };\n')
+    assert code == 0, err          # es un aviso, no un error
+    assert "NOTE002" in err, err
+    assert "'r'" in err, err
+
+
+def test_un_destructor_que_si_lo_suelta_no_avisa():
+    """Sin esto el aviso no valdría nada: uno que se disparara siempre
+    tendría razón siempre y acabaría ignorándose."""
+    code, out, err = run_program(
+        W + R + _CONTENEDOR.format("free &c.r;") +
+        'fn main() -> int { var C c = C{ n: "x", r: R{ id: 1 } }; return 0; };\n')
+    assert code == 0, err
+    assert "NOTE002" not in err, err
+    # y el campo se destruye de verdad, que es lo que el aviso protege
+    assert "drop 1" in out, (out, err)
+
+
+def test_free_sobre_un_campo_dice_como_escribirlo():
+    """``free c.r`` no compila (``free`` quiere un puntero) y la salida es
+    ``&``. Sin decirlo, el caso más común del destructor de un contenedor
+    parecía imposible."""
+    code, _out, err = run_source(
+        W + R + _CONTENEDOR.format("free c.r;") +
+        'fn main() -> int { return 0; };\n')
+    assert code != 0 and "SEM014" in err, err
+    assert "free &c.r;" in err, err
+
 
 def test_un_valor_con_dueno_se_destruye_al_cerrar_el_ambito():
     """Nadie escribe la destrucción: la inserta el compilador."""

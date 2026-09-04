@@ -26,6 +26,12 @@ from typing import Dict, Tuple
 # el paquete se ejecuta con la raiz del repo y V0/ en sys.path (main.py de
 # este directorio los inserta, igual que V0/main.py).
 from V0.src.HIR.stubs import load_hir_pb2
+# La notación de un tipo tiene UNA definición, la de la vista legible del HIR.
+# Aquí vivía una copia byte a byte de esa función, y las dos se separaron: la
+# de allá aprendió a escribir 'error int' y 'Vector<int>' y esta se quedó
+# diciendo 'error' y 'Vector'. Un resumen y una vista legible del MISMO
+# artefacto no pueden discrepar sobre cómo se llama un tipo.
+from V0.src.HIR.pretty import format_type
 from .values import VariantCtor
 
 #: versiones de esquema que este lector sabe interpretar. Un HIR de una
@@ -189,21 +195,6 @@ def load_image(main_path: str) -> Image:
 # ---------------------------------------------------------------------- #
 # resumen legible (CLI): que trae el modulo, sin ejecutarlo
 # ---------------------------------------------------------------------- #
-
-def format_type(t, pb) -> str:
-    """``Type`` protobuf -> notación de suriaX (``int ptr mutable``, ``T?``)."""
-    kind = pb.TypeKind.Name(t.kind)
-    if kind == "POINTER":
-        suffix = " ptr mutable" if t.mut else " ptr"
-        return format_type(t.inner, pb) + suffix
-    if kind == "NULLABLE":
-        return format_type(t.inner, pb) + "?"
-    if kind == "NOMINAL":
-        return t.name
-    if kind == "TYPE_UNSPECIFIED":
-        return "<?>"
-    return kind.lower()
-
 
 def summarize(module) -> str:
     """Resumen del ``Module`` para la CLI: símbolos, hooks e items."""

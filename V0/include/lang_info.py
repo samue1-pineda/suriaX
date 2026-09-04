@@ -109,6 +109,7 @@ def _error_catalog() -> List[dict]:
         from error import CompilerError  # type: ignore
 
     import importlib
+    import inspect
 
     seen: set = set()
     out: List[dict] = []
@@ -131,9 +132,64 @@ def _error_catalog() -> List[dict]:
             out.append({"code": inst.code, "class": obj.__name__,
                         "phase": inst.phase,
                         "severity": getattr(obj, "severity", "critical"),
-                        "default_message": inst.message})
+                        "default_message": inst.message,
+                        # El docstring de la clase es donde el proyecto explica
+                        # POR QUÉ existe ese error y, casi siempre, qué hacer
+                        # con él — las dos mitades del contrato de un
+                        # diagnóstico que el código y la posición no cubren.
+                        # Publicarlo convierte el catálogo en algo que una
+                        # herramienta puede enseñar, y no cuesta mantenerlo:
+                        # ya estaba escrito y ya se exige que esté bien.
+                        "explanation": inspect.getdoc(obj) or ""})
     out.sort(key=lambda d: d["code"])
     return out
+
+
+def _token_categories() -> Dict[str, str]:
+    """Categoría de **cada** ``TokenType``, no solo de los keywords.
+
+    ``_CATEGORY_TOKENS`` clasifica las palabras reservadas, que es lo que un
+    resaltador necesita saber a mano. Pero un editor colorea TODO lo que sale
+    del lexer, y sin esta tabla tenía que adivinar el resto con heurísticas
+    sobre el nombre del token — el playground llegó a decidir por regex si
+    ``INT`` era un tipo o un literal, y se equivocaba.
+
+    Las categorías que se derivan (y por qué no se escriben a mano):
+
+     - ``literal``      los ``*_LIT``, salvo el de cadena, que va aparte
+                        porque todo editor la colorea distinto;
+     - ``string``       ``STRING_LIT``;
+     - ``name``         ``IDENTIFIER`` y ``DUNDER``;
+     - ``comment``      lo que el lexer no emite pero el editor sí pinta;
+     - ``punctuation``  delimitadores (paréntesis, coma, ``;``);
+     - ``operator``     el resto de símbolos;
+     - ``meta``         ``EOF`` y los tokens de servicio.
+    """
+    from .t_types import TokenType as _TT  # el mismo módulo, ya importado
+
+    delimitadores = {"L_PAREN", "R_PAREN", "L_BRACE", "R_BRACE", "L_BRACKET",
+                     "R_BRACKET", "SEMICOLON", "COMMA", "DOT", "COLON", "ARROW"}
+    simbolos = {token.name for token in _SYMBOLS.values()}
+    salida: Dict[str, str] = {}
+    for token in TokenType:
+        nombre = token.name
+        if token in KEYWORDS.values():
+            salida[nombre] = _keyword_category(token)
+        elif nombre == "STRING_LIT":
+            salida[nombre] = "string"
+        elif nombre.endswith("_LIT"):
+            salida[nombre] = "literal"
+        elif nombre in ("IDENTIFIER", "DUNDER"):
+            salida[nombre] = "name"
+        elif nombre in ("COMMENT", "RAW_BLOCK"):
+            salida[nombre] = "comment"
+        elif nombre in delimitadores:
+            salida[nombre] = "punctuation"
+        elif nombre in simbolos:
+            salida[nombre] = "operator"
+        else:
+            salida[nombre] = "meta"
+    return salida
 
 
 def build_language_info() -> dict:
@@ -158,6 +214,10 @@ def build_language_info() -> dict:
         "directives": sorted(DIRECTIVES),
         "hooks": _hook_names(),
         "tokens": [{"name": t.name, "value": t.value} for t in TokenType],
+        # Categoría de CADA token, para que un editor no tenga que adivinarla:
+        # es la misma pregunta que 'categories' responde para los keywords,
+        # extendida a todo lo que el lexer emite.
+        "token_categories": _token_categories(),
         "severities": _severities(),
         "errors": _error_catalog(),
         "stages": _pipeline_stages(),

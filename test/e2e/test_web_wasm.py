@@ -165,6 +165,65 @@ fn main() -> int {
     return total;
 }
 """,
+    # Una librería QUE NO ES 'IO'. Hasta que el lowering bajó la imagen entera
+    # (y no solo la unidad principal) esto era imposible: cualquier librería
+    # distinta de 'IO' se rechazaba con WEB007, y no porque el target no
+    # supiera traducirla sino porque sus unidades se tiraban antes de llegar
+    # al WIR.
+    "libreria_de_usuario": """
+#from math #import basic
+#from io #import stdp
+
+fn main() -> int {
+    var float a = basic.add(2.0, 3.0);
+    var float b = basic.max(a, 4.0);
+    var float c = basic.abs(0.0 - b);
+    stdp.println("con math");
+    if (c > 4.5) {
+        return 7;
+    }
+    return 1;
+}
+""",
+    # Imprimir un VALOR calculado. Es lo primero que hace cualquiera en un
+    # playground y hasta ahora se rechazaba (WEB102): el web solo sabía
+    # escribir literales. El formateo lo hace el HOST, con el mismo runtime en
+    # los dos backends, para que un 'float' se vea igual que en el intérprete
+    # — que usa 'str()' de Python, y ahí '1.0' no es '1'.
+    "valores_formateados": """
+#from io #import stdp
+
+fn main() -> int {
+    var int total = 40 + 2;
+    var float f = 2.5;
+    var float entero = 1.0;
+    var bool listo = true;
+    var char c = 'z';
+    stdp.println(f"entero {total} float {f} uno {entero}");
+    stdp.println(f"bool {listo} char {c}");
+    stdp.print("sin salto: ");
+    stdp.println(f"{total}");
+    return 3;
+}
+""",
+    # El 'int' de suriaX es de 64 bits CON SIGNO y envuelve al desbordar.
+    # El intérprete no lo hacía (Python no tiene ese límite) y daba
+    # 9223372036854775808 donde el web daba el mínimo negativo: dos targets
+    # del mismo programa con números distintos. Y guardar ese valor reventaba
+    # el backend nativo de memoria con un error de pybind11, porque ahí una
+    # celda es un int64_t de verdad.
+    "desbordamiento_de_int": """
+#from io #import stdp
+
+fn main() -> int {
+    var int grande = 9223372036854775807;
+    stdp.println(f"suma {grande + 1}");
+    stdp.println(f"prod {grande * 2}");
+    var int minimo = 0 - 9223372036854775807 - 1;
+    stdp.println(f"neg {0 - minimo}");
+    return 0;
+}
+""",
 }
 
 

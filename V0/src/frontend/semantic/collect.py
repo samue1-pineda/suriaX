@@ -90,13 +90,17 @@ def _collect_function(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
         _collect_dunder(fn, ctx)
         return
 
+    # 'fn make<T>(...)': sus parametros de tipo se declaran ANTES de mirar la
+    # firma, porque la firma los NOMBRA. Es la misma llamada que hace un
+    # struct generico y por el mismo motivo.
+    _declarar_parametros(fn, ctx)
     param_types: Tuple[Type, ...] = tuple(
         p.restype for p in fn.params if p.restype is not None
     )
     symbol = Symbol(
         name=fn.name, kind=SymbolKind.FUNCTION, ln=fn.ln, col=fn.col,
         type=fn.return_restype, param_types=param_types,
-        visibility=fn.visibility,
+        visibility=fn.visibility, type_params=tuple(fn.type_params),
     )
     if not ctx.scope.define_value(symbol):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -115,11 +119,42 @@ def _owner_of(t: Optional[Type]) -> Optional[str]:
     return None
 
 
+def _canonico(t, ctx: SemanticContext):
+    """El tipo con su nucleo nominal en nombre canonico ('a.Node').
+
+    Las anotaciones se resuelven en el parser, que no conoce el scope; esto
+    las pasa por la identidad real antes de usarlas como CLAVE de un indice.
+    """
+    from . import type_service
+    return type_service.canonical(t, ctx.scope)
+
+
+def _registrar_tipo(symbol, ctx: SemanticContext) -> bool:
+    """Registra un tipo bajo el nombre escrito Y bajo el canonico.
+
+    Dentro de su propia libreria el tipo se sigue escribiendo ``Vector``,
+    pero su identidad ya es ``vector.Vector`` — y esa identidad viaja en los
+    tipos resueltos, asi que cualquier consulta posterior (el campo de un
+    ``self.datos``, un literal, un hook) la busca por el nombre canonico. Si
+    solo estuviera el escrito, esas consultas no encontrarian nada DENTRO de
+    la libreria que lo declara, que es justo donde mas se usa.
+
+    Es el MISMO Symbol bajo dos claves, no una copia: anotarlo por una via y
+    leerlo por la otra tiene que dar lo mismo.
+    """
+    if not ctx.scope.define_type(symbol):
+        return False
+    canonico = symbol.type_name
+    if canonico and canonico != symbol.name:
+        ctx.scope.define_type(symbol, alias=canonico)
+    return True
+
+
 def _collect_dunder(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
     """``dunder fn __x__(T ptr self, ...)``: método especial LIBRE, indexado
     por ``(T, __x__)`` (los "hooks del usuario"). Su primer parámetro define el
     tipo dueño; sin uno nominal no se puede asociar a un tipo."""
-    owner = _owner_of(fn.params[0].restype) if fn.params else None
+    owner = _owner_of(_canonico(fn.params[0].restype, ctx)) if fn.params else None
     if owner is None:
         ctx.error(SemanticError.InvalidDunderSignatureError(
             f"'{fn.name}': un 'dunder fn' debe tomar 'T ptr' (T nominal) como "
@@ -191,11 +226,31 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
         ))
         return
 
+    # Un dueño CALIFICADO nombra el tipo de otra unidad: es un hook HUÉRFANO
+    # y no se admite. Los hooks de un tipo viven con el tipo, y el motivo es
+    # que la tabla de despacho es una sola: si dos librerías le colgaran un
+    # '__free__' al mismo tipo ajeno, cuál corre dependería del orden de
+    # carga, en silencio. Antes esto no fallaba — se registraba bajo el
+    # nombre calificado, nadie lo buscaba ahí y el hook no corría nunca.
+    if "." in owner:
+        ctx.error(SemanticError.InvalidHookSignatureError(
+            f"'{fn.name}' se declara para '{owner}', que es de otra unidad. "
+            f"Los hooks de un tipo viven con el tipo: decláralo donde se "
+            f"declara '{owner}', o envuélvelo en un tipo propio",
+            line=fn.ln, column=fn.col,
+        ))
+        return
+    owner = ctx.qualify(owner)
+
     spec = vocabulario[fn.dunder]
+    # La FIRMA tambien se canonicaliza: viaja al HIR y el runtime indexa las
+    # conversiones por la identidad estructural del par (origen, destino).
+    # Registrarla sin calificar y consultarla calificada era no encontrarla.
     symbol = Symbol(
         name=fn.name, kind=SymbolKind.HOOK, ln=fn.ln, col=fn.col,
-        type=fn.return_restype,
-        param_types=tuple(p.restype for p in fn.params if p.restype is not None),
+        type=_canonico(fn.return_restype, ctx),
+        param_types=tuple(_canonico(p.restype, ctx)
+                          for p in fn.params if p.restype is not None),
         hook_kind=spec.kind, hook_owner=owner, visibility=fn.visibility,
         # los hooks del vocabulario fijo se identifican por su 'kind'; uno
         # declarado por el proyecto, por su NOMBRE (el compilador no puede
@@ -211,8 +266,13 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
         # __cast__ va a la TABLA DE CONVERSIONES, clave (origen, destino):
         # un tipo puede declarar tantas conversiones como pares distintos
         # (int->int8, int8->int, str->Estado...). Duplicado = mismo PAR.
-        source = fn.params[0].restype if fn.params else None
-        target = fn.return_restype
+        #
+        # Las dos puntas se CANONICALIZAN: la firma se anota sintacticamente
+        # ('int8'), pero el tipo se llama 'dt_variables.int8' en cuanto
+        # alguien lo nombra desde fuera. Sin esto la clave del registro y la
+        # de la consulta serian distintas y la conversion no se encontraria.
+        source = _canonico(fn.params[0].restype, ctx) if fn.params else None
+        target = _canonico(fn.return_restype, ctx)
         if source is None or target is None:  # pragma: no cover - tipos sin resolver
             return
         if not ctx.table.register_cast(source, target, symbol):
@@ -295,15 +355,16 @@ def _collect_struct(node: ast.StructDecl, ctx: SemanticContext) -> None:
             continue
         members[f.name] = Symbol(
             name=f.name, kind=SymbolKind.FIELD, ln=f.ln, col=f.col,
-            type=f.restype, mutable=True,
+            type=_canonico(f.restype, ctx), mutable=True,
         )
     _declarar_parametros(node, ctx)
     symbol = Symbol(
         name=node.name, kind=SymbolKind.STRUCT, ln=node.ln, col=node.col,
-        type=nominal(node.name), members=members, visibility=node.visibility,
+        type=nominal(ctx.qualify(node.name)), members=members,
+        visibility=node.visibility, type_name=ctx.qualify(node.name),
         type_params=tuple(node.type_params),
     )
-    if not ctx.scope.define_type(symbol):
+    if not _registrar_tipo(symbol, ctx):
         ctx.error(SemanticError.DuplicateSymbolError(
             f"el tipo '{node.name}' ya está declarado",
             line=node.ln, column=node.col,
@@ -333,19 +394,25 @@ def _collect_type_decl(node: ast.TypeDecl, ctx: SemanticContext) -> None:
     _declarar_parametros(node, ctx)
     symbol = Symbol(
         name=node.name, kind=SymbolKind.TYPE, ln=node.ln, col=node.col,
-        type=nominal(node.name), mutable=mutable, visibility=node.visibility,
+        type=nominal(ctx.qualify(node.name)), mutable=mutable,
+        visibility=node.visibility, type_name=ctx.qualify(node.name),
         type_params=tuple(node.type_params),
     )
-    if not ctx.scope.define_type(symbol):
+    if not _registrar_tipo(symbol, ctx):
         ctx.error(SemanticError.DuplicateSymbolError(
             f"el tipo '{node.name}' ya está declarado",
             line=node.ln, column=node.col,
         ))
         return
 
+    # El mismo nombre canonico que su gemelo del namespace de TIPOS: es el
+    # que ve un consumidor, porque 'w.mini' se resuelve atravesando el
+    # namespace de VALORES ('w' es un modulo, o sea un valor) y aterriza
+    # aqui. Sin el, el hook del tipo no se encontraba desde fuera.
     as_value = Symbol(
         name=node.name, kind=SymbolKind.TYPE, ln=node.ln, col=node.col,
         type=META_TYPE, mutable=mutable, visibility=node.visibility,
+        type_name=ctx.qualify(node.name),
     )
     if not ctx.scope.define_value(as_value):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -354,9 +421,30 @@ def _collect_type_decl(node: ast.TypeDecl, ctx: SemanticContext) -> None:
         ))
 
 
+def _valor_de_item(item, siguiente: int) -> Optional[int]:
+    """El entero de un item de enum: el ESCRITO, o el ordinal que le toca.
+
+    La regla es la de C —el siguiente al anterior, empezando en cero— y se
+    calcula aqui para que viva en el SIMBOLO: sin eso, 'cast<int>(TType.PLUS)'
+    tendria que volver al AST a buscarlo, y el backend web ya se vio obligado
+    a recalcularla por su cuenta.
+
+    Un item con PAYLOAD no tiene entero: el enum deja de ser un entero con
+    nombre y pasa a ser un tipo suma.
+    """
+    if item.payload_restypes:
+        return None
+    escrito = getattr(item, "value", None)
+    if isinstance(escrito, ast.Literal) and isinstance(escrito.value, int) \
+            and not isinstance(escrito.value, bool):
+        return escrito.value
+    return siguiente
+
+
 def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
-    enum_type = nominal(node.name)
+    enum_type = nominal(ctx.qualify(node.name))
     members: Dict[str, Symbol] = {}
+    siguiente = 0
     for item in node.items:
         if item.name in members:
             ctx.error(SemanticError.DuplicateSymbolError(
@@ -369,9 +457,12 @@ def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
         # sigue siendo el enum. Es la misma forma que una funcion, asi que la
         # verificacion de aridad y de tipos de los argumentos es la de
         # cualquier llamada — no hace falta ninguna regla nueva.
+        valor = _valor_de_item(item, siguiente)
+        if valor is not None:
+            siguiente = valor + 1
         item_sym = Symbol(
             name=item.name, kind=SymbolKind.ENUM_ITEM, ln=item.ln,
-            col=item.col, type=enum_type,
+            col=item.col, type=enum_type, const_value=valor,
             param_types=(tuple(item.payload_restypes)
                          if item.payload_restypes else None),
         )
@@ -389,8 +480,9 @@ def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
     symbol = Symbol(
         name=node.name, kind=SymbolKind.ENUM, ln=node.ln, col=node.col,
         type=enum_type, members=members, visibility=node.visibility,
+        type_name=enum_type.name,
     )
-    if not ctx.scope.define_type(symbol):
+    if not _registrar_tipo(symbol, ctx):
         ctx.error(SemanticError.DuplicateSymbolError(
             f"el tipo '{node.name}' ya está declarado",
             line=node.ln, column=node.col,

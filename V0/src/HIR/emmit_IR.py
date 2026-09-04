@@ -83,11 +83,13 @@ def build_module(
 def module_to_text(module) -> str:
     """``Module`` -> formato de TEXTO de protobuf (debugging del formato).
 
-    El conocimiento de ``google.protobuf`` se queda en este paquete: los
-    llamadores (``V0/main.py``, el parser) nunca lo importan directamente.
+    El formato es el de ``text_format`` de protobuf, escrito por
+    ``wire.message_to_text``: era la ultima llamada que ataba el proyecto a
+    la libreria (ver ``stubs.py``).
     """
-    from google.protobuf import text_format  # perezoso, como los stubs
-    return text_format.MessageToString(module)
+    from .wire import message_to_text
+    texto = message_to_text(module)
+    return texto + "\n" if texto else ""
 
 
 def serialize(module) -> bytes:
@@ -172,6 +174,7 @@ class _Emitter:
             ast.MemberAccess: self._expr_member,
             ast.SizeofExpr: self._expr_sizeof,
             ast.CastExpr: self._expr_cast,
+            ast.MoveExpr: self._expr_move,
             ast.StructLiteral: self._expr_struct_literal,
         }
         self._stmt_dispatch: Dict[type, Callable] = {
@@ -382,6 +385,7 @@ class _Emitter:
         elif cls is ast.ExternBlock:
             msg.extern_block.target = node.target
             msg.extern_block.raw = node.raw
+            msg.extern_block.requires.extend(node.requires)
         elif cls is ast.ImportDirective:
             msg.import_directive.lib = node.lib
             msg.import_directive.alias = node.alias or ""
@@ -437,6 +441,12 @@ class _Emitter:
         handler(node, msg)
 
     def _emit_block(self, block: ast.Block, msg) -> None:
+        # Un bloque VACIO no asigna ningún campo, y en protobuf eso deja el
+        # 'oneof' sin marcar: el lector recibe una sentencia sin nodo y no
+        # sabe que era un bloque. Es la misma razón por la que 'return;'
+        # llama a 'SetInParent()' — un caso legítimo que no escribe nada
+        # tiene que decir igualmente cuál es.
+        msg.SetInParent()
         for stmt in block.statements:
             self._emit_stmt(stmt, msg.statements.add())
         # destrucciones al cerrar: las decidio la Semantica (ver
@@ -625,6 +635,15 @@ class _Emitter:
         self._emit_expr(node.index, msg.index.index)
 
     def _expr_member(self, node: ast.MemberAccess, msg) -> None:
+        # 'TType.PLUS.name' se resolvio a su cadena en compilacion (el nombre
+        # de un item se sabe sin ejecutar nada): viaja como el LITERAL que es,
+        # igual que 'min(T)'. Ningun consumidor del HIR necesita saber que
+        # hubo un acceso a miembro, y asi no hace falta una tabla de nombres
+        # en ejecucion.
+        if node.nombre_de_item is not None:
+            msg.literal.kind = "str"
+            msg.literal.str_value = node.nombre_de_item
+            return
         self._emit_expr(node.obj, msg.member.obj)
         msg.member.member = node.member
 
@@ -634,6 +653,9 @@ class _Emitter:
             self._emit_type(node.restype, out.type)
         self._emit_expr(node.value, out.value)
         self._emit_hook_ref(node.hook, out.hook)
+
+    def _expr_move(self, node: ast.MoveExpr, msg) -> None:
+        self._emit_expr(node.operand, msg.move_expr.operand)
 
     def _expr_struct_literal(self, node: ast.StructLiteral, msg) -> None:
         out = msg.struct_literal

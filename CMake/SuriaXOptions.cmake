@@ -16,6 +16,9 @@ option(SURIAX_BUILD_NATIVE
 option(SURIAX_NATIVE_OUTPUT_IN_MODULE_DIR
     "Dejar cada .so en runtime/<modulo>/build/, que es donde lo busca cxx_api.py" ON)
 
+option(SURIAX_BUILD_BACKEND
+    "Compilar el backend C++ (lector del HIR); necesita protobuf para C++" ON)
+
 set(SURIAX_CXX_STANDARD "20" CACHE STRING
     "Estándar de C++ para los módulos nativos")
 
@@ -69,6 +72,13 @@ function(suriax_print_summary targets)
     message(STATUS "=== suriaX ${PROJECT_VERSION} ===")
     message(STATUS "  build            : ${CMAKE_BUILD_TYPE}")
     message(STATUS "  C++              : ${SURIAX_CXX_STANDARD}")
+    if(TARGET suriax-hir)
+        message(STATUS "  backend C++      : lector del HIR (objetivo 'suriax-hir')")
+    elseif(NOT SURIAX_BUILD_BACKEND)
+        message(STATUS "  backend C++      : desactivado (SURIAX_BUILD_BACKEND=OFF)")
+    else()
+        message(STATUS "  backend C++      : omitido (falta protobuf para C++)")
+    endif()
     if(NOT SURIAX_BUILD_NATIVE)
         message(STATUS "  módulos nativos  : desactivados (SURIAX_BUILD_NATIVE=OFF)")
     elseif(targets)

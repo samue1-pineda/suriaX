@@ -63,3 +63,56 @@ def test_funciones_libres_en_su_caja():
     out = _mermaid()
     assert "<<module>>" in out
     assert "+free_fn(int) int" in out
+
+
+# --- lo que la tabla guarda ADEMÁS de los tipos -----------------------------
+# Un programa de funciones libres producía una sola caja <<module>>, y eso se
+# leía como "la tabla de símbolos no maneja nada más". Estas pruebas fijan que
+# el resto de lo que la tabla SÍ conoce llegue al diagrama.
+
+SRC_COMPLETO = """
+#from io #import stdp
+#import d_types.dt_variables as dt
+
+const int LIMITE = 10;
+var int contador = 0;
+
+fn main() -> int { return LIMITE; }
+"""
+
+
+def _mermaid_completo():
+    _program, table, _errors = analyze(SRC_COMPLETO)
+    return symbol_table_to_mermaid(table)
+
+
+def test_globales_tienen_su_caja():
+    out = _mermaid_completo()
+    assert "<<scope global>>" in out
+    assert "+const int LIMITE" in out
+    assert "+int contador" in out
+
+
+def test_el_import_muestra_lo_que_expone():
+    """'println' no está en el lenguaje: se ve de qué unidad viene."""
+    out = _mermaid_completo()
+    assert "class stdp {" in out
+    assert "<<import>>" in out
+    assert "+println(str) void" in out
+
+
+def test_un_import_puede_exportar_tipos():
+    assert "+type int8" in _mermaid_completo()
+
+
+def test_las_conversiones_alcanzables_se_listan():
+    out = _mermaid_completo()
+    assert "<<__cast__>>" in out
+    assert "+cast(int) int8" in out
+
+
+def test_sin_importaciones_no_hay_cajas_vacias():
+    """Cada caja se dibuja solo si tiene contenido."""
+    out = _mermaid()
+    assert "<<import>>" not in out
+    assert "<<scope global>>" not in out

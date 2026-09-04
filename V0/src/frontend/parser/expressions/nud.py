@@ -49,6 +49,16 @@ def parse_unary(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     if operator is not None:
         cursor.advance()
         operand = parse_unary(cursor, ctx)  # right-recursivo: '- - x' es valido
+        # '-' PEGADO a un literal numerico produce el literal NEGATIVO, no una
+        # negacion de uno positivo. No es una optimizacion: es la unica forma
+        # de escribir el minimo de 'int'. El rango de un entero con signo no
+        # es simetrico —el minimo (-2^63) existe pero su opuesto (+2^63) NO—,
+        # asi que leerlo como "menos el literal 9223372036854775808" obliga a
+        # pasar por un valor que el tipo no puede representar.
+        if operator == "-" and isinstance(operand, ast.Literal) \
+                and operand.literal_kind in ("int", "float"):
+            return ast.Literal(ln=tok.ln, col=tok.col, value=-operand.value,
+                               literal_kind=operand.literal_kind)
         return ast.UnaryOp(ln=tok.ln, col=tok.col, operator=operator, operand=operand)
     return parse_postfix(cursor, ctx)
 
@@ -72,17 +82,27 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
                 and not ctx.no_struct_literal:
             expr = _struct_literal(cursor, ctx, expr, dotted)
             dotted = None
-        elif tok.type is TokenType.LESS and dotted is not None \
-                and not ctx.no_struct_literal:
-            # posible literal de un GENERICO ('Caja<int>{ v: 1 }'). Es la
-            # unica posicion del lenguaje donde '<' es ambiguo (comparacion
-            # vs argumentos de tipo), y se resuelve MIRANDO: solo son
-            # argumentos si tras el '>' viene un '{'. Si no, se retrocede y
-            # el '<' vuelve a ser el operador que siempre fue.
-            type_args = _type_args_de_literal(cursor, ctx)
+        elif tok.type is TokenType.LESS and dotted is not None:
+            # posible GENERICO: un literal ('Caja<int>{ v: 1 }') o una llamada
+            # ('make<int>(4)'). Es la unica posicion del lenguaje donde '<' es
+            # ambiguo (comparacion vs argumentos de tipo), y se resuelve
+            # MIRANDO que hay tras el '>': una llave abre un literal y un
+            # parentesis una llamada. Cualquier otra cosa y se retrocede: el
+            # '<' vuelve a ser el operador que siempre fue.
+            permitidos = (TokenType.L_PAREN,) if ctx.no_struct_literal \
+                else (TokenType.L_BRACE, TokenType.L_PAREN)
+            type_args, seguido_de = _type_args_de_generico(cursor, ctx,
+                                                           permitidos)
             if type_args is None:
                 return expr
-            expr = _struct_literal(cursor, ctx, expr, dotted, type_args)
+            if seguido_de is TokenType.L_BRACE:
+                expr = _struct_literal(cursor, ctx, expr, dotted, type_args)
+            else:
+                cursor.advance()          # el '('
+                args = _parse_arg_list(cursor, ctx)
+                cursor.expect(TokenType.R_PAREN)
+                expr = ast.Call(ln=expr.ln, col=expr.col, callee=expr,
+                                args=args, type_args=type_args)
             dotted = None
         elif tok.type is TokenType.DOT:
             cursor.advance()
@@ -108,14 +128,20 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
             return expr
 
 
-def _type_args_de_literal(cursor: Cursor, ctx: ParserContext):
-    """``"<" type { "," type } ">"`` SI y solo si le sigue un ``"{"``.
+def _type_args_de_generico(cursor: Cursor, ctx: ParserContext, permitidos):
+    """``"<" type { "," type } ">"`` SI y solo si le sigue uno de ``permitidos``.
 
-    Devuelve los argumentos, o ``None`` si lo que hay no es esa forma — en
-    cuyo caso el cursor queda EXACTAMENTE donde estaba y el ``<`` lo recoge
-    el motor Pratt como comparacion. Es el unico retroceso del parser, y
-    esta acotado: nunca cruza el ``>``, y ningun error llega a ``ctx``
-    porque ``parse_type_args`` senala lanzando, no registrando.
+    Devuelve ``(argumentos, token que sigue)``, o ``(None, None)`` si lo que
+    hay no es esa forma — en cuyo caso el cursor queda EXACTAMENTE donde
+    estaba y el ``<`` lo recoge el motor Pratt como comparacion. Es el unico
+    retroceso del parser, y esta acotado: nunca cruza el ``>``, y ningun
+    error llega a ``ctx`` porque ``parse_type_args`` senala lanzando, no
+    registrando.
+
+    ``permitidos`` es lo que separa ``Caja<int>{...}`` (literal) de
+    ``make<int>(...)`` (llamada). Dentro de la condicion de un ``if`` no se
+    admite el literal (``ctx.no_struct_literal``), pero la LLAMADA si: no
+    puede confundirse con el cuerpo del ``if`` porque termina en ``)``.
     """
     inicio = cursor.pos
     from ..grammar.types import parse_type_args
@@ -123,11 +149,12 @@ def _type_args_de_literal(cursor: Cursor, ctx: ParserContext):
         args = parse_type_args(cursor, ctx)
     except ParseError.ParseError:
         cursor.pos = inicio
-        return None
-    if not cursor.check(TokenType.L_BRACE):
+        return None, None
+    siguiente = cursor.peek().type
+    if siguiente not in permitidos:
         cursor.pos = inicio
-        return None
-    return args
+        return None, None
+    return args, siguiente
 
 
 def _struct_literal(cursor: Cursor, ctx: ParserContext,
@@ -314,6 +341,19 @@ def _sizeof(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     return ast.SizeofExpr(ln=tok.ln, col=tok.col, type=type_expr)
 
 
+def _move(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
+    """``"move" expression`` en posicion de expresion.
+
+    La forma de SENTENCIA (``move x;``) la parsea 'grammar/memory.py', que
+    mira el token antes de llegar aqui: las dos conviven porque significan
+    cosas distintas — la sentencia invalida, la expresion ademas entrega el
+    valor a quien la escribio.
+    """
+    tok = cursor.expect(TokenType.MOVE)
+    operand = parse_unary(cursor, ctx)
+    return ast.MoveExpr(ln=tok.ln, col=tok.col, operand=operand)
+
+
 def _cast(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     """``"cast" type_args "(" expression ")"`` -- exactamente UN argumento de
     tipo (``cast<int8>(x)``); la posicion ``<...>`` es la regla compartida
@@ -346,6 +386,7 @@ PRIMARY_HANDLERS: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Expressi
     TokenType.L_PAREN: _grouping,
     TokenType.SIZEOF: _sizeof,
     TokenType.CAST: _cast,
+    TokenType.MOVE: _move,
     # 'make' vuelve a ser un IDENTIFIER corriente.
 }
 

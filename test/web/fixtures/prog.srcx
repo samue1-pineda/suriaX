@@ -1,0 +1,58 @@
+/- Fuente de los .phir de prueba del backend web.
+
+ NO se compila durante los tests (eso exigiría protoc + protobuf en cada
+ corrida): los .phir de este directorio se generaron UNA vez con
+
+     python V0/main.py prog.srcx --emit-hir
+
+ y se versionan como golden fixtures. Si el esquema del HIR cambia, hay que
+ regenerarlos — y que los tests fallen mientras tanto es justamente lo que
+ se quiere de un puente versionado.
+
+ El programa está escrito para ejercitar, a propósito:
+   - un import de la ÚNICA librería permitida en el web ('io' -> IO.stdp);
+   - una función viva ('suma') y una muerta ('nunca_usada');
+   - un struct vivo ('Punto') y uno muerto ('NoUsada');
+   - código tras un 'return' (inalcanzable);
+   - una sentencia sin efectos ('total + 1;') y una variable nunca leída;
+   - un 'if/else' con llamadas reales dentro.
+-/
+
+#from io #import stdp
+
+struct {
+    int x;
+    int y;
+} Punto;
+
+enum Color {
+    ROJO,
+    VERDE = 5,
+    AZUL,
+};
+
+fn suma(int a, int b) -> int {
+    return a + b;
+    stdp.println("inalcanzable");
+}
+
+fn nunca_usada(int a) -> int {
+    return a;
+}
+
+struct {
+    int nada;
+} NoUsada;
+
+fn main() -> int {
+    var Punto p = Punto{ x: 1, y: 2 };
+    var int total = suma(p.x, p.y);
+    const int muerta = 7;
+    total + 1;
+    if (total > 2) {
+        stdp.println("mayor");
+    } else {
+        stdp.println("menor");
+    }
+    return 0;
+}

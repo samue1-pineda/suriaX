@@ -22,6 +22,12 @@ import sys
 import tempfile
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# 'V0' en el path: sin el, 'src.HIR' no importa y la prueba del
+# re-serializador se SALTABA en silencio (el import vivia dentro de un
+# 'try/except' que la daba por no aplicable).
+for _p in (_REPO_ROOT, os.path.join(_REPO_ROOT, "V0")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 #: el CODIGO del backend web.
 _WEB_DIR = os.path.join(_REPO_ROOT, "web")
 #: y su SUITE, que vive con el resto de las pruebas del proyecto (todas bajo
@@ -83,27 +89,27 @@ def test_suite_del_backend_web():
 
 
 def test_el_reserializador_produce_protobuf_valido():
-    """El `.phir` que reescribe el backend web lo acepta el protobuf REAL.
+    """El `.phir` que reescribe el backend web lo lee el lector de Python.
 
     Es la prueba que la suite de TypeScript no puede hacer sola: allí el
-    escritor y el lector son míos, así que podrían compartir un malentendido
-    del formato y las pruebas de ida y vuelta pasarían igual. Aquí los bytes
-    los valida `google.protobuf` con el descriptor generado del `.proto`, y
-    se comparan los DOS módulos en el formato de texto canónico — que además
-    normaliza el orden de las entradas de los `map`, lo único que protobuf no
-    fija.
+    escritor y el lector son del mismo autor, así que podrían compartir un
+    malentendido del formato y las pruebas de ida y vuelta pasarían igual.
+    Aquí los bytes que escribe TypeScript los lee la implementación de
+    Python, que es independiente, y se comparan los dos módulos en el formato
+    de texto — que además normaliza el orden de las entradas de los `map`, lo
+    único que el formato no fija.
+
+    Que el formato sea protobuf DE VERDAD lo comprueba
+    `test_hir_reproducible.test_el_codec_propio_coincide_con_google_protobuf`,
+    que sí usa la librería cuando está instalada.
     """
     major = _node_major()
     if major is None or major < _MIN_NODE_MAJOR:
         _skip("node no disponible para re-serializar")
         return
-    try:
-        from google.protobuf import text_format  # noqa: F401
-        from src.HIR.stubs import load_hir_pb2
-        pb = load_hir_pb2()
-    except Exception as exc:  # noqa: BLE001 - protobuf/protoc es opcional aquí
-        _skip(f"protobuf no disponible ({exc.__class__.__name__})")
-        return
+    from src.HIR.stubs import load_hir_pb2
+    from src.HIR.wire import message_to_text
+    pb = load_hir_pb2()
 
     original = os.path.join(_WEB_TESTS, "fixtures", "calc.phir")
     with tempfile.TemporaryDirectory() as tmp:
@@ -116,13 +122,11 @@ def test_el_reserializador_produce_protobuf_valido():
         assert result.returncode == 0, (
             f"el re-serializador falló:\n{result.stdout}\n{result.stderr}")
 
-        from google.protobuf import text_format
-
         def _leer(ruta):
             modulo = pb.Module()
             with open(ruta, "rb") as fh:
                 modulo.ParseFromString(fh.read())   # falla si los bytes no valen
-            return text_format.MessageToString(modulo)
+            return message_to_text(modulo)
 
         assert _leer(reescrito) == _leer(original), (
             "el .phir re-serializado no es equivalente al original")
@@ -141,6 +145,42 @@ def test_los_fixtures_phir_estan_presentes():
                  "IO.phir", "IO.stdp.phir", "IO.stdpf.phir"]
     faltan = [f for f in esperados if not os.path.isfile(os.path.join(fixtures, f))]
     assert not faltan, f"faltan fixtures del backend web: {faltan}"
+
+
+def test_los_fixtures_phir_estan_VERSIONADOS():
+    """Estar en el disco no basta: tienen que estar en el REPOSITORIO.
+
+    El test de arriba pasa en la máquina de quien los generó y falla en un
+    clon limpio, que es la peor forma de fallar — el archivo existe aquí y no
+    allí. ``.gitignore`` ignora todo ``*.phir`` y anula la regla justo para
+    estos (``!test/web/fixtures/*.phir``), así que olvidarse de añadirlos es
+    fácil y no lo nota nadie hasta que la CI corre en otro sitio.
+
+    Se salta (con aviso) si no hay git o esto no es un repositorio: la suite
+    tiene que poder correr sobre una copia desempaquetada.
+    """
+    git = shutil.which("git")
+    if git is None:
+        _skip("git no está instalado")
+        return
+    fixtures = os.path.join(_WEB_TESTS, "fixtures")
+    resultado = subprocess.run(
+        [git, "ls-files", "--", fixtures],
+        capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
+    )
+    if resultado.returncode != 0:
+        _skip("no es un repositorio git")
+        return
+    versionados = {os.path.basename(line) for line in
+                   resultado.stdout.splitlines() if line}
+    esperados = {"prog.srcx", "prog.phir", "calc.srcx", "calc.phir",
+                 "control.srcx", "control.phir",
+                 "IO.phir", "IO.stdp.phir", "IO.stdpf.phir"}
+    faltan = sorted(esperados - versionados)
+    assert not faltan, (
+        f"estos fixtures existen en el disco pero NO están versionados: "
+        f"{faltan}. Un clon limpio no podría correr la suite del backend web "
+        "-> git add test/web/fixtures")
 
 
 def test_el_backend_web_no_depende_de_node_en_src():

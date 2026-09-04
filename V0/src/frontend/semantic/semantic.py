@@ -43,6 +43,7 @@ def analyze(
     config: Optional[dict] = None,
     notes: Optional[List] = None,
     libraries: Optional[dict] = None,
+    unit: str = "",
 ) -> Tuple[SymbolTable, List]:
     """Punto de entrada de la fase Semántica.
 
@@ -53,10 +54,19 @@ def analyze(
     no-error, p. ej. '.srcx usado como librería') se acumulan ahí para que
     el llamador las enrute a ``log/notes.jsonl``.
 
+    ``unit`` es el alias del ``#export`` cuando lo que se analiza es una
+    LIBRERÍA (``""`` para el programa principal). Con él los tipos que
+    declare nacen calificados (``a.Node``), que es lo que impide que dos
+    tipos homónimos de librerías distintas compartan hooks — ver
+    ``SemanticContext.qualify``. Tiene que ser el MISMO alias que usó el
+    linker al cargarla, o la tabla del consumidor y el ``.phir`` de la
+    librería quedarían indexados con nombres distintos.
+
     Nunca lanza: los diagnósticos se acumulan en la lista devuelta, mismo
     contrato que ``parser.parse()`` / ``Lexer.errors``.
     """
-    ctx = SemanticContext(SymbolTable(), source_path=source_path, config=config)
+    ctx = SemanticContext(SymbolTable(), source_path=source_path, config=config,
+                          unit=unit)
     for pass_ in (collect, scope_resolver, memory_check):
         try:
             pass_.run(program, ctx)

@@ -218,3 +218,62 @@ def test_un_test_mal_colocado_nombra_la_regla():
     assert "PRIMER" in par020[0]["message"], \
         f"el mensaje debe nombrar la regla: {par020[0]['message']}"
     assert par020[0]["line"] == 2, "debe señalar la línea del '#test', no otra"
+
+
+# --------------------------------------------------------------------------- #
+# lo que DETIENE una compilación es la severidad, no el número de diagnósticos
+# --------------------------------------------------------------------------- #
+
+def test_un_aviso_no_detiene_la_compilacion():
+    """La escala de ``Severity`` promete desde el principio que un WARNING
+    deja continuar. El pipeline no lo cumplía: cualquier diagnóstico ponía el
+    código de salida en error y el HIR no se emitía, así que declarar algo
+    como aviso no servía de nada — y por eso no había ni uno."""
+    from error_handler.error import Severity, blocks
+
+    class _Diag:
+        def __init__(self, severity):
+            self.severity = severity
+
+    assert not blocks([_Diag(Severity.WARNING), _Diag(Severity.NOTE)])
+    assert blocks([_Diag(Severity.WARNING), _Diag(Severity.CRITICAL)])
+    assert blocks([_Diag(Severity.PANIC)])
+    assert not blocks([])
+
+
+def test_un_programa_con_solo_avisos_emite_su_hir():
+    """La prueba de que la compuerta es la correcta de punta a punta: un
+    ``match`` no exhaustivo (SEM030) avisa y el artefacto se emite igual."""
+    import os
+    import sys
+    import tempfile
+
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    try:
+        import google.protobuf  # noqa: F401
+    except ImportError:
+        print("      (omitido: sin protobuf no hay fase HIR)", file=sys.stderr)
+        return
+
+    from driver import CompileOptions, compile_source
+
+    fuente = ("enum Color { ROJO, VERDE };\n"
+              "fn main() -> int {\n"
+              "    var Color c = Color.ROJO;\n"
+              "    match (c) { case Color.ROJO: { return 1; } }\n"
+              "    return 0;\n"
+              "};\n")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "aviso.srcx")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(fuente)
+        phir = os.path.join(tmp, "aviso.phir")
+        resultado = compile_source(src, CompileOptions(emit_hir=phir))
+
+        codigos = [d.code for d in resultado.diagnostics]
+        assert "SEM030" in codigos, codigos
+        assert resultado.status == 0, (
+            f"un aviso no debe detener la compilación (status={resultado.status})")
+        assert os.path.isfile(phir), "el HIR tiene que emitirse igual"

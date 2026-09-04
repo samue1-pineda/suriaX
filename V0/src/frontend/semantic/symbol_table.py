@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 try:
     from include.types_ast import Type
@@ -80,6 +80,12 @@ class Symbol:
     # Vacio en un tipo corriente. Es lo que permite verificar la ARIDAD de un
     # uso ('Vector<int,str>' sobre un generico de un parametro) y saber que
     # sustituir en sus campos y firmas.
+    #: Nombre CANONICO del tipo que declara este simbolo ('a.Node'), cuando
+    #: declara uno. No es 'name': ese es la clave del scope, y dentro de la
+    #: libreria el tipo se sigue nombrando 'Node'. Es lo que hace unica su
+    #: identidad frente a un homonimo de otra unidad — hooks, conversiones y
+    #: dunders se indexan por el (ver 'SemanticContext.qualify').
+    type_name: Optional[str] = None
     type_params: Tuple[str, ...] = ()
     # FUNCTION/HOOK: tipos de sus parametros en orden (para validar aridad y,
     # a futuro Fase 3, compatibilidad de argumentos). 'type' es el retorno.
@@ -87,6 +93,9 @@ class Symbol:
     # STRUCT: campos | ENUM: items | IMPORT: exports de la libreria.
     # Sub-namespace plano O(1); NO participa de la cadena de scopes.
     members: Optional[Dict[str, "Symbol"]] = None
+    # Scope donde se DEFINIO (ver Scope.sid). Lo pone 'define_*', asi que
+    # ningun sitio que declare simbolos tiene que acordarse de ponerlo.
+    scope_id: int = 0
 
 
 @dataclass(slots=True)
@@ -95,20 +104,36 @@ class Scope:
     parent: Optional["Scope"] = None
     types: Dict[str, Symbol] = field(default_factory=dict)
     values: Dict[str, Symbol] = field(default_factory=dict)
+    # IDENTIDAD del scope (0 = global) y de quién es ('main', el 'while' de
+    # la línea 8...). No los usa ninguna decisión de la Semántica: existen
+    # para poder ENSEÑAR la tabla de símbolos como lo que es —un árbol— en
+    # vez de como la lista aplanada de su nivel global. El resolver ya crea
+    # y destruye estos scopes; lo único nuevo es que quedan numerados.
+    sid: int = 0
+    label: str = ""
 
-    def define_type(self, symbol: Symbol) -> bool:
+    def define_type(self, symbol: Symbol, *, alias: Optional[str] = None) -> bool:
         """Registra en el namespace de TIPOS de este scope. ``False`` si el
         nombre ya existe EN ESTE scope (un scope padre con el mismo nombre
-        sí se puede *shadowear*, no es colisión)."""
-        if symbol.name in self.types:
+        sí se puede *shadowear*, no es colisión).
+
+        ``alias`` registra el MISMO símbolo bajo otra clave. Lo usa
+        ``collect`` para que un tipo de librería responda tanto al nombre con
+        el que se escribe dentro de ella (``Vector``) como al canónico que
+        lleva su identidad (``vector.Vector``).
+        """
+        clave = alias or symbol.name
+        if clave in self.types:
             return False
-        self.types[symbol.name] = symbol
+        symbol.scope_id = self.sid
+        self.types[clave] = symbol
         return True
 
     def define_value(self, symbol: Symbol) -> bool:
         """Igual que :meth:`define_type` para el namespace de VALORES."""
         if symbol.name in self.values:
             return False
+        symbol.scope_id = self.sid
         self.values[symbol.name] = symbol
         return True
 
@@ -143,10 +168,22 @@ class TraitSig:
 
 
 class SymbolTable:
-    __slots__ = ("global_scope", "hooks", "casts", "dunders", "traits")
+    __slots__ = ("global_scope", "hooks", "casts", "dunders", "traits",
+                 "scopes", "uses")
 
     def __init__(self) -> None:
         self.global_scope = Scope(kind=ScopeKind.GLOBAL)
+        # TODOS los scopes creados durante el analisis, en orden de creacion
+        # (el 0 es el global). El resolver los apila y los desapila; aqui
+        # quedan registrados para poder recorrer el ARBOL despues, que es
+        # como se lee una tabla de simbolos de verdad: 'x' de 'main' y 'x'
+        # del bucle son dos entradas distintas, y la lista global no lo dice.
+        self.scopes: List[Scope] = [self.global_scope]
+        # REFERENCIAS CRUZADAS: id(Symbol) -> [(linea, columna), ...] de cada
+        # USO del nombre. Quien resuelve un nombre es el unico que sabe a que
+        # simbolo apunta —dos 'x' en scopes distintos se escriben igual—, asi
+        # que la lista se llena alli y no re-recorriendo el arbol despues.
+        self.uses: Dict[int, List[Tuple[int, int]]] = {}
         # (nombre de tipo nominal, HookKind) -> Symbol del hook que lo implementa.
         # __cast__ NO vive aqui: un tipo puede declarar VARIOS (ver 'casts').
         self.hooks: Dict[Tuple[str, HookKind], Symbol] = {}

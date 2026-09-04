@@ -221,6 +221,25 @@ class TypeBinder:
             node.type_name = canonical
             node.restype = Type(TypeKind.NOMINAL, name=canonical, args=args)
 
+    def bind_call(self, node: ast.Call, symbol: Symbol) -> tuple:
+        """``make<int>(4)``: valida los ARGUMENTOS DE TIPO de una llamada.
+
+        Espeja a :meth:`bind_struct_literal` —los argumentos son tipos y se
+        validan y canonicalizan como tales, con la MISMA regla de aridad— y
+        existe por el mismo motivo: si no se canonicalizaran, ``make<dt.int8>``
+        produciria un nominal que no unifica con el ``int8`` que declaro la
+        libreria.
+
+        Devuelve los tipos ya resueltos (vacio si la llamada no escribio
+        ninguno), para que el llamador sustituya la firma con ellos.
+        """
+        if not node.type_args:
+            return ()
+        args = tuple(self._check_type(resolve_type_expr(a), node.ln, node.col)
+                     or resolve_type_expr(a) for a in node.type_args)
+        self._check_arity(symbol, args, node.ln, node.col)
+        return args
+
     def bind_cast(self, node: ast.CastExpr) -> None:
         """``cast<T>(x)`` con T NOMINAL: valida que T exista y CANONICALIZA
         el destino (``cast<dt.int8>(x)`` -> nominal ``int8``, el nombre bajo

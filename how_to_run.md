@@ -246,6 +246,9 @@ toolchain:                  # rutas que el backend C++ usa para compilar/enlazar
   llvm_include: ""          # headers de LLVM
   linker: ""                # ld.lld / lld / link ... (detectado)
   sysroot: ""               # o la env var SURIAX_SYSROOT
+  cpp_flags: []             # banderas extra para los bloques '#extern cpp'
+                            #   (p. ej. ["-lX11"]). Tambien SURIAX_CPP_FLAGS:
+                            #   son de la MAQUINA, no del proyecto
 
 codegen:                    # target detallado
   triple: x86_64-unknown-linux-gnu

@@ -36,18 +36,28 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from .errors import (EXT010, EXT011, EXT012, EXT020, EXT021, EXT022, EXT023,
-                     EXT024, EXT025, EXT026, EXT027, ExtensionError)
+                     EXT024, EXT025, EXT026, EXT027, EXT028, EXT029,
+                     ExtensionError)
 
-#: nombre del decorador reconocido, en cualquiera de sus formas de import:
-#: ``@hook(...)``, ``@htims.hook(...)``, ``@suriax.hook(...)``.
-_DECORATOR = "hook"
+#: Decoradores reconocidos, en cualquiera de sus formas de import
+#: (``@signature(...)``, ``@htims.signature(...)``).
+#:
+#: ``hook`` es el nombre ANTERIOR de ``signature`` y sigue aceptándose para
+#: que las extensiones ya escritas compilen; se escanea con las reglas nuevas,
+#: así que tampoco por ahí se cuela un C++ implícito.
+_PURE = ("signature", "hook")
+_EXTENDS = ("signature_extends",)
+_DECORATORS = _PURE + _EXTENDS
 
 #: constante de módulo que da nombre al proyecto (lo define el ``.py``, no el
 #: nombre de los archivos).
 _PROJECT_CONST = "PROJECT"
 
-#: argumentos aceptados por el decorador.
-_ARGS = ("name", "owner", "params", "returns", "logic")
+#: argumentos comunes a los dos decoradores.
+_ARGS = ("name", "owner", "params", "returns")
+
+#: los que SOLO acepta ``@signature_extends``: son el contrato con C++.
+_ARGS_CXX = ("cxx", "logic")
 
 #: Vocabulario FIJO del compilador (``V0/src/frontend/semantic/hooks.py``).
 #: Está duplicado a propósito: importar la Semántica desde aquí rompería la
@@ -79,6 +89,10 @@ class HookDecl:
     file: str                    #: ruta absoluta del .py
     line: int
     column: int
+    #: ¿su lógica vive FUERA del lenguaje (logic_dir, C++)?
+    #: El valor por defecto no es cosmético: un hook que nadie declaró como
+    #: nativo NO lo es. C++ se pide escribiéndolo (ver EXT028/EXT029).
+    cxx: bool = False
 
     @property
     def key(self) -> Tuple[str, str]:
@@ -86,20 +100,21 @@ class HookDecl:
         return (self.owner, self.name)
 
 
-def _is_hook_decorator(node: ast.expr) -> bool:
-    """``@hook(...)``, ``@htims.hook(...)``, ``@suriax.hook(...)``.
+def _decorator_name(node: ast.expr) -> Optional[str]:
+    """El decorador de firma que hay en ``node``, o ``None``.
 
-    Solo la forma LLAMADA: un ``@hook`` sin paréntesis no trae ni dueño ni
-    firma, así que no es una declaración utilizable.
+    Solo la forma LLAMADA: un ``@signature`` sin paréntesis no trae ni dueño
+    ni firma, así que no es una declaración utilizable.
     """
     if not isinstance(node, ast.Call):
-        return False
+        return None
     func = node.func
+    nombre = None
     if isinstance(func, ast.Name):
-        return func.id == _DECORATOR
-    if isinstance(func, ast.Attribute):
-        return func.attr == _DECORATOR
-    return False
+        nombre = func.id
+    elif isinstance(func, ast.Attribute):
+        nombre = func.attr
+    return nombre if nombre in _DECORATORS else None
 
 
 def _literal_str(node: ast.expr) -> Optional[str]:
@@ -124,11 +139,21 @@ def _valid_hook_name(name: str) -> bool:
             and name[2:-2].isidentifier())
 
 
-def _scan_decorator(call: ast.Call, *, func_name: str, module: str, path: str
+def _literal_bool(node: ast.expr) -> Optional[bool]:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, bool) else None
+
+
+def _scan_decorator(call: ast.Call, decorator: str, *, func_name: str,
+                    module: str, path: str
                     ) -> Tuple[Optional[HookDecl], List[ExtensionError]]:
-    """Un ``@hook(...)`` -> declaración validada, o sus errores."""
+    """Un ``@signature(...)`` / ``@signature_extends(...)`` -> declaración
+    validada, o sus errores."""
     line, column = call.lineno, call.col_offset + 1
     errors: List[ExtensionError] = []
+    extiende = decorator in _EXTENDS
+    # el alias obsoleto se escanea con las reglas del puro, salvo que 'logic'
+    # ahí ya no pasa desapercibido (EXT028).
+    aceptados = _ARGS + (_ARGS_CXX if extiende else ())
 
     def err(code: str, message: str) -> None:
         errors.append(ExtensionError(code, message, file=path, line=line,
@@ -138,17 +163,26 @@ def _scan_decorator(call: ast.Call, *, func_name: str, module: str, path: str
     if call.args:
         raw["name"] = call.args[0]
     if len(call.args) > 1:
-        err(EXT026, "el decorador 'hook' acepta un solo argumento posicional "
-                    "(el nombre); el resto van por palabra clave "
-                    f"({', '.join(_ARGS[1:])})")
+        err(EXT026, f"el decorador '{decorator}' acepta un solo argumento "
+                    "posicional (el nombre); el resto van por palabra clave "
+                    f"({', '.join(aceptados[1:])})")
     for kw in call.keywords:
         if kw.arg is None:  # '**kwargs': no es declarable sin ejecutar
             err(EXT025, "'**' no es declarable: el escaneo no ejecuta el "
                         "archivo, así que cada argumento debe ser un literal")
             continue
-        if kw.arg not in _ARGS:
+        if kw.arg in _ARGS_CXX and not extiende:
+            # C++ NEGADO POR DEFECTO: no es un argumento desconocido, es uno
+            # que existe y que este decorador no puede pedir. El mensaje lo
+            # dice con el nombre del que sí puede.
+            err(EXT028, f"'{kw.arg}' pide lógica nativa, y '{decorator}' "
+                        "declara hooks que se resuelven dentro del lenguaje. "
+                        "Bajar a C++ se escribe: @signature_extends(..., "
+                        "cxx=True, logic=\"simbolo_cpp\")")
+            continue
+        if kw.arg not in aceptados:
             err(EXT026, f"argumento desconocido '{kw.arg}' en el decorador "
-                        f"'hook' (aceptados: {', '.join(_ARGS)})")
+                        f"'{decorator}' (aceptados: {', '.join(aceptados)})")
             continue
         if kw.arg in raw:
             err(EXT026, f"argumento '{kw.arg}' duplicado")
@@ -158,7 +192,7 @@ def _scan_decorator(call: ast.Call, *, func_name: str, module: str, path: str
     name = _literal_str(raw["name"]) if "name" in raw else None
     if "name" not in raw:
         err(EXT020, f"el hook declarado en '{func_name}' no tiene nombre: "
-                    "@hook(\"__loquesea__\", owner=...)")
+                    f"@{decorator}(\"__loquesea__\", owner=...)")
     elif name is None:
         err(EXT025, "el nombre del hook debe ser una cadena literal (el "
                     "escaneo no ejecuta el archivo)")
@@ -191,14 +225,34 @@ def _scan_decorator(call: ast.Call, *, func_name: str, module: str, path: str
             err(EXT023, "'params' debe ser una lista de cadenas literales con "
                         "los tipos del lenguaje: params=[\"Body ptr\", \"float\"]")
 
+    # --- el contrato con C++: explícito o no hay ------------------------- #
     logic = ""
-    if "logic" in raw:
-        found = _literal_str(raw["logic"])
-        if found is None:
-            err(EXT025, "'logic' debe ser una cadena literal (el símbolo de "
-                        "la lógica C++ en logic_dir)")
+    cxx = False
+    if extiende:
+        declarado = _literal_bool(raw["cxx"]) if "cxx" in raw else None
+        if "cxx" in raw and declarado is None:
+            err(EXT025, "'cxx' debe ser 'True' o 'False' literal (el escaneo "
+                        "no ejecuta el archivo)")
+        elif declarado is not True:
+            err(EXT029, f"'{name or func_name}' usa '@{decorator}' pero no "
+                        "declara 'cxx=True'. Sacar un hook del lenguaje es una "
+                        "decisión que se escribe: su cuerpo vivirá en logic_dir "
+                        "y el compilador ya no podrá verificarlo. Si no "
+                        "necesita C++, decláralo con '@signature'")
         else:
-            logic = found
+            cxx = True
+        if "logic" in raw:
+            found = _literal_str(raw["logic"])
+            if found is None:
+                err(EXT025, "'logic' debe ser una cadena literal (el símbolo "
+                            "de la lógica C++ en logic_dir)")
+            else:
+                logic = found
+        elif cxx:
+            err(EXT029, f"'{name or func_name}' declara 'cxx=True' pero no "
+                        "dice qué símbolo implementarlo: falta "
+                        "logic=\"nombre_del_simbolo\", que es lo que "
+                        "logic_dir tendrá que definir")
 
     if name is not None and name in RESERVED_HOOKS:
         err(EXT027, f"'{name}' pertenece al vocabulario fijo del compilador y "
@@ -210,7 +264,7 @@ def _scan_decorator(call: ast.Call, *, func_name: str, module: str, path: str
 
     return HookDecl(
         name=name, owner=owner, params=tuple(params or ()), returns=returns,
-        logic=logic, func=func_name, module=module, file=path,
+        logic=logic, cxx=cxx, func=func_name, module=module, file=path,
         line=line, column=column,
     ), []
 
@@ -254,10 +308,12 @@ def scan_file(path: str) -> Tuple[str, List[HookDecl], List[ExtensionError]]:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for decorator in node.decorator_list:
-            if not _is_hook_decorator(decorator):
+            nombre = _decorator_name(decorator)
+            if nombre is None:
                 continue
             decl, decl_errors = _scan_decorator(
-                decorator, func_name=node.name, module=module, path=path)
+                decorator, nombre, func_name=node.name, module=module,
+                path=path)
             errors.extend(decl_errors)
             if decl is not None:
                 decls.append(decl)

@@ -1,0 +1,108 @@
+#from io #import stdp
+
+/- Una ventana de verdad, con X11. El bloque '#extern cpp' trae la
+   biblioteca del sistema; suriaX solo declara el contrato. -/
+#extern cpp{
+#include <X11/Xlib.h>
+#include <cstring>
+#include <unistd.h>
+
+namespace {
+Display* display = nullptr;
+Window ventana = 0;
+GC contexto = 0;
+}
+
+extern "C" long long abre_ventana(long long ancho, long long alto,
+                                  const char* titulo) {
+    display = XOpenDisplay(nullptr);
+    if (display == nullptr) return 0;
+    const int pantalla = DefaultScreen(display);
+    ventana = XCreateSimpleWindow(
+        display, RootWindow(display, pantalla), 10, 10,
+        static_cast<unsigned>(ancho), static_cast<unsigned>(alto), 1,
+        BlackPixel(display, pantalla), WhitePixel(display, pantalla));
+    XStoreName(display, ventana, titulo);
+    XSelectInput(display, ventana, ExposureMask | KeyPressMask |
+                              StructureNotifyMask);
+    XMapWindow(display, ventana);
+    // X es ASINCRONO: 'XMapWindow' encola la peticion y vuelve. Preguntar por
+    // la ventana justo despues contesta que aun no es visible, porque el
+    // servidor no la ha procesado. Se espera su 'MapNotify', que es el acuse
+    // de que ya esta en pantalla.
+    XEvent evento;
+    do {
+        XNextEvent(display, &evento);
+    } while (evento.type != MapNotify);
+    contexto = XCreateGC(display, ventana, 0, nullptr);
+    XSetForeground(display, contexto, BlackPixel(display, pantalla));
+    XFlush(display);
+    return 1;
+}
+
+// ¿El servidor X dice que la ventana esta MAPEADA y con que geometria?
+// Es la comprobacion que se puede hacer sin mirar la pantalla: bajo Wayland
+// una ventana de Xwayland no aparece en el root de X, asi que una captura
+// del root no prueba nada — pero el servidor si sabe la verdad.
+extern "C" long long ventana_visible() {
+    if (display == nullptr) return 0;
+    XWindowAttributes attr;
+    if (XGetWindowAttributes(display, ventana, &attr) == 0) return 0;
+    return attr.map_state == IsViewable ? attr.width : -1;
+}
+
+extern "C" void dibuja(const char* texto) {
+    if (display == nullptr) return;
+    XDrawString(display, ventana, contexto, 20, 40, texto,
+                static_cast<int>(std::strlen(texto)));
+    XFlush(display);
+}
+
+extern "C" void espera(long long ms) {
+    if (display == nullptr) return;
+    // redibuja mientras espera: sin atender 'Expose' la ventana sale en
+    // blanco en cuanto el gestor la descubre.
+    for (long long i = 0; i < ms / 50; ++i) {
+        while (XPending(display) > 0) {
+            XEvent evento;
+            XNextEvent(display, &evento);
+            if (evento.type == Expose) {
+                XDrawString(display, ventana, contexto, 20, 40,
+                            "Hola desde suriaX - esto lo dibujo C++", 38);
+            }
+        }
+        XFlush(display);
+        usleep(50000);
+    }
+}
+
+extern "C" void cierra_ventana() {
+    if (display == nullptr) return;
+    XFreeGC(display, contexto);
+    XDestroyWindow(display, ventana);
+    XCloseDisplay(display);
+    display = nullptr;
+}
+}
+
+fn abre_ventana(int ancho, int alto, str titulo) -> int;
+fn ventana_visible() -> int;
+fn dibuja(str texto) -> void;
+fn espera(int ms) -> void;
+fn cierra_ventana() -> void;
+
+fn main() -> int {
+    stdp.println("suriaX: abriendo una ventana...");
+    var int ok = abre_ventana(420, 160, "suriaX");
+    if (ok == 0) {
+        stdp.println("no hay pantalla (DISPLAY sin definir)");
+        return 1;
+    }
+    dibuja("Hola desde suriaX — esto lo dibujo C++");
+    var int ancho = ventana_visible();
+    stdp.println(f"suriaX: el servidor X dice ancho={ancho} (>0 = visible)");
+    espera(3000);
+    cierra_ventana();
+    stdp.println("suriaX: ventana cerrada");
+    return 0;
+}

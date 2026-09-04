@@ -7,7 +7,10 @@ backend C++ (MIR → VM de bytecode), el intérprete tree-walk y el target web
 semántico persistente. Ver [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 > Estado: **emisor Python implementado** (Fase 5 del lado frontend
-> completa). Falta el lector C++ (entrada del lowering a MIR).
+> completa) y **tres lectores vivos**: el intérprete tree-walk
+> (`runtime/interpreter/loader.py`), el target web (`web/src/hir/decode.ts`)
+> y el backend C++ ([`backend/`](../backend/README.md)). Falta el lowering a
+> MIR, que es lo que consume el lector C++.
 
 ## Propósito
 
@@ -63,7 +66,22 @@ python V0/main.py programa.srcx --emit-hir
 python runtime/interpreter/main.py dumps/programa.srcx.phir
 #   punto de entrada del intérprete: valida el esquema fail-fast, indexa
 #   los hooks y resume el módulo (el tree-walk llega en la Fase 5.5).
+
+build/bin/suriax-hir dumps/programa.srcx.phir --pretty
+#   el lector C++: las mismas dos vistas, byte a byte. Compararlas es el
+#   diferencial entre consumidores (test/e2e/test_backend_cpp.py).
+
+build/bin/suriax-hir dumps/programa.srcx.phir --resolve
+#   el lector RESUELVE la imagen: cada función con sus slots, a qué se
+#   resuelve cada llamada (función de una unidad, prototipo del host, hook,
+#   método, nativo) y qué destruye cada bloque. Falla si queda un sitio sin
+#   resolver — lo que el backend no entiende no lo puede bajar a MIR.
 ```
+
+`--pretty` demuestra que el lector **recorre** todo lo que el emisor escribe;
+`--resolve` demuestra que lo **entiende**. Son preguntas distintas: imprimir
+`foo(2, 3)` no exige saber a qué `foo` se llama, y un backend que confunde dos
+funciones del mismo nombre genera llamadas al sitio equivocado.
 
 La dependencia `protobuf` solo se exige si se pide la fase HIR; el frontend
 (lexer → Semántica) funciona sin ella. Los stubs `hir_pb2.py` **no se
@@ -78,6 +96,7 @@ commitean**: `V0/src/HIR/stubs.py` los genera con `protoc` en build (carpeta
 | [`emmit_IR.py`](../V0/src/HIR/emmit_IR.py) | emisor explícito por clase: `(Program, SymbolTable)` → bytes; acumula `HIRError`, solo emite con cero errores |
 | [`stubs.py`](../V0/src/HIR/stubs.py) | generación en build + carga perezosa de `hir_pb2` |
 | [`PROTOBUF_BRIDGE.md`](../V0/src/HIR/PROTOBUF_BRIDGE.md) | diseño completo del puente (mapeos, decisiones, versionado) |
+| [`backend/`](../backend/README.md) | lector C++: fail-fast de esquema, module linker y `switch` exhaustivo por `oneof` |
 
 ## TODO
 
@@ -87,6 +106,7 @@ commitean**: `V0/src/HIR/stubs.py` los genera con `protoc` en build (carpeta
 - [x] Versionado de esquema (`schema_version` fail-fast, paquete `v0`).
 - [x] Lector de HIR en TypeScript (target web): valida `schema_version`,
   reconstruye la `SymbolTable` y baja a WIR → JS/WASM.
-- [ ] Lector de HIR en C++ (valida `schema_version`, reconstruye
-  `SymbolTable`, `switch` exhaustivo por `oneof`).
+- [x] Lector de HIR en C++ (valida `schema_version`, reconstruye
+  `SymbolTable`, `switch` exhaustivo por `oneof` **sin rama `default`**, y
+  liga las N unidades). Ver [`backend/`](../backend/README.md).
 - [ ] Round-trip golden tests por cada ejemplo de `docs/examples/`.

@@ -116,6 +116,7 @@ function encodeType(type: Type, w: Writer): void {
   w.string(2, type.name);
   if (type.inner !== null) w.message(3, (t) => encodeType(type.inner!, t));
   w.bool(4, type.mut);
+  for (const arg of type.args) w.message(5, (t) => encodeType(arg, t));
 }
 
 function encodeSymbol(sym: SymbolInfo, w: Writer): void {
@@ -449,6 +450,9 @@ function encodeEnum(decl: EnumDecl, w: Writer): void {
     w.message(2, (i) => {
       i.string(1, item.name);
       if (item.value !== null) i.message(2, (e) => encodeExpr(item.value!, e));
+      // sin omitir el 0: en un REPETIDO, "vale cero" es un elemento más y
+      // saltárselo cambiaría la longitud de la lista.
+      for (const id of item.payloadTypeIds) i.tag(3, 0).varint32(id);
     });
   }
 }

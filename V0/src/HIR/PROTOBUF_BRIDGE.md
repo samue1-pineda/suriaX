@@ -152,12 +152,34 @@ categoría, un solo recorrido O(n).
 - La dependencia `protobuf` la exige `V0/main.py` **solo si se pide la fase
   HIR** (`--emit-hir` / `#test hir`); el frontend puro sigue sin necesitarla
   (no imponer dependencias por adelantado).
-- Generación de stubs (**implementada en `stubs.py`**): `protoc
-  --python_out=gen proto/hir.proto` se ejecuta en build, de forma perezosa y
-  con detección de staleness por mtime (un `stat`, no re-generación ciega).
-  Los stubs generados **no se commitean** (`V0/src/HIR/gen/` está en
-  `.gitignore`); regenerarlos es parte del build, no del repo. El `--cpp_out`
-  del backend queda para la fase del lector C++.
+- **El lado Python NO usa `protoc` ni `google.protobuf`** (`stubs.py` +
+  `schema.py` + `wire.py`). Los mensajes se construyen leyendo el propio
+  `hir.proto` y se serializan a mano.
+
+  Antes se generaban stubs con `protoc` y se cargaban con la librería. Eso
+  ataba la compilación a DOS instalaciones que se hacen por vías distintas
+  —un binario del sistema y un paquete de pip— y que además tienen que ser
+  compatibles entre sí: el stub generado lleva dentro su versión de gencode
+  y el runtime se niega a cargar uno más nuevo que él. Un `protoc` 36 con un
+  `protobuf` 7.35 es una combinación perfectamente normal, y rompía la
+  compilación entera —con un `VersionError` en bruto— en cuanto alguien
+  tocaba el `.proto`.
+
+  Es la misma decisión que ya había tomado el target web por las mismas
+  razones (ver la cabecera de `web/src/hir/wire.ts`), y devuelve al proyecto
+  la propiedad que esta sección prometía: el frontend no necesita nada
+  instalado.
+
+  El `.proto` sigue siendo la **fuente única**: no hay un esquema
+  transcrito a mano que mantener sincronizado, se lee de él. Y que los bytes
+  sean protobuf DE VERDAD lo comprueba
+  `test_hir_reproducible.test_el_codec_propio_coincide_con_google_protobuf`,
+  que sí usa la librería **cuando está instalada** y se salta cuando no.
+
+- El `--cpp_out` lo sigue invocando CMake (`CMake/SuriaXBackend.cmake`): el
+  backend C++ enlaza `libprotobuf` de verdad, y ahí es una dependencia de
+  BUILD del backend, resuelta por el mismo sistema que lo compila. Quien
+  descarga un binario no la ve.
 
 ## 3. Versionado del esquema
 
@@ -189,9 +211,15 @@ categoría, un solo recorrido O(n).
 1. ~~Fijar `hir.proto`~~ **hecho** (tags `reserved` para las regiones retiradas).
 2. ~~`emmit_IR.py` + `#test hir`~~ **hecho** (`emit`/`emit_text`, más
    `--emit-hir` en `V0/main.py` → binario `.hir` en `./dumps`).
-3. Lector C++ mínimo que valide `schema_version` y reconstruya
-   `SymbolTable` + un `switch` exhaustivo por `oneof` (aunque el lowering
-   sea un stub): eso congela el contrato de la frontera. **Pendiente.**
+3. ~~Lector C++ mínimo que valide `schema_version` y reconstruya
+   `SymbolTable` + un `switch` exhaustivo por `oneof`~~ **hecho**
+   ([`backend/`](../../../backend/README.md)). El contrato de la frontera
+   queda congelado: sus vistas (`--pretty`, `--summary`) son **byte-idénticas**
+   a las de Python, y `test/e2e/test_backend_cpp.py` las compara sobre un
+   programa de referencia que toca cada forma del esquema. El `switch` va
+   **sin rama `default`**, así que añadir un caso al `oneof` rompe la
+   compilación del lector — la exhaustividad verificable por el compilador que
+   esta sección prometía.
 4. Round-trip test: `.srcx` → HIR → texto → comparación golden, por cada
    ejemplo de `docs/examples/`. **Pendiente** (verificado hoy a mano:
    emisión + deserialización + inspección de símbolos/AddrOf/nullable).

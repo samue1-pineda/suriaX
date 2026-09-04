@@ -164,7 +164,8 @@ Todo lo que la inferencia habría resuelto se resuelve **escribiéndolo**:
 * el tipo de un binding y de un parámetro: anotados, siempre;
 * los argumentos de un genérico: ``Vector<int>``, en la anotación y en el
   literal;
-* los de una llamada genérica, cuando existan: ``vec.make<int>(6)``;
+* los de una llamada genérica: ``vec.make<int>(6)`` — salvo cuando el
+  parámetro aparece en un argumento y se deduce de él;
 * convertir entre tipos: ``cast<T>(x)``, nunca implícito — salvo un literal
   con :ref:`rango comprobado <rango-literal>`, que es la única excepción y
   está acotada.

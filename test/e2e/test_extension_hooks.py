@@ -23,13 +23,14 @@ _MANIFEST = ("project:   MiJuego\n"
              "logic_dir: extensions/logic\n"
              "calls_dir: extensions/calls\n")
 
-_PHYSICS = ('from htims import hook\n'
+# El cuerpo del hook se escribe en el .srcx (abajo), así que la firma es PURA:
+# no declara 'cxx=True' ni 'logic'. Pedir C++ aquí sería EXT028.
+_PHYSICS = ('from htims import signature\n'
             'PROJECT = "MiJuego"\n'
-            '@hook("__gravity__", owner="Body",\n'
-            '      params=["Body ptr mutable", "int"], returns="void",\n'
-            '      logic="gravity_cpp")\n'
+            '@signature("__gravity__", owner="Body",\n'
+            '           params=["Body ptr mutable", "int"], returns="void")\n'
             'def gravity(body, dt):\n'
-            '    """la lógica real llegará con la VM+JIT"""\n')
+            '    """implementación de referencia"""\n')
 
 #: 20 - 10*1 = 10, y 'main' devuelve ese valor: el exit code demuestra que el
 #: hook corrió y que la mutación del receptor se propagó.

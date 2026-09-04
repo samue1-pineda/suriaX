@@ -60,8 +60,12 @@ dice qué se puede usar hoy, para que la referencia no prometa de más.
 Propiedad y transferencia
 --------------------------
 
-Un valor pertenece a la variable que lo nombra. Pasarlo a otro sitio sin
-copiarlo es **moverlo**:
+Un valor pertenece a la variable que lo nombra. Un ``struct`` es un **valor**:
+ligarlo a otro nombre lo copia, y mutar la copia no toca el original — el
+único tipo que refiere a otro sitio es ``ptr``. Pero copiar algo que tiene
+**obligación de destrucción** no duplica el recurso: duplica al dueño, y su
+destructor correría dos veces. Por eso llevarlo a otro sitio es **moverlo**, y
+ligarlo sin ``move`` es ``SEM032``:
 
 .. code-block:: srcx
    :class: fragmento

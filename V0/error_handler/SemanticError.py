@@ -337,6 +337,96 @@ class UnsupportedPayloadError(SemanticError):
         super().__init__(message, code="SEM029", **kwargs)
 
 
+class NonExhaustiveMatchError(SemanticError):
+    """Un ``match`` sobre un ``enum`` que deja variantes sin cubrir.
+
+    Un ``match`` que no encaja con ninguna rama no hace nada, en silencio: el
+    fallo aparece como un comportamiento que falta, no como un error, y lejos
+    de la causa. Anadir una variante a un ``enum`` deja asi TODOS los ``match``
+    del proyecto incompletos sin que nada lo diga — que es justo cuando mas
+    falta hace saberlo.
+
+    Es un **aviso**, no un rechazo, por dos razones: un ``match`` parcial es
+    hoy un programa valido y con significado definido (no hacer nada), y el
+    lenguaje no tiene comodin (``_``/``default``) con el que decir "el resto
+    me da igual" — convertirlo en error obligaria a escribir ramas vacias.
+
+    Solo se emite donde se SABE: el sujeto tiene que ser un ``enum`` conocido y
+    todas las ramas tienen que nombrar variantes suyas. Si una rama es una
+    expresion cualquiera, el analisis no puede decir que cubre y calla — el
+    contrato de cero falsos positivos de la Semantica manda sobre la ganas de
+    avisar.
+    """
+
+    severity = Severity.WARNING
+
+    def __init__(self, message: Any = "match no exhaustivo", **kwargs: Any):
+        super().__init__(message, code="SEM030", **kwargs)
+
+
+class NotIndexableError(SemanticError):
+    """``x[i]`` sobre un tipo que nunca puede indexarse.
+
+    Se escribia, compilaba, y reventaba en EJECUCION con ``RT014`` — un
+    programa que el sistema de tipos podia haber rechazado al leerlo. El caso
+    que lo destapo es el mas natural que hay: recorrer una cadena
+    (``texto[i]``) despues de medirla con ``len``.
+
+    Solo se rechaza lo que se SABE: los primitivos, que no tienen ni pueden
+    tener ``__index__``. Un tipo nominal sin el hook se deja pasar — puede
+    declararlo una libreria que esta pasada aun no vio, y el contrato de cero
+    falsos positivos manda.
+    """
+
+    def __init__(self, message: Any = "el tipo no es indexable", **kwargs: Any):
+        super().__init__(message, code="SEM031", **kwargs)
+
+
+class ImplicitOwnershipCopyError(SemanticError):
+    """Ligar a un nombre nuevo un valor que POSEE recursos, sin ``move``.
+
+    ``var R b = a;`` dejaba a los dos nombres con el mismo recurso y el
+    destructor corría DOS veces sobre él — justo la doble liberación que el
+    modelo promete que no ocurre. Un ``struct`` es un valor y ligarlo lo
+    copia; pero copiar algo que tiene una obligación de destrucción no
+    duplica el recurso, duplica al dueño.
+
+    La transferencia se escribe: ``var R b = move a;``. Es la forma que la
+    documentación del modelo de memoria usa desde el principio.
+
+    Solo se rechaza cuando el valor ligado NOMBRA a otro dueño (una variable,
+    un campo): un literal o el retorno de una función no tienen un segundo
+    dueño del que hablar.
+    """
+
+    def __init__(self, message: Any = "copia implícita de un valor con dueño",
+                 **kwargs: Any):
+        super().__init__(message, code="SEM032", **kwargs)
+
+
+class ContainerOverflowError(SemanticError):
+    """Se reservaron N espacios y hay mas de N ``push`` seguidos sobre ellos.
+
+    ``int vec.Vector v[2];`` reserva DOS. El tercer ``push`` no cabe, y eso se
+    puede ver sin ejecutar el programa cuando la capacidad es un literal y los
+    ``push`` estan uno detras de otro en el mismo bloque: no hay condicion ni
+    bucle que pueda cambiar la cuenta.
+
+    Solo se reporta ese caso. Un ``push`` dentro de un ``if`` o de un ``while``
+    depende de la ejecucion, y afirmar ahi que "no cabe" rechazaria programas
+    correctos; esos siguen fallando en ejecucion, donde el vector lanza. La
+    regla es la de siempre en este compilador: avisar de lo que se puede
+    demostrar, callar donde habria falsos positivos, y no dejarlo pasar en
+    silencio en ninguno de los dos casos.
+
+    Que hacer: reserva mas espacio en la declaracion, o quita los ``push`` que
+    sobran.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM033", **kwargs)
+
+
 class MissingHandlerError(SemanticError):
     """Un nodo del AST llegó a una pasada que no sabe recorrerlo.
 
@@ -365,6 +455,9 @@ __all__ = [
     "TypeArityError",
     "IncompleteStructLiteralError",
     "UnsupportedPayloadError",
+    "NonExhaustiveMatchError",
+    "NotIndexableError",
+    "ImplicitOwnershipCopyError",
     "MissingHandlerError",
     "UndefinedSymbolError",
     "DuplicateSymbolError",

@@ -23,6 +23,7 @@
         "hook_name": null,
         "hook_module": null,
         "const_value": null,
+        "type_name": "Nodo",
         "type_params": [],
         "param_types": null,
         "members": {
@@ -48,9 +49,11 @@
             "hook_name": null,
             "hook_module": null,
             "const_value": null,
+            "type_name": null,
             "type_params": [],
             "param_types": null,
-            "members": null
+            "members": null,
+            "scope_id": 0
           },
           "sig": {
             "__node__": "Symbol",
@@ -88,11 +91,14 @@
             "hook_name": null,
             "hook_module": null,
             "const_value": null,
+            "type_name": null,
             "type_params": [],
             "param_types": null,
-            "members": null
+            "members": null,
+            "scope_id": 0
           }
-        }
+        },
+        "scope_id": 0
       }
     },
     "values": {
@@ -132,6 +138,7 @@
         "hook_name": null,
         "hook_module": null,
         "const_value": null,
+        "type_name": null,
         "type_params": [],
         "param_types": [
           {
@@ -143,7 +150,8 @@
             "args": []
           }
         ],
-        "members": null
+        "members": null,
+        "scope_id": 0
       },
       "suma": {
         "__node__": "Symbol",
@@ -174,6 +182,7 @@
         "hook_name": null,
         "hook_module": null,
         "const_value": null,
+        "type_name": null,
         "type_params": [],
         "param_types": [
           {
@@ -199,7 +208,8 @@
             "args": []
           }
         ],
-        "members": null
+        "members": null,
+        "scope_id": 0
       },
       "main": {
         "__node__": "Symbol",
@@ -223,9 +233,11 @@
         "hook_name": null,
         "hook_module": null,
         "const_value": null,
+        "type_name": null,
         "type_params": [],
         "param_types": [],
-        "members": null
+        "members": null,
+        "scope_id": 0
       }
     }
   },

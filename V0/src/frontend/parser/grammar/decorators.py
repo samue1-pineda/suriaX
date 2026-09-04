@@ -33,6 +33,7 @@ from ..context import ParserContext
 from ..cursor import Cursor
 from .enums import parse_enum_decl
 from .functions import parse_function_decl
+from .types import parse_type_params
 from .prefixes import consume_specifier, consume_visibility
 from .structs import parse_struct_decl
 from .traits import parse_trait_decl
@@ -88,6 +89,10 @@ def _parse_impl_block(cursor: Cursor, ctx: ParserContext,
     para registrarse y despacharse como ``x.m(...)`` (misma maquinaria que un
     ``dunder fn``). El parser lo APLANA en ``program.py``."""
     type_tok = cursor.expect_name()
+    # '@impl Vector<T>': los parametros del tipo, para que los metodos puedan
+    # nombrar 'T' en su firma. Sin esto, un generico solo podia tener metodos
+    # si su elemento era un tipo concreto.
+    type_params = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.L_BRACE)
     methods: List[ast.FunctionDecl] = []
     while not cursor.check(TokenType.R_BRACE) and not cursor.at_end():
@@ -122,7 +127,8 @@ def _parse_impl_block(cursor: Cursor, ctx: ParserContext,
     cursor.expect(TokenType.R_BRACE)
     cursor.match(TokenType.SEMICOLON)  # ';' final opcional
     return ast.ImplDecl(ln=deco_tok.ln, col=deco_tok.col,
-                        type_name=type_tok.lexeme, methods=methods)
+                        type_name=type_tok.lexeme, methods=methods,
+                        type_params=type_params)
 
 
 def _parse_decorator_args(cursor: Cursor) -> List[str]:

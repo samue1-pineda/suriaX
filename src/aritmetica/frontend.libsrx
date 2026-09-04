@@ -1,0 +1,329 @@
+/- frontend — lexer + parser de una aritmética real, escritos EN suriaX.
+
+ Primera pieza de la V1 (ver `src/readme.md`): el compilador empezando a
+ escribirse a sí mismo. No es un ejemplo — es la prueba de si el lenguaje
+ aguanta lo que un compilador necesita, y por eso se escribe con las mismas
+ reglas que cualquier librería del proyecto.
+
+ Cubre las dos primeras etapas sobre expresiones enteras con precedencia:
+
+   "12 + 34 * (5 - 6)"  ->  tokens  ->  árbol  ->  valor
+
+ El parser es de **precedencia por niveles** (descenso recursivo clásico):
+ `expresion` maneja `+`/`-`, `termino` maneja `*`/`/`/`%` y `factor` los
+ paréntesis y los literales. Que `*` ligue más que `+` no es una tabla: es
+ que `expresion` llama a `termino`, y `termino` es quien consume los `*`.
+
+ ### Por qué TODO está en un archivo
+
+ No por gusto: un submódulo NO puede importar a un hermano de su propio
+ paquete — el linker lo detecta como import circular al re-entrar en el
+ paquete que está cargando. Separar `tokens`, `scanner` y `parser` es lo
+ natural y es lo que hace la V0; aquí no se puede todavía.
+-/
+
+#from io #import stdp
+#import array.vector as vec
+
+// --------------------------------------------------------------------------- //
+// vocabulario
+// --------------------------------------------------------------------------- //
+
+/- La clase de un token. Los valores son EXPLÍCITOS y no consecutivos a
+   propósito: agrupan por familia (10 = literales, 20 = operadores, 30 =
+   agrupación, 90 = control), así que `cast<int>(t) / 10` dice la familia sin
+   una tabla aparte. Es la misma idea que los códigos HTTP. -/
+enum TType {
+    INT_LIT = 10,
+
+    PLUS = 20,
+    MINUS = 21,
+    STAR = 22,
+    SLASH = 23,
+    PERCENT = 24,
+
+    L_PAREN = 30,
+    R_PAREN = 31,
+
+    EOF = 90,
+    ERROR = 91
+};
+
+/- Un token: su clase, el valor si es un literal, y DÓNDE empezó.
+
+   `valor` solo significa algo cuando `tipo` es `INT_LIT`. Podría haber sido
+   un enum con payload —el lenguaje los tiene— pero entonces el token dejaría
+   de ser un entero con nombre y no se podría comparar con `==`; para un lexer,
+   que compara clases todo el tiempo, eso pesa más que la pureza.
+
+   La columna no es decoración: es lo que permite que un error señale el sitio.
+-/
+struct {
+    TType tipo;
+    int valor;
+    int col;
+} Token;
+
+public fn token(TType tipo, int valor, int col) -> Token {
+    return Token{ tipo: tipo, valor: valor, col: col };
+}
+
+/- El nombre de una clase, para diagnósticos y para leer un volcado.
+
+   Se escribe el `match` en vez de usar `TType.X.name` sobre la variable
+   porque ese atributo se resuelve al COMPILAR: vale sobre un item escrito
+   (`TType.PLUS.name`, que es lo que hay en cada rama), no sobre el que trae
+   una variable. -/
+public fn nombre_de(TType t) -> str {
+    match (t) {
+        case TType.INT_LIT: { return TType.INT_LIT.name; }
+        case TType.PLUS:    { return TType.PLUS.name; }
+        case TType.MINUS:   { return TType.MINUS.name; }
+        case TType.STAR:    { return TType.STAR.name; }
+        case TType.SLASH:   { return TType.SLASH.name; }
+        case TType.PERCENT: { return TType.PERCENT.name; }
+        case TType.L_PAREN: { return TType.L_PAREN.name; }
+        case TType.R_PAREN: { return TType.R_PAREN.name; }
+        case TType.EOF:     { return TType.EOF.name; }
+        case TType.ERROR:   { return TType.ERROR.name; }
+    }
+    return "?";
+}
+
+/- ¿Es un operador? La FAMILIA lo dice sin enumerar los casos. -/
+public fn es_operador(TType t) -> bool {
+    return cast<int>(t) / 10 == 2;
+}
+
+// --------------------------------------------------------------------------- //
+// análisis léxico
+// --------------------------------------------------------------------------- //
+
+/- Dígito -> su valor, o `-1` si el carácter no lo es.
+
+   Se compara contra code points porque un `char` de suriaX ES un code point:
+   `cast<int>('0')` da 48. Restar la base es la aritmética de siempre. -/
+public fn valor_digito(char c) -> int {
+    var int p = cast<int>(c);
+    if (p < 48 or p > 57) { return -1; }
+    return p - 48;
+}
+
+public fn es_espacio(char c) -> bool {
+    var int p = cast<int>(c);
+    // espacio, tabulador, salto de línea, retorno de carro
+    return p == 32 or p == 9 or p == 10 or p == 13;
+}
+
+/- El operador que corresponde a `c`, o `TType.ERROR` si no es ninguno. -/
+public fn operador_de(char c) -> TType {
+    if (c == '+') { return TType.PLUS; }
+    if (c == '-') { return TType.MINUS; }
+    if (c == '*') { return TType.STAR; }
+    if (c == '/') { return TType.SLASH; }
+    if (c == '%') { return TType.PERCENT; }
+    if (c == '(') { return TType.L_PAREN; }
+    if (c == ')') { return TType.R_PAREN; }
+    return TType.ERROR;
+}
+
+/- `"12 + 3"` -> sus tokens, con `EOF` al final.
+
+   La reserva es `len(fuente) + 1`: ningún token ocupa menos de un carácter y
+   siempre se añade el `EOF`. Es una COTA, no una estimación — un vector de
+   capacidad fija exige saber que cabe, y aquí se puede saber.
+
+   El `EOF` no es decoración: es lo que permite que el parser pida el token
+   siguiente sin comprobar la longitud en cada paso.
+-/
+public fn tokenizar(str fuente) -> vec.Vector<Token> {
+    var int largo = len(fuente);
+    var vec.Vector<Token> salida = vec.make<Token>(largo + 1);
+    var int i = 0;
+
+    while (i < largo) {
+        var char c = fuente[i];
+
+        if (es_espacio(c)) {
+            i = i + 1;
+            continue;
+        }
+
+        var int digito = valor_digito(c);
+        if (digito >= 0) {
+            // un número son VARIOS caracteres: se acumula en base 10 mientras
+            // sigan siendo dígitos. La columna es la del PRIMERO.
+            var int inicio = i;
+            var int valor = 0;
+            while (i < largo) {
+                var int d = valor_digito(fuente[i]);
+                if (d < 0) { break; }
+                valor = valor * 10 + d;
+                i = i + 1;
+            }
+            salida.push(token(TType.INT_LIT, valor, inicio));
+            continue;
+        }
+
+        salida.push(token(operador_de(c), 0, i));
+        i = i + 1;
+    }
+
+    salida.push(token(TType.EOF, 0, largo));
+    return salida;
+}
+
+/- Los tokens, uno por línea: el `--emit-tokens` de esta V1. -/
+public fn mostrar_tokens(vec.Vector<Token> ptr tokens) -> void {
+    var int i = 0;
+    while (i < tokens.len()) {
+        var Token t = tokens.get(i);
+        stdp.println(f"{t.col}:{nombre_de(t.tipo)} {t.valor}");
+        i = i + 1;
+    }
+}
+
+// --------------------------------------------------------------------------- //
+// análisis sintáctico
+// --------------------------------------------------------------------------- //
+
+/- El estado del parser: los tokens y por dónde va.
+
+   Se pasa por PUNTERO MUTABLE a cada nivel (`Parser ptr mutable p`) porque
+   avanzar es un efecto: si se pasara por valor, cada nivel avanzaría su
+   propia copia y el de arriba no se enteraría. Es el equivalente del `self`
+   de un método, escrito a mano — el lenguaje no tiene métodos libres sobre
+   un struct fuera de `@impl`.
+
+   `error` no es un `throw`: un parser que aborta a la primera solo puede
+   reportar un error por compilación, y lo que se quiere es seguir leyendo.
+-/
+struct {
+    vec.Vector<Token> tokens;
+    int pos;
+    bool fallo;
+    str motivo;
+    int donde;
+} Parser;
+
+/- El campo se llama 'fallo' y no 'error' porque `error` es PALABRA
+   RESERVADA: es el constructor del tipo `error T`. El diagnóstico que sale al
+   intentarlo ("se esperaba un nombre, se encontro ERRORTYPE") no lo dice, y
+   es de las cosas que solo se descubren escribiendo código de verdad. -/
+
+public fn parser_de(str fuente) -> Parser {
+    return Parser{ tokens: tokenizar(fuente), pos: 0, fallo: false,
+                   motivo: "", donde: 0 };
+}
+
+fn actual(Parser ptr p) -> Token {
+    return p.tokens.get(p.pos);
+}
+
+fn avanzar(Parser ptr mutable p) -> void {
+    // el EOF nunca se consume: es el fondo contra el que chocan los niveles
+    if (p.pos + 1 < p.tokens.len()) { p.pos = p.pos + 1; }
+}
+
+/- Registra el PRIMER error y no lo pisa: los siguientes suelen ser
+   consecuencia de este, y el que se busca es el primero. -/
+fn fallar(Parser ptr mutable p, str motivo, int donde) -> void {
+    if (p.fallo) { return; }
+    p.fallo = true;
+    p.motivo = motivo;
+    p.donde = donde;
+}
+
+/- factor = INT_LIT | "-" factor | "(" expresion ")" -/
+fn factor(Parser ptr mutable p) -> int {
+    var Token t = actual(p);
+
+    if (t.tipo == TType.INT_LIT) {
+        avanzar(p);
+        return t.valor;
+    }
+    if (t.tipo == TType.MINUS) {
+        // unario: '-(2+3)' y '--4' salen solos por la recursión
+        avanzar(p);
+        return -factor(p);
+    }
+    if (t.tipo == TType.L_PAREN) {
+        avanzar(p);
+        var int dentro = expresion(p);
+        if (actual(p).tipo != TType.R_PAREN) {
+            fallar(p, "falta ')'", actual(p).col);
+            return dentro;
+        }
+        avanzar(p);
+        return dentro;
+    }
+
+    fallar(p, f"se esperaba un número y llegó {nombre_de(t.tipo)}", t.col);
+    return 0;
+}
+
+/- termino = factor { ("*" | "/" | "%") factor } -/
+fn termino(Parser ptr mutable p) -> int {
+    var int izq = factor(p);
+    while (true) {
+        var TType op = actual(p).tipo;
+        if (op != TType.STAR and op != TType.SLASH and op != TType.PERCENT) {
+            break;
+        }
+        var int col = actual(p).col;
+        avanzar(p);
+        var int der = factor(p);
+        if (op == TType.STAR) { izq = izq * der; }
+        if (op == TType.SLASH) {
+            // dividir por cero no tiene respuesta entre enteros: es un error
+            // del PROGRAMA analizado, no del parser, y se reporta igual.
+            if (der == 0) { fallar(p, "división por cero", col); }
+            else { izq = izq / der; }
+        }
+        if (op == TType.PERCENT) {
+            if (der == 0) { fallar(p, "resto de una división por cero", col); }
+            else { izq = izq % der; }
+        }
+    }
+    return izq;
+}
+
+/- expresion = termino { ("+" | "-") termino }
+
+   Que `*` ligue más que `+` no es una tabla de precedencias: es que este
+   nivel llama a `termino`, y `termino` consume los `*` antes de devolver. -/
+public fn expresion(Parser ptr mutable p) -> int {
+    var int izq = termino(p);
+    while (true) {
+        var TType op = actual(p).tipo;
+        if (op != TType.PLUS and op != TType.MINUS) { break; }
+        avanzar(p);
+        var int der = termino(p);
+        if (op == TType.PLUS) { izq = izq + der; }
+        else { izq = izq - der; }
+    }
+    return izq;
+}
+
+/- Analiza la expresión ENTERA: lo que sobre al final también es un error.
+
+   Sin esta comprobación, "1 2" daría 1 en silencio — el parser habría leído
+   lo que entendía y tirado el resto, que es justo el fallo que hace que un
+   compilador acepte programas que no debería.
+-/
+public fn evaluar(Parser ptr mutable p) -> int {
+    var int valor = expresion(p);
+    if (actual(p).tipo != TType.EOF) {
+        fallar(p, f"sobra {nombre_de(actual(p).tipo)}", actual(p).col);
+    }
+    return valor;
+}
+
+/- El diagnóstico, con las cuatro cosas que un error necesita: qué, dónde,
+   sobre qué texto y qué se leyó en su lugar. -/
+public fn mostrar_error(Parser ptr p, str fuente) -> void {
+    stdp.println(f"error en la columna {p.donde}: {p.motivo}");
+    stdp.println(fuente);
+}
+
+#export as frontend

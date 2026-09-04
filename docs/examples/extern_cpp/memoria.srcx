@@ -1,0 +1,33 @@
+#from io #import stdp
+#import mem
+
+/- ¿Es COMBINABLE el C++ con suriaX, o solo invocable?
+   Se prueba en los dos sentidos y sobre datos, no sobre saludos. -/
+#extern cpp{
+#include <cstdint>
+
+// 1. C++ recibe un puntero a memoria RESERVADA POR suriaX y la escribe.
+extern "C" void llena(long long* datos, long long n) {
+    for (long long i = 0; i < n; ++i) datos[i] = i * i;
+}
+
+// 2. C++ lee lo que suriaX escribió y lo reduce.
+extern "C" long long suma(const long long* datos, long long n) {
+    long long total = 0;
+    for (long long i = 0; i < n; ++i) total += datos[i];
+    return total;
+}
+}
+
+fn llena(int ptr mutable datos, int n) -> void;
+fn suma(int ptr datos, int n) -> int;
+
+fn main() -> int {
+    var int ptr mutable datos = mem.reserve<int>(5);
+    stdp.println("suriaX reservo 5 celdas");
+    llena(datos, 5);
+    stdp.println(f"C++ escribio: {datos[0]} {datos[1]} {datos[2]} {datos[3]} {datos[4]}");
+    datos[0] = 100;
+    stdp.println(f"suriaX cambio la primera y C++ suma: {suma(datos, 5)}");
+    return 0;
+}

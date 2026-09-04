@@ -1,0 +1,837 @@
+/* suriaX — playground.
+ *
+ * Colores PLANOS: ni un degradado, ni una sombra decorativa, ni un icono
+ * dibujado. Lo que separa una zona de otra es una línea y un fondo sólido,
+ * que es como se ven las herramientas que uno usa ocho horas seguidas. La
+ * jerarquía la marcan el tamaño y el peso del texto, no el color.
+ *
+ * El color se reserva para lo que SIGNIFICA algo: la severidad de un
+ * diagnóstico y la clase de un token. Si todo tuviera color, el color no
+ * diría nada.
+ */
+
+:root {
+  --fondo:        #16181d;
+  --fondo-panel:  #1c1f26;
+  --fondo-hueco:  #12141a;
+  --linea:        #2b303b;
+  --linea-fuerte: #3d4453;
+
+  --texto:        #d7dbe3;
+  --texto-suave:  #8b93a3;
+  --texto-tenue:  #626a7a;
+
+  --acento:       #4a9eff;   /* selección, foco, pestaña activa */
+  --resaltado:    #2a3444;   /* la línea del token bajo el ratón */
+
+  --critico:      #ff6b6b;
+  --aviso:        #e0a458;
+  --nota:         #6bcf9f;
+
+  /* clases de token: cada una dice QUÉ es, no adorna */
+  --tok-keyword:  #c792ea;
+  --tok-tipo:     #4a9eff;
+  --tok-literal:  #6bcf9f;
+  --tok-cadena:   #e0a458;
+  --tok-operador: #8b93a3;
+  --tok-nombre:   #d7dbe3;
+  /* categorías propias de suriaX: el modelo de memoria y los errores son
+     parte del lenguaje, no detalles de sintaxis, y se ven como tales */
+  --tok-control:  #ff9d5c;
+  --tok-memoria:  #ff7b72;
+  --tok-error:    #d2a8ff;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono",
+          Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+/* El atributo 'hidden' lo aplica el navegador con 'display: none', y CUALQUIER
+   regla de clase que fije 'display' lo anula — por eso el anillo de carga
+   giraba siempre y la barra del grafo salía en pestañas que no lo usan. Se
+   declara una vez, arriba, para que ocultar algo signifique ocultarlo. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--texto);
+  font-family: var(--sans);
+  font-size: 14px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* --- barra superior ------------------------------------------------------ */
+
+.barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  background: var(--fondo-panel);
+  border-bottom: 1px solid var(--linea);
+  flex-shrink: 0;
+}
+
+.marca { display: flex; align-items: baseline; gap: 10px; }
+.logo { font-weight: 600; font-size: 16px; letter-spacing: -0.01em; }
+.sub { color: var(--texto-tenue); font-size: 12px; }
+
+.enlaces { display: flex; gap: 4px; }
+.enlaces a {
+  color: var(--texto-suave);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+.enlaces a:hover { color: var(--texto); background: var(--fondo-hueco); }
+
+.marca-pendiente {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--texto-tenue);
+  border: 1px solid var(--linea-fuerte);
+  border-radius: 2px;
+  padding: 1px 4px;
+  margin-left: 6px;
+}
+
+/* --- disposición --------------------------------------------------------- */
+
+.lienzo {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: var(--linea);
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  background: var(--fondo);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--linea);
+  background: var(--fondo-panel);
+  flex-shrink: 0;
+}
+.cabecera h2 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--texto-tenue);
+}
+
+.acciones { display: flex; gap: 8px; align-items: center; }
+
+select, button {
+  font-family: inherit;
+  font-size: 12px;
+  background: var(--fondo-hueco);
+  color: var(--texto);
+  border: 1px solid var(--linea-fuerte);
+  border-radius: 3px;
+  padding: 5px 10px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--acento); }
+button:disabled { color: var(--texto-tenue); cursor: default; }
+button:disabled:hover { border-color: var(--linea-fuerte); }
+select:focus-visible, button:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--acento);
+  outline-offset: -1px;
+}
+
+/* --- editor -------------------------------------------------------------- */
+
+/* UN solo scroller para el gutter y el código: mantener dos sincronizados a
+   mano era el origen de que los números se desalinearan al desplazar. */
+.editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--fondo);
+}
+
+.rejilla {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+  min-width: min-content;
+}
+
+.numeros {
+  /* 'sticky' para que se quede quieto cuando una línea larga desplaza el
+     código en horizontal: el número tiene que seguir junto a su línea. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  padding: 12px 8px;
+  text-align: right;
+  color: var(--texto-tenue);
+  border-right: 1px solid var(--linea);
+  background: var(--fondo-panel);
+  user-select: none;
+}
+
+.campo {
+  position: relative;
+  flex: 1 0 auto;
+  min-width: 0;
+}
+
+/* Las dos capas comparten métrica EXACTA: si difieren en un píxel, el
+   resaltado deja de caer sobre su línea. */
+#codigo, .resalte, .numeros {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 20px;
+  margin: 0;
+  border: 0;
+  white-space: pre;
+  tab-size: 4;
+}
+#codigo, .resalte { padding: 12px; }
+
+/* La capa de resaltado va EN FLUJO: es la que fija el tamaño del contenido
+   (incluido el ancho de la línea más larga), y por eso el scroller sabe
+   cuánto tiene que desplazarse. */
+/* La capa de resaltado PINTA el código; el textarea de encima es
+   transparente. Los colores son los del lexer de verdad, las mismas
+   categorías que colorea la extensión. */
+.resalte {
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  pointer-events: none;
+  color: var(--texto);
+}
+.resalte .declaration, .resalte .storage,
+.resalte .visibility, .resalte .specifier { color: var(--tok-keyword); }
+.resalte .control, .resalte .operator_word { color: var(--tok-control); }
+.resalte .memory         { color: var(--tok-memoria); }
+.resalte .error_handling { color: var(--tok-error); }
+.resalte .type           { color: var(--tok-tipo); }
+.resalte .literal        { color: var(--tok-literal); }
+.resalte .string         { color: var(--tok-cadena); }
+.resalte .name           { color: var(--tok-nombre); }
+.resalte .operator       { color: var(--tok-operador); }
+.resalte .punctuation    { color: var(--texto-suave); }
+.resalte .comentario     { color: var(--texto-tenue); font-style: italic; }
+.resalte .linea-activa {
+  background: var(--resaltado);
+  /* barra sólida de 4px: marca la línea sin desplazar el texto */
+  box-shadow: -4px 0 0 var(--acento);
+}
+
+/* ...y el textarea la cubre, transparente: el cursor, la selección y el
+   teclado siguen siendo los del navegador. */
+#codigo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  /* el texto lo pinta la capa de abajo; aquí solo se ve el CURSOR, que sigue
+     siendo el del navegador (con su selección y su teclado). */
+  color: transparent;
+  caret-color: var(--texto);
+  resize: none;
+  overflow: hidden;
+  z-index: 1;
+}
+#codigo::selection { background: #2c4a6e; }
+
+/* El indicador de trabajo: un anillo que gira. Es la ÚNICA animación de la
+   página, y está porque comunica algo que no se puede decir sin ella —que el
+   compilador sigue trabajando—. El resto del sitio no se mueve. */
+.girando {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--linea-fuerte);
+  border-top-color: var(--acento);
+  border-radius: 50%;
+  animation: girar 0.7s linear infinite;
+  vertical-align: -1px;
+  margin-right: 6px;
+}
+@keyframes girar { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  /* quien pidió no ver movimiento sigue necesitando saber que trabaja */
+  .girando { animation: none; border-top-color: var(--acento); }
+}
+
+.estado {
+  padding: 6px 12px;
+  border-top: 1px solid var(--linea);
+  background: var(--fondo-panel);
+  color: var(--texto-tenue);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.estado.error { color: var(--critico); }
+
+/* --- pestañas de fase ---------------------------------------------------- */
+
+.pestanas { display: flex; gap: 2px; flex-wrap: wrap; align-items: center; }
+.pestanas .vistas {
+  display: inline-flex;
+  gap: 1px;
+  margin: 0 4px 0 -2px;
+  padding-left: 6px;
+  border-left: 1px solid var(--linea);
+}
+.pestanas .vista { font-size: 11px; padding: 3px 7px; }
+.pestanas .vista[aria-selected="true"] {
+  color: var(--acento);
+  background: var(--fondo-hueco);
+}
+/* una pestaña cuya fase trae diagnósticos lo dice antes de abrirla */
+.pestanas button.con-errores::after { content: " ●"; color: var(--critico); }
+.pestanas button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--texto-suave);
+  padding: 4px 9px;
+}
+.pestanas button:hover { color: var(--texto); background: var(--fondo-hueco); }
+.pestanas button[aria-selected="true"] {
+  color: var(--texto);
+  background: var(--fondo-hueco);
+  border-color: var(--linea-fuerte);
+  border-bottom-color: var(--acento);
+}
+.pestanas button.sin-datos { color: var(--texto-tenue); }
+.pestanas button.sin-datos::after { content: " ·"; color: var(--aviso); }
+
+.contenido {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+  position: relative;
+}
+
+/* Mientras el compilador trabaja, el panel lo dice: si no, un artefacto viejo
+   junto a un botón pulsado parece la respuesta nueva. */
+.generando {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--fondo);
+  color: var(--texto-tenue);
+  font-size: 13px;
+  z-index: 5;
+}
+.vacio, .motivo {
+  color: var(--texto-tenue);
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0;
+  max-width: 60ch;
+}
+.motivo { color: var(--aviso); white-space: pre-wrap; font-family: var(--mono); }
+
+pre.volcado {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--texto);
+}
+
+/* --- tokens -------------------------------------------------------------- */
+
+/* Un token por FILA: dónde empieza, qué clase le tocó, qué texto ocupó y qué
+   valor produjo. Cuatro columnas alineadas se comparan de un vistazo; en fila
+   había que pasar el ratón por cada ficha para saber lo mismo. */
+.tokens { display: flex; flex-direction: column; }
+.token, .token-cab {
+  display: grid;
+  grid-template-columns: 62px 148px minmax(90px, 1fr) minmax(0, 1.1fr);
+  gap: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 1px 6px;
+  cursor: default;
+}
+.token-cab {
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--linea);
+  padding-bottom: 4px;
+  margin-bottom: 3px;
+  position: sticky;   /* la lista es larga: los títulos no se van arriba */
+  top: -12px;
+  background: var(--fondo);
+}
+.token:hover { background: var(--fondo-panel); }
+/* La posición se lee en vertical, así que se alinea a la derecha: las
+   columnas quedan una debajo de otra aunque cambien de ancho. */
+.token .pos { color: var(--texto-tenue); text-align: right; }
+.token .clase { color: var(--texto-tenue); text-transform: lowercase; }
+.token .lexema, .token .valor {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.token .valor { color: var(--texto-tenue); }
+/* Una clase por CATEGORÍA declarada por el compilador
+   (`lang_info.token_categories`). La página no decide qué es cada token: lo
+   pregunta. Las categorías son las del LENGUAJE —'memory', 'error_handling'—
+   y no las genéricas de un resaltador cualquiera, así que el color enseña
+   algo de suriaX y no solo de sintaxis. */
+.token.declaration    .lexema { color: var(--tok-keyword); }
+.token.control        .lexema { color: var(--tok-control); }
+.token.storage        .lexema { color: var(--tok-keyword); }
+.token.visibility     .lexema { color: var(--tok-keyword); }
+.token.specifier      .lexema { color: var(--tok-keyword); }
+.token.memory         .lexema { color: var(--tok-memoria); }
+.token.error_handling .lexema { color: var(--tok-error); }
+.token.operator_word  .lexema { color: var(--tok-control); }
+.token.type           .lexema { color: var(--tok-tipo); }
+.token.literal        .lexema { color: var(--tok-literal); }
+.token.string         .lexema { color: var(--tok-cadena); }
+.token.name           .lexema { color: var(--tok-nombre); }
+.token.operator       .lexema { color: var(--tok-operador); }
+.token.punctuation    .lexema { color: var(--texto-tenue); }
+.token.comment        .lexema { color: var(--texto-tenue); }
+.token.meta           .lexema { color: var(--texto-tenue); }
+
+/* --- grafo de nodos (AST / AST-tipado) ----------------------------------- */
+/* Un árbol indentado esconde la FORMA: en un grafo de cajas conectadas se ve
+   de un vistazo qué cuelga de qué y cuánto se ramifica cada nodo. Las cajas
+   son HTML (texto seleccionable, se miden solas) y las aristas un SVG detrás:
+   dibujar el texto dentro del SVG habría costado poder copiarlo. */
+
+.grafo {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: grab;
+  background: var(--fondo);
+}
+.grafo.arrastrando { cursor: grabbing; }
+
+.lona {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+.lona svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.lona svg path { fill: none; stroke: var(--linea-fuerte); stroke-width: 1.5; }
+.lona svg text {
+  fill: var(--texto-tenue);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.caja {
+  position: absolute;
+  background: var(--fondo-panel);
+  border: 1px solid var(--linea-fuerte);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  min-width: 90px;
+  max-width: 320px;
+}
+.caja > .titulo {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--linea);
+  background: var(--fondo-hueco);
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+.caja > .titulo .nombre { color: var(--tok-keyword); font-weight: 600; }
+.caja > .titulo .tipo { color: var(--tok-tipo); }
+.caja > .titulo .lugar { color: var(--texto-tenue); font-size: 10px; margin-left: auto; }
+.caja > .titulo .contador {
+  color: var(--texto-tenue);
+  font-size: 10px;
+  border: 1px solid var(--linea-fuerte);
+  border-radius: 2px;
+  padding: 0 3px;
+}
+.caja > .campos { padding: 3px 8px 5px; }
+.caja .fila { display: flex; gap: 6px; white-space: pre; }
+.caja .fila .clave { color: var(--texto-tenue); }
+.caja .fila .dato { color: var(--tok-literal); overflow: hidden;
+                    text-overflow: ellipsis; }
+.caja.raiz { border-color: var(--acento); }
+.caja.plegado > .titulo { border-bottom: 0; }
+.caja.plegado > .campos { display: none; }
+
+.controles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--linea);
+  background: var(--fondo-panel);
+  flex-shrink: 0;
+}
+.controles .pista { color: var(--texto-tenue); font-size: 11px; margin-left: auto; }
+
+/* --- árbol --------------------------------------------------------------- */
+
+.arbol, .arbol ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+.arbol ul {
+  padding-left: 14px;
+  margin-left: 5px;
+  border-left: 1px solid var(--linea);
+}
+.arbol li { position: relative; }
+.arbol .nodo { cursor: default; }
+.arbol .plegable > .nodo { cursor: pointer; }
+.arbol .plegable > .nodo::before {
+  content: "▾";
+  display: inline-block;
+  width: 12px;
+  color: var(--texto-tenue);
+  font-size: 10px;
+}
+.arbol .plegable.plegado > .nodo::before { content: "▸"; }
+.arbol .plegable.plegado > ul { display: none; }
+.arbol .hoja > .nodo::before { content: ""; display: inline-block; width: 12px; }
+.arbol .clase-nodo { color: var(--tok-keyword); }
+.arbol .campo { color: var(--texto-tenue); }
+.arbol .valor { color: var(--tok-literal); }
+.arbol .tipo-resuelto { color: var(--tok-tipo); }
+.arbol .pos { color: var(--texto-tenue); font-size: 11px; margin-left: 6px; }
+
+/* --- diagnósticos dentro de una fase ------------------------------------- */
+/* "La compilación falló" no dice nada. Un diagnóstico útil trae las cuatro
+   cosas que el proyecto exige: qué falló, DÓNDE (con la línea del fuente y
+   una marca bajo la columna), por qué y qué hacer — esto último sale del
+   catálogo del compilador, que publica el docstring de cada clase de error. */
+
+.panel-errores { display: flex; flex-direction: column; gap: 10px; }
+.panel-errores .intro {
+  color: var(--texto-suave);
+  font-size: 13px;
+  margin: 0 0 2px;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+.error {
+  border: 1px solid var(--linea-fuerte);
+  border-left-width: 3px;
+  border-radius: 3px;
+  background: var(--fondo-panel);
+  overflow: hidden;
+}
+.error.critical, .error.panic { border-left-color: var(--critico); }
+.error.warning { border-left-color: var(--aviso); }
+.error.note    { border-left-color: var(--nota); }
+
+.error .encabezado {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.error .codigo { font-weight: 600; }
+.error.critical .codigo, .error.panic .codigo { color: var(--critico); }
+.error.warning  .codigo { color: var(--aviso); }
+.error.note     .codigo { color: var(--nota); }
+.error .lugar { color: var(--texto-tenue); }
+.error .texto { color: var(--texto); flex: 1 1 100%; }
+
+/* El fuente señalado: la línea tal cual, con una marca bajo la columna. */
+.error .fragmento {
+  margin: 0;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--linea);
+  background: var(--fondo-hueco);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-x: auto;
+  color: var(--texto-suave);
+}
+.error .fragmento .num { color: var(--texto-tenue); user-select: none; }
+.error .fragmento .marca { color: var(--critico); }
+
+.error .porque { border-top: 1px solid var(--linea); }
+.error .porque > summary {
+  padding: 5px 10px;
+  cursor: pointer;
+  color: var(--texto-tenue);
+  font-size: 12px;
+  user-select: none;
+}
+.error .porque > summary:hover { color: var(--texto); }
+.error .porque .cuerpo {
+  padding: 0 10px 10px;
+  color: var(--texto-suave);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-width: 78ch;
+}
+
+/* --- lo que trajo cada librería ------------------------------------------- */
+
+.unidad {
+  border: 1px solid var(--linea-fuerte);
+  border-left: 3px solid var(--acento);
+  border-radius: 3px;
+  background: var(--fondo-panel);
+  overflow: hidden;
+}
+/* la regla de 'display' vive en '.error .encabezado', que no alcanza aquí:
+   sin ella los dos textos salían pegados ('IOIO.phir'). */
+.unidad .encabezado {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.unidad .encabezado .codigo { color: var(--tok-tipo); }
+.unidad .aporta {
+  border-top: 1px solid var(--linea);
+  background: var(--fondo-hueco);
+  padding: 5px 10px 7px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.unidad .aporta .fila { display: flex; gap: 10px; flex-wrap: wrap; }
+.unidad .aporta .sig { color: var(--texto); }
+.unidad .aporta .nota { color: var(--texto-tenue); font-size: 11px; }
+
+/* --- depuración ---------------------------------------------------------- */
+
+.depuracion { display: flex; flex-wrap: wrap; gap: 18px; }
+.depuracion table { border-collapse: collapse; font-size: 12.5px; }
+.depuracion caption {
+  text-align: left;
+  color: var(--texto-tenue);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding-bottom: 5px;
+}
+.depuracion td { padding: 2px 14px 2px 0; font-family: var(--mono); }
+.depuracion td:last-child { color: var(--tok-literal); text-align: right; }
+
+/* --- diagnósticos -------------------------------------------------------- */
+
+.diagnosticos {
+  border-top: 1px solid var(--linea);
+  background: var(--fondo-panel);
+  padding: 8px 12px 10px;
+  max-height: 28vh;
+  overflow: auto;
+  flex-shrink: 0;
+}
+.diagnosticos h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--texto-tenue);
+}
+.diagnosticos ul { list-style: none; margin: 0; padding: 0; }
+.diagnosticos li {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 3px 0;
+  cursor: pointer;
+  border-bottom: 1px solid var(--fondo-hueco);
+}
+.diagnosticos li:hover { background: var(--fondo-hueco); }
+.diagnosticos .codigo { font-weight: 600; margin-right: 8px; }
+.diagnosticos .lugar { color: var(--texto-tenue); margin-right: 8px; }
+.diagnosticos .critical .codigo, .diagnosticos .panic .codigo { color: var(--critico); }
+.diagnosticos .warning  .codigo { color: var(--aviso); }
+.diagnosticos .note     .codigo { color: var(--nota); }
+
+@media (max-width: 900px) {
+  .lienzo { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+}
+
+/* --------------------------------------------------------------------------- */
+/* tabla de símbolos: árbol de scopes + tabla + inspector                       */
+/* --------------------------------------------------------------------------- */
+/* Tres zonas fijas y una sola caja: el árbol acota, la tabla enumera y el
+   inspector explica. Separadas por LÍNEAS, no por sombras ni tarjetas. */
+.simbolos {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) 1fr;
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr);
+  height: 100%;
+  min-height: 420px;
+  border: 1px solid var(--linea);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.simbolos .scopes {
+  grid-row: 1 / span 2;
+  border-right: 1px solid var(--linea);
+  overflow: auto;
+  padding-bottom: 8px;
+}
+.simbolos .tabla-simbolos { overflow: auto; }
+.simbolos .inspector {
+  border-top: 1px solid var(--linea);
+  overflow: auto;
+  padding-bottom: 10px;
+}
+
+.titulillo {
+  position: sticky;
+  top: 0;
+  background: var(--fondo);
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  padding: 7px 8px 6px;
+  border-bottom: 1px solid var(--linea);
+  z-index: 1;
+}
+
+/* --- el árbol --- */
+.scope {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: 0;
+  color: var(--texto);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.scope:hover { background: var(--fondo-panel); }
+.scope.sel { background: var(--fondo-panel); color: var(--acento); }
+.scope .etq { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope .sid { color: var(--texto-tenue); }
+.scope .cuenta {
+  color: var(--texto-tenue);
+  min-width: 16px;
+  text-align: right;
+}
+
+/* --- la tabla --- */
+.sim, .sim-cab {
+  display: grid;
+  grid-template-columns: minmax(90px, 1.4fr) 52px minmax(70px, 1.2fr) 46px 42px 40px;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.sim-cab {
+  color: var(--texto-tenue);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  padding-bottom: 4px;
+}
+.sim {
+  background: none;
+  border: 0;
+  color: var(--texto);
+  cursor: pointer;
+}
+.sim:hover { background: var(--fondo-panel); }
+.sim.sel { background: var(--fondo-panel); }
+.sim.sel .nom { color: var(--acento); }
+.sim .cls, .sim .num { color: var(--texto-tenue); }
+.sim .tip { color: var(--tok-type); }
+.sim .num { text-align: right; }
+.sim span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- el inspector --- */
+.sim-nombre {
+  padding: 8px 10px 2px;
+  font-size: 13px;
+  color: var(--acento);
+}
+.campos {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 14px;
+  margin: 4px 0 0;
+  padding: 0 10px;
+}
+.campos dt { color: var(--texto-tenue); }
+.campos dd { margin: 0; }
+.usos { padding: 8px 10px 0; }
+.usos dt { color: var(--texto-tenue); }
+.fila-usos { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.uso {
+  background: none;
+  border: 1px solid var(--linea);
+  color: var(--texto);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 1px 5px;
+  cursor: default;
+}
+.uso:hover { border-color: var(--acento); color: var(--acento); }

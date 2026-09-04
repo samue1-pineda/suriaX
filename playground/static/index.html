@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>suriaX — playground</title>
+<meta name="description" content="Cada fase del compilador de suriaX, sobre tu propio código.">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="barra">
+  <div class="marca">
+    <span class="logo">suriaX</span>
+    <span class="sub">playground del compilador</span>
+  </div>
+  <nav class="enlaces">
+    <a href="https://samue1-pineda.github.io/suriaX/" target="_blank" rel="noopener">Documentación</a>
+    <!-- La documentación de teoría (decisiones al crear un compilador,
+         estructuras de datos y sus justificaciones) todavía no existe: el
+         enlace apunta a su ruta final y se marca, para que se vea planeado y
+         no roto. El día que se publique, funciona sin tocar nada. -->
+    <a href="https://samue1-pineda.github.io/suriaX/teoria/" target="_blank"
+       rel="noopener" class="pendiente">
+      Teoría <span class="marca-pendiente">próximamente</span>
+    </a>
+  </nav>
+</header>
+
+<main class="lienzo">
+
+  <section class="panel fuente">
+    <div class="cabecera">
+      <h2>Fuente</h2>
+      <div class="acciones">
+        <select id="ejemplos" aria-label="Cargar un ejemplo"></select>
+        <button id="depurar" type="button" title="Compila y añade lo que el compilador mide de sí mismo">Depurar</button>
+        <button id="compilar" type="button">Compilar</button>
+      </div>
+    </div>
+    <!-- El gutter y el código comparten UN scroller: así no hay dos scrolls
+         que sincronizar a mano (era el origen de que los números se
+         desalinearan). El gutter va 'sticky' a la izquierda para quedarse
+         quieto cuando una línea larga desplaza el código en horizontal.
+
+         La capa de resaltado va EN FLUJO y es la que fija el tamaño del
+         contenido; el textarea la cubre en absoluto y es transparente, así
+         el cursor, la selección y el teclado siguen siendo los del
+         navegador. -->
+    <div class="editor" id="editor">
+      <div class="rejilla">
+        <div class="numeros" id="numeros" aria-hidden="true"></div>
+        <div class="campo">
+          <div class="resalte" id="resalte" aria-hidden="true"></div>
+          <textarea id="codigo" spellcheck="false" autocomplete="off"
+                    wrap="off" aria-label="Código fuente"></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="estado" id="estado">
+      <!-- El compilador no es instantáneo con un programa largo: mientras
+           trabaja, esto lo dice. Un botón que no responde parece roto. -->
+      <span class="girando" id="girando" hidden aria-hidden="true"></span>
+      <span id="estado-texto">Listo.</span>
+    </div>
+  </section>
+
+  <section class="panel salida">
+    <div class="cabecera">
+      <h2>Fases</h2>
+      <div class="pestanas" id="pestanas" role="tablist"></div>
+    </div>
+    <div class="contenido" id="contenido">
+      <p class="vacio">Escribe un programa y pulsa <b>Compilar</b>.</p>
+    </div>
+    <!-- Controles del grafo: solo aparecen en las fases que lo usan. -->
+    <div class="controles" id="controles" hidden>
+      <button type="button" data-zoom="-1" title="Alejar">−</button>
+      <button type="button" data-zoom="1" title="Acercar">+</button>
+      <button type="button" data-ajustar title="Ajustar a la vista">Ajustar</button>
+      <button type="button" data-plegar title="Plegar todo menos la raíz">Plegar</button>
+      <button type="button" data-desplegar title="Desplegar todo">Desplegar</button>
+      <span class="pista">arrastra para mover · rueda para acercar · clic en un nodo para plegarlo</span>
+    </div>
+  </section>
+
+</main>
+
+<section class="diagnosticos" id="diagnosticos" hidden>
+  <h2>Diagnósticos</h2>
+  <ul id="lista-diagnosticos"></ul>
+</section>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

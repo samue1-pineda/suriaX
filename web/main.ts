@@ -91,6 +91,8 @@ function usage(): void {
       "  --json               salida en JSON (diagnósticos + estadísticas)\n" +
       "  --unrestricted       desactiva la contención del target web\n" +
       "  --emit-wat <ruta>    escribe el WebAssembly textual generado\n" +
+      "  --emit-pretty <ruta> escribe la vista LEGIBLE del WIR (para leer el\n" +
+      "                       programa, no para depurar el formato)\n" +
       "  --emit-js <ruta>     escribe el módulo JS host (con el wasm embebido)\n" +
       "  --emit-wasm <ruta>   escribe el binario .wasm\n" +
       "  --reencode <ruta>    re-serializa el HIR leído a otro .phir\n" +
@@ -111,7 +113,7 @@ function main(argv: readonly string[]): number {
   const args = argv.slice(2);
   // el primer argumento suelto es el .phir; los demás son valores de opción.
   const optionValues = new Set(
-    ["--emit-wat", "--emit-js", "--emit-wasm", "--reencode"]
+    ["--emit-wat", "--emit-pretty", "--emit-js", "--emit-wasm", "--reencode"]
       .map((name) => optionValue(args, name))
       .filter((value): value is string => value !== null),
   );
@@ -153,21 +155,32 @@ function main(argv: readonly string[]): number {
   }
 
   const codegen = result.codegen;
+  // Con '--json' la salida estándar es PARA UNA HERRAMIENTA: los avisos de
+  // "generado en ..." se van a stderr, porque mezclarlos con el JSON obliga a
+  // quien lo lee a adivinar dónde empieza el dato.
+  const avisar = json
+    ? (texto: string) => process.stderr.write(texto)
+    : (texto: string) => process.stdout.write(texto);
   if (codegen !== null && codegen.ok) {
     const watPath = optionValue(args, "--emit-wat");
     if (watPath !== null && codegen.wat !== null) {
       writeFileSync(watPath, codegen.wat);
-      process.stdout.write(`WAT generado en: ${watPath}\n`);
+      avisar(`WAT generado en: ${watPath}\n`);
+    }
+    const prettyPath = optionValue(args, "--emit-pretty");
+    if (prettyPath !== null && codegen.pretty !== null) {
+      writeFileSync(prettyPath, codegen.pretty);
+      avisar(`vista legible del WIR en: ${prettyPath}\n`);
     }
     const jsPath = optionValue(args, "--emit-js");
     if (jsPath !== null && codegen.host !== null) {
       writeFileSync(jsPath, codegen.host);
-      process.stdout.write(`módulo JS host generado en: ${jsPath}\n`);
+      avisar(`módulo JS host generado en: ${jsPath}\n`);
     }
     const wasmPath = optionValue(args, "--emit-wasm");
     if (wasmPath !== null && codegen.wasm !== null) {
       writeFileSync(wasmPath, codegen.wasm);
-      process.stdout.write(`binario generado en: ${wasmPath} (${codegen.wasm.length} bytes)\n`);
+      avisar(`binario generado en: ${wasmPath} (${codegen.wasm.length} bytes)\n`);
     }
   }
 

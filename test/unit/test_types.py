@@ -150,3 +150,153 @@ def test_error_es_transparente_en_la_ruta_de_exito():
         "fn f() -> void { var int x = puede_fallar(); };"
     )
     assert not errors, errors
+
+
+# --------------------------------------------------------------------------- #
+# un tipo OPACO ('const type T;') vale en todas las posiciones de un nominal
+# --------------------------------------------------------------------------- #
+# 'const type' es la vía para que un tipo NO primitivo exista sin cablearlo en
+# el compilador: es lo que usa 'lib/d_types' para int8/float32 y lo que usará
+# cualquier handle del sistema. La cobertura estaba repartida (la gramática
+# probaba su visibilidad, 'ancho_fijo' su __sizeof__), pero ninguna prueba
+# fijaba que el tipo se comporte como un nominal CUALQUIERA allí donde se
+# escriba un tipo — que es justo lo que lo hace utilizable.
+
+_OPACO = "const type H;\n"
+
+
+def _sin_errores(fuente: str) -> None:
+    _program, _table, errors = analyze(fuente)
+    assert not errors, [f"{e.code}: {e.message}" for e in errors]
+
+
+def test_un_opaco_vale_como_parametro_y_como_retorno():
+    _sin_errores(_OPACO + "fn recibe(H ptr h) -> void { };\n"
+                          "fn crea() -> H ptr mutable;\n"
+                          "fn main() -> int { return 0; };")
+
+
+def test_un_opaco_vale_como_campo_y_por_valor():
+    _sin_errores(_OPACO + "struct { H ptr dentro; } Caja;\n"
+                          "fn porValor(H h) -> void { };\n"
+                          "fn main() -> int { return 0; };")
+
+
+def test_un_opaco_vale_como_argumento_de_un_generico():
+    """Sin esto, un contenedor no podría guardar un handle del sistema."""
+    _sin_errores(_OPACO + "struct { T v; } Caja<T>;\n"
+                          "fn main() -> int { var Caja<H> c; return 0; };")
+
+
+def test_un_opaco_recibe_hooks_como_cualquier_nominal():
+    """__sizeof__ y __cast__ despachan por tipo: el opaco es su destinatario
+    natural (es como 'int8' tiene tamaño sin ser primitivo)."""
+    _sin_errores(_OPACO +
+                 "hook fn __sizeof__(H ptr h) -> int { return 8; };\n"
+                 "hook fn __cast__(int n) -> H;\n"
+                 "fn main() -> int { var H h = cast<H>(1); return sizeof(H); };")
+
+
+def test_un_nominal_que_no_se_declaro_es_un_error_con_su_nombre():
+    """El otro lado: usar un tipo inexistente no pasa en silencio."""
+    _program, _table, errors = analyze(
+        "fn f(Cosa ptr c) -> void { };\nfn main() -> int { return 0; };")
+    assert [e.code for e in errors] == ["AST005"], errors
+    assert "Cosa" in errors[0].message
+
+
+# --------------------------------------------------------------------------- #
+# un enum SIN payload es un entero con nombre
+# --------------------------------------------------------------------------- #
+# Lo es en el HIR, en el intérprete y en el target web, así que convertirlo no
+# cambia el valor: solo se gana o se pierde el nombre. No entra en la tabla de
+# conversiones nativas porque esa va por 'TypeKind' y un enum es NOMINAL —
+# aceptarlo ahí habría abierto la conversión a cualquier struct.
+
+_TTYPE = "enum TType { INT_LIT = 1, PLUS = 10 };\n"
+
+
+def test_un_enum_se_convierte_a_int_y_de_vuelta():
+    _sin_errores(_TTYPE + "fn main() -> int {\n"
+                          "    var int n = cast<int>(TType.PLUS);\n"
+                          "    var TType t = cast<TType>(1);\n"
+                          "    return n;\n"
+                          "};")
+
+
+def test_convertir_desde_un_valor_que_el_enum_no_declara_se_rechaza():
+    """Sin esto, 'cast<TType>(999)' produciría un valor de un tipo que no lo
+    tiene, y el 'match' exhaustivo que el compilador verifica dejaría de
+    cubrirlo."""
+    _program, _table, errors = analyze(
+        _TTYPE + "fn main() -> int { var TType t = cast<TType>(999); "
+                 "return 0; };")
+    assert [e.code for e in errors] == ["SEM016"], errors
+    assert "999" in errors[0].message and "PLUS=10" in errors[0].message
+
+
+def test_un_valor_calculado_no_se_puede_comprobar_y_pasa():
+    """Cero falsos positivos: lo que no se ve al compilar, no se afirma."""
+    _sin_errores(_TTYPE + "fn main() -> int {\n"
+                          "    var int n = 10;\n"
+                          "    var TType t = cast<TType>(n);\n"
+                          "    return 0;\n"
+                          "};")
+
+
+def test_un_struct_no_se_convierte_a_int_por_ser_nominal():
+    """La regla es del ENUM, no de los nominales."""
+    _program, _table, errors = analyze(
+        "struct { int v; } P;\n"
+        "fn main() -> int { var P p = P{ v: 1 }; return cast<int>(p); };")
+    assert [e.code for e in errors] == ["SEM016"], errors
+
+
+def test_el_nombre_de_un_item_se_resuelve_al_compilar():
+    """``TType.PLUS.name`` -> ``"PLUS"``: se sabe sin ejecutar nada, así que
+    viaja como el literal que es y no hay tabla que consultar en ejecución."""
+    program, _table, errors = analyze(
+        _TTYPE + 'fn main() -> int { var str s = TType.PLUS.name; '
+                 "return 0; };")
+    assert not errors, errors
+    decl = program.items[1].body.statements[0]
+    assert decl.value.nombre_de_item == "PLUS"
+
+
+def test_pedirle_el_nombre_al_enum_y_no_a_un_item_lo_dice():
+    _program, _table, errors = analyze(
+        _TTYPE + "fn main() -> int { var str s = TType.name; return 0; };")
+    assert errors, "'TType.name' no nombra ningún item"
+    assert "item" in errors[0].message
+
+
+# --------------------------------------------------------------------------- #
+# no hay VERACIDAD: una condición es 'bool' o no es
+# --------------------------------------------------------------------------- #
+# 'if (1)' era una coerción implícita, justo lo que el lenguaje prohíbe en
+# todos los demás sitios. Y las consecuencias se veían: el frontend lo
+# aceptaba, el intérprete lo ejecutaba con la veracidad de Python y el target
+# web lo rechazaba porque WASM exige un i32 en la condición. Tres respuestas
+# para el mismo programa.
+
+def test_una_condicion_que_no_es_bool_se_rechaza():
+    for condicion in ("1", "0", '"x"', "1.5", "'c'"):
+        _program, _table, errors = analyze(
+            "fn main() -> int { if (%s) { return 1; }; return 0; };" % condicion)
+        assert [e.code for e in errors] == ["AST006"], (condicion, errors)
+        assert "bool" in errors[0].message
+
+
+def test_el_while_sigue_la_misma_regla():
+    _program, _table, errors = analyze(
+        "fn main() -> int { while (1) { break; }; return 0; };")
+    assert [e.code for e in errors] == ["AST006"], errors
+
+
+def test_la_comparacion_es_lo_que_se_escribe():
+    _sin_errores("fn main() -> int {\n"
+                 "    var int x = 1;\n"
+                 "    if (x != 0) { return 1; };\n"
+                 "    while (x < 10) { x = x + 1; };\n"
+                 "    return 0;\n"
+                 "};")

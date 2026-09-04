@@ -1,0 +1,10 @@
+/- main.libsrx — archivo PADRE del paquete 'aritmetica' de la V1.
+
+ El submódulo 'frontend.libsrx' se descubre SOLO (no se importa aquí: hacerlo
+ crearía una unidad suelta ademas de la del paquete). El padre solo cierra el
+ paquete con su alias, igual que 'lib/array/main.libsrx'.
+
+   #import aritmetica.frontend as fe;  ->  fe.tokenizar("1 + 2")
+-/
+
+#export package as aritmetica

@@ -144,25 +144,8 @@ class _PropiedadChecker:
         cls = stmt.__class__
 
         if cls is ast.MoveStmt:
-            target = stmt.target
-            path = _path(target)
-            if path is not None:
-                # variable completa ('x') o campo estatico ('o.it'): se rastrea.
-                fin = _fin_de_ancestro(muertos, path)
-                if fin is not None:
-                    self._ya_no_es_suyo(path, fin, MOVIDO, stmt)
-                    return
-                muertos[path] = (MOVIDO, stmt.ln)
-                # solo la variable completa tiene un Symbol que anotar (moved_at
-                # viaja al HIR); un campo movido lo rastrea solo esta pasada.
-                if isinstance(target, ast.Identifier):
-                    symbol = self.locals.get(target.name)
-                    if symbol is not None:
-                        symbol.moved_at = stmt.ln
-            else:
-                # 'move a[i].x;' u otra forma dinamica: sus lecturas si se
-                # verifican; el tracking fino queda para el MIR.
-                self.check_expr(target, muertos)
+            self._marca_movido(stmt.target, stmt, muertos)
+            return
             return
 
         if cls is ast.ExprStmt:
@@ -283,8 +266,43 @@ class _PropiedadChecker:
     # ------------------------------------------------------------------ #
     # expresiones: toda lectura de un valor ya soltado es un error
     # ------------------------------------------------------------------ #
+    def _marca_movido(self, target, node, muertos: _Muertos) -> None:
+        """Anota que ``target`` dejó de pertenecer a quien lo nombraba.
+
+        Lo comparten la sentencia (``move x;``) y la expresión
+        (``var b = move x;``): las dos transfieren, y que use-after-move
+        (SEM004) o doble move (SEM005) salten no puede depender de en qué
+        posición se escribió el ``move``.
+        """
+        path = _path(target)
+        if path is None:
+            # 'move a[i].x' u otra forma dinámica: sus lecturas sí se
+            # verifican; el tracking fino queda para el MIR.
+            self.check_expr(target, muertos)
+            return
+        # variable completa ('x') o campo estático ('o.it'): se rastrea.
+        fin = _fin_de_ancestro(muertos, path)
+        if fin is not None:
+            self._ya_no_es_suyo(path, fin, MOVIDO, node)
+            return
+        muertos[path] = (MOVIDO, node.ln)
+        # solo la variable completa tiene un Symbol que anotar (moved_at viaja
+        # al HIR); un campo movido lo rastrea solo esta pasada.
+        if isinstance(target, ast.Identifier):
+            symbol = self.locals.get(target.name)
+            if symbol is not None:
+                symbol.moved_at = node.ln
+
     def check_expr(self, expr, muertos: _Muertos) -> None:
         cls = expr.__class__
+
+        if cls is ast.MoveExpr:
+            # 'move x' en una expresión invalida igual que la sentencia: el
+            # valor se va a otro sitio. Comparten la marca para que
+            # use-after-move (SEM004) y doble move (SEM005) no dependan de en
+            # qué posición se escribió el 'move'.
+            self._marca_movido(expr.operand, expr, muertos)
+            return
 
         if cls is ast.Identifier:
             fin = _fin_de_ancestro(muertos, expr.name)

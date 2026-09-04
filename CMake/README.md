@@ -12,7 +12,15 @@ CMakeLists.txt (raíz)  ── incluye ──▶  CMake/SuriaXOptions.cmake
                                        CMake/SuriaXDiscover.cmake
                                                   │
                                        descubre runtime/*/  ──▶  memory_c
+                                       CMake/SuriaXBackend.cmake
+                                                  │
+                                       backend/  ──▶  suriax_hir + suriax-hir
 ```
+
+Hay **dos** rutas de build, y son distintas a propósito: `SuriaXDiscover`
+arma módulos de **Python** (pybind11) y deduce su nombre de
+`PYBIND11_MODULE(...)`; `SuriaXBackend` arma el **backend C++**, que no es un
+módulo de Python sino una librería y un ejecutable.
 
 | Módulo | Responsabilidad |
 |---|---|
@@ -20,20 +28,23 @@ CMakeLists.txt (raíz)  ── incluye ──▶  CMake/SuriaXOptions.cmake
 | `SuriaXPython.cmake` | Python3 (venv primero) y pybind11, **una vez para todos** los módulos. Localiza pybind11 preguntándole al propio intérprete, y si falta da el `pip install` exacto. |
 | `SuriaXNativeModule.cmake` | `suriax_add_native_module()`: el patrón completo de un módulo pybind11 (target, `include/` local, salida en `runtime/<mod>/build/`). |
 | `SuriaXDiscover.cmake` | Recorre `runtime/*/`, y de cada carpeta con `.cpp` saca el nombre del módulo leyendo su `PYBIND11_MODULE(...)`. |
+| `SuriaXBackend.cmake` | El backend C++ de [`backend/`](../backend/README.md): genera los stubs del HIR con `protoc --cpp_out` y arma `suriax_hir` (librería) y `suriax-hir` (CLI). Se omite con un aviso si falta protobuf para C++. |
 
 ## Uso
 
 ```bash
 cmake -S . -B build            # configurar (detecta Python, pybind11 y módulos)
 cmake --build build -j         # compilar todos los módulos nativos
-cmake --build build --target suriax-native   # solo los nativos
+cmake --build build --target suriax-native   # solo los módulos de Python
+cmake --build build --target suriax-hir      # solo el backend C++ (lector del HIR)
 cmake --build build --target suriax-test     # compila y corre test/main.py
 ```
 
 Opciones útiles:
 
 ```bash
-cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF        # sin C++ (solo el target 'suriax-test')
+cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF        # sin módulos de Python
+cmake -S . -B build -DSURIAX_BUILD_BACKEND=OFF       # sin el backend C++
 cmake -S . -B build -DSURIAX_CXX_STANDARD=23
 cmake -S . -B build -DSURIAX_SKIP_MODULES=logic_mem  # excluir una carpeta
 cmake -S . -B build -DPython3_EXECUTABLE=$(which python3.12)

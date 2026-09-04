@@ -303,6 +303,7 @@ message Expr {
     AddrOf addr_of = 23;
     CastExpr cast_expr = 24;
     StructLiteral struct_literal = 25;
+    MoveExpr move_expr = 26;
   }
 
   reserved 16, 20, 21;  // Placement ('x at r') / MakeExpr / AllocExpr
@@ -354,6 +355,16 @@ message Call {
   // una pregunta sobre el TIPO.
   HookRef temp_drop = 4;
 }
+
+// 'move x' en posicion de EXPRESION: transfiere la propiedad Y entrega el
+// valor ('var Buffer b = move origen;', 'consumir(move b)'). Sin ella no
+// habia forma de ligar a otro nombre un valor que POSEE recursos: ligarlo a
+// secas deja dos duenos y su destructor corre dos veces.
+//
+// 'MoveStmt' sigue siendo la forma de SENTENCIA ('move x;'), que invalida sin
+// llevarse el valor a ningun sitio. Son dos nodos porque son dos cosas: una
+// produce un valor y la otra no.
+message MoveExpr { Expr operand = 1; }
 
 message Index        { Expr obj = 1; Expr index = 2; }
 message MemberAccess { Expr obj = 1; string member = 2; }
@@ -593,6 +604,12 @@ message EnumDecl { string name = 1; repeated EnumItem items = 2; }
 message ExternBlock {
   string target = 1;  // hoy solo "cpp"
   string raw = 2;     // el C++ crudo, tal cual lo capturó el lexer
+  // banderas que esta unidad necesita para compilar/enlazar su C++
+  // ('requires("-lX11")'). Viajan con el bloque porque quien trae el C++ es
+  // quien sabe de qué depende: el consumidor de una librería no tiene por
+  // qué averiguar sus dependencias nativas. El linker las SUMA a las del
+  // proyecto ('toolchain.cxx_flags').
+  repeated string requires = 3;
 }
 
 // Un import transporta TRES nombres distintos, y ninguno se deriva de otro

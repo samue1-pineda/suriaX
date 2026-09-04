@@ -30,6 +30,7 @@ import {
   WirBinOp,
   WirType,
   WirUnOp,
+  typeName,
   type WirExpr,
   type WirFunc,
   type WirModule,
@@ -53,6 +54,9 @@ const OP = {
   DROP: 0x1a,
   LOCAL_GET: 0x20,
   LOCAL_SET: 0x21,
+
+  GLOBAL_GET: 0x23,
+  GLOBAL_SET: 0x24,
 
   I32_CONST: 0x41,
   I64_CONST: 0x42,
@@ -78,6 +82,17 @@ const OP = {
 
   F64_ADD: 0xa0, F64_SUB: 0xa1, F64_MUL: 0xa2, F64_DIV: 0xa3,
   F64_NEG: 0x9a,
+
+  // conversiones (cast<T> entre numéricos)
+  I32_WRAP_I64: 0xa7,
+  I64_EXTEND_I32_S: 0xac,
+  F64_CONVERT_I64_S: 0xb9,
+  // 'trunc_sat' y no 'trunc': el que TRAPPEA aborta el módulo entero ante un
+  // NaN o un valor fuera de rango, y un cast no debería poder matar al
+  // programa. El saturante entrega el extremo del rango. (Es la propuesta
+  // 'nontrapping-float-to-int', en todos los motores desde 2020.)
+  I64_TRUNC_SAT_F64_S_PREFIX: 0xfc,
+  I64_TRUNC_SAT_F64_S_OPCODE: 0x06,
 } as const;
 
 /** Codificación de los tipos de valor en el binario. */
@@ -88,7 +103,8 @@ const VALTYPE: ReadonlyMap<WirType, number> = new Map([
 ]);
 
 const SECTION = {
-  TYPE: 1, IMPORT: 2, FUNCTION: 3, MEMORY: 5, EXPORT: 7, CODE: 10, DATA: 11,
+  TYPE: 1, IMPORT: 2, FUNCTION: 3, MEMORY: 5, GLOBAL: 6, EXPORT: 7,
+  CODE: 10, DATA: 11,
 } as const;
 
 /** Tamaño de una página de memoria lineal de WASM. */
@@ -269,6 +285,21 @@ export function emitWasm(module: WirModule): Uint8Array {
     });
   }
 
+  // 6) global — las variables de nivel de módulo. Su inicializador es una
+  //    EXPRESIÓN CONSTANTE terminada en 'end': WASM no admite otra cosa ahí,
+  //    y por eso el lowering deja a cero las que hay que calcular y les
+  //    asigna el valor en '__module_init'.
+  if (module.globals.length > 0) {
+    section(out, SECTION.GLOBAL, (s) => {
+      s.vector(module.globals, (g, sink) => {
+        sink.byte(valtype(g.type));
+        sink.byte(g.mutable ? 0x01 : 0x00);
+        emitConst(g.type, g.init, sink);
+        sink.byte(OP.END);
+      });
+    });
+  }
+
   // 7) export
   const importCount = module.imports.length;
   section(out, SECTION.EXPORT, (s) => {
@@ -354,6 +385,15 @@ function endsWithReturn(body: readonly WirStmt[]): boolean {
   return body.length > 0 && body[body.length - 1]!.kind === "return";
 }
 
+/** Una constante del tipo dado (init de una global, literal de una expresión). */
+function emitConst(type: WirType, value: bigint | number, sink: ByteSink): void {
+  switch (type) {
+    case WirType.F64: sink.byte(OP.F64_CONST).f64(Number(value)); return;
+    case WirType.I32: sink.byte(OP.I32_CONST).i32(Number(value)); return;
+    default: sink.byte(OP.I64_CONST).i64(BigInt(value)); return;
+  }
+}
+
 function emitDefault(type: WirType, sink: ByteSink): void {
   switch (type) {
     case WirType.I32: sink.byte(OP.I32_CONST).i32(0); return;
@@ -382,6 +422,11 @@ function emitStmt(
     case "local.set":
       emitExpr(stmt.value, sink, importCount, labels);
       sink.byte(OP.LOCAL_SET).u32(stmt.index);
+      return;
+
+    case "global.set":
+      emitExpr(stmt.value, sink, importCount, labels);
+      sink.byte(OP.GLOBAL_SET).u32(stmt.index);
       return;
 
     case "drop":
@@ -510,6 +555,13 @@ function emitExpr(
       sink.byte(OP.CALL).u32(expr.host);
       return;
 
+    case "seq":
+      // En una máquina de pila una secuencia ES la concatenación de sus
+      // partes: cada una deja su resultado (o nada, si es void) y la última
+      // manda. No hace falta ningún bloque.
+      for (const item of expr.exprs) emitExpr(item, sink, importCount, labels);
+      return;
+
     case "logical": {
       // Cortocircuito: en una máquina de pila no existe un operador que lo
       // haga, hay que RAMIFICAR. 'a and b' es "si a, vale b; si no, 0";
@@ -532,6 +584,16 @@ function emitExpr(
       return;
     }
 
+    case "convert": {
+      emitExpr(expr.value, sink, importCount, labels);
+      emitConversion(expr.from, expr.type, sink);
+      return;
+    }
+
+    case "global.get":
+      sink.byte(OP.GLOBAL_GET).u32(expr.index);
+      return;
+
     default:
       // Guarda de exhaustividad: si el WIR gana una variante, ESTO no
       // compila. Sin ella, un `switch` de casos `void` la ignora en
@@ -541,6 +603,33 @@ function emitExpr(
         `expresión del WIR sin traducción a WASM: ${(expr satisfies never as { kind: string }).kind}`,
       );
   }
+}
+
+/**
+ * La instrucción que convierte `from` en `to`.
+ *
+ * Solo hay tres anchos en el WIR (i32 para bool/char, i64 para int, f64 para
+ * float), así que la tabla cabe entera aquí y no hace falta un mapa: lo que
+ * NO esté es un error del lowering, no una conversión que falte emitir — por
+ * eso lanza en vez de callar.
+ */
+function emitConversion(from: WirType, to: WirType, sink: ByteSink): void {
+  if (from === to) return;   // el lowering ya no debería pedirla, pero es idempotente
+  if (from === WirType.I64 && to === WirType.F64) {
+    sink.byte(OP.F64_CONVERT_I64_S); return;
+  }
+  if (from === WirType.F64 && to === WirType.I64) {
+    sink.byte(OP.I64_TRUNC_SAT_F64_S_PREFIX).u32(OP.I64_TRUNC_SAT_F64_S_OPCODE);
+    return;
+  }
+  if (from === WirType.I64 && to === WirType.I32) {
+    sink.byte(OP.I32_WRAP_I64); return;
+  }
+  if (from === WirType.I32 && to === WirType.I64) {
+    sink.byte(OP.I64_EXTEND_I32_S); return;
+  }
+  throw new WasmEmitError(
+    `conversión no representable: ${typeName(from)} -> ${typeName(to)}`);
 }
 
 function binaryOpcode(op: WirBinOp, type: WirType): number {

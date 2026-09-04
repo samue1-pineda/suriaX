@@ -13,32 +13,53 @@
  Sobre estas dos primitivas se construye un vector (reservar, indexar con
  buf[i], crecer = reservar mayor + __copy__ + liberar el viejo).
 
- [REVISAR] MONOMORFICO: sin genericos todavia, el elemento es 'int'. Cuando
- el sistema de tipos tenga genericos, estas firmas se generalizan a 'T'; el
- intrinseco del interprete ya es agnostico al tipo (celdas genericas), asi
- que solo cambian las firmas, no la implementacion del host.
+ GENERICO en el elemento: 'mem.reserve<int>(8)' y 'mem.reserve<str>(8)' son
+ el mismo intrinseco. El del interprete siempre fue agnostico al tipo (reserva
+ CELDAS, no enteros), asi que generalizar la firma fue todo el cambio: la
+ implementacion del host no se toco.
 
-   #import mem;                       -> mem.reserve(n), mem.copy(d, s, n)
-   #from mem #import reserve, copy;   -> reserve(n), copy(d, s, n)
+   #import mem;                       -> mem.reserve<T>(n), mem.copy<T>(d, s, n)
+   #from mem #import reserve, copy;   -> reserve<T>(n), copy<T>(d, s, n)
 -/
 
 // --- hooks nativos (prototipos ligados a un intrinseco del host) ---------- //
 
 // reserva cruda: n celdas contiguas y escribibles. Devuelve un puntero
 // MUTABLE al primer elemento (escribir por indice exige 'ptr mutable').
-private fn __reserve__(int n) -> int ptr mutable;
+//
+// GENERICO en el elemento: el intrinseco del host siempre fue agnostico al
+// tipo (reserva celdas, no enteros), asi que generalizar la FIRMA fue todo lo
+// que hizo falta para que un vector guarde cualquier cosa.
+private fn __reserve__<T>(int n) -> T ptr mutable;
 
 // copia n elementos de 'src' a 'dst' (por valor, celda a celda).
-private fn __copy__(int ptr mutable dst, int ptr src, int n) -> void;
+private fn __copy__<T>(T ptr mutable dst, T ptr src, int n) -> void;
+
+// devuelve el bloque: deja de ser valido y cualquier acceso posterior falla.
+//
+// Es la tercera de la familia y la que faltaba para que un contenedor pueda
+// CRECER sin fugar: reservar mayor, copiar y soltar el viejo. Sin ella la
+// unica forma de crecer era abandonar el bloque anterior, que en un lenguaje
+// cuyo modelo es la PROPIEDAD habria sido la contradiccion mas visible de
+// todas.
+//
+// No es 'free x': 'free' opera sobre un puntero a una celda con nombre y
+// llama al '__free__' de su tipo; esto suelta un BLOQUE crudo, que no tiene
+// tipo propio ni destructor que ejecutar.
+private fn __release__<T>(T ptr mutable bloque) -> void;
 
 // --- API publica (envoltorios finos, invocables entre modulos) ------------ //
 
-public fn reserve(int n) -> int ptr mutable {
-    return __reserve__(n);
+public fn reserve<T>(int n) -> T ptr mutable {
+    return __reserve__<T>(n);
 }
 
-public fn copy(int ptr mutable dst, int ptr src, int n) -> void {
-    __copy__(dst, src, n);
+public fn copy<T>(T ptr mutable dst, T ptr src, int n) -> void {
+    __copy__<T>(dst, src, n);
+}
+
+public fn release<T>(T ptr mutable bloque) -> void {
+    __release__<T>(bloque);
 }
 
 // cierre del paquete: el alias 'mem' es el nombre del import.

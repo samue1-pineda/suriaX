@@ -48,10 +48,19 @@ def ref_key(ref) -> HookKey:
 
 def type_key(t) -> Optional[TypeKey]:
     """``Type`` protobuf -> clave hashable estructural (o ``None`` si el
-    mensaje viene vacío/ausente)."""
+    mensaje viene vacío/ausente).
+
+    Los ARGUMENTOS de un genérico entran en la clave porque participan de la
+    identidad del tipo: ``Vector<int>`` y ``Vector<str>`` son tipos
+    DISTINTOS, y sin ellos las dos instanciaciones colapsaban en la misma
+    entrada del índice de conversiones — el genérico habría vuelto a ser
+    decorativo, esta vez en runtime.
+    """
     if t is None or t.kind == 0:  # TYPE_UNSPECIFIED
         return None
-    return (t.kind, t.name, t.mut, type_key(t.inner) if t.HasField("inner") else None)
+    return (t.kind, t.name, t.mut,
+            type_key(t.inner) if t.HasField("inner") else None,
+            tuple(type_key(arg) for arg in t.args))
 
 
 def index_hooks(units) -> Dict[HookKey, BoundFunction]:

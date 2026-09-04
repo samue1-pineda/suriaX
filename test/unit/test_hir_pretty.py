@@ -109,6 +109,88 @@ def test_un_prototipo_se_distingue_de_una_funcion_con_cuerpo():
     assert "prototipo" in texto
 
 
+def test_las_ramas_catch_viajan_con_su_filtro_de_tipo():
+    """Regresión: la vista leía 'catch_name'/'catch_block', tags que quedaron
+    'reserved' cuando 'TryStmt' pasó a N ramas filtradas — cualquier programa
+    con try/catch reventaba la vista con AttributeError. El TIPO se imprime
+    porque es lo que decide qué rama gana."""
+    texto = _pretty(
+        "fn riesgo(int x) -> int {\n"
+        "    if (x > 5) { throw \"demasiado\"; }\n"
+        "    return x;\n"
+        "}\n"
+        "fn main() -> int {\n"
+        "    try { const int r = riesgo(9); }\n"
+        "    catch (str e) { return 1; }\n"
+        "    catch (f) { return 2; }\n"
+        "    return 0;\n"
+        "}\n")
+    assert "try" in texto
+    assert "catch (str e)" in texto
+    # rama sin filtro: atrapa cualquier valor, y se ve que no lo tiene
+    assert "catch (f)" in texto
+
+
+def test_la_notacion_escribe_todo_lo_que_identifica_al_tipo():
+    """Regresión: ``format_type`` perdía dos cosas que SON el tipo —
+    ``error int`` se veía como ``error`` (el tipo del valor, perdido) y
+    ``Vector<int>`` como ``Vector`` (justo la distinción que hace que el
+    genérico no sea decorativo)."""
+    texto = _pretty(
+        "struct { T valor; } Caja<T>;\n"
+        "fn puede_fallar(int n) -> error int {\n"
+        "    if (n < 0) { throw \"malo\"; }\n"
+        "    return n;\n"
+        "}\n"
+        "fn main() -> int {\n"
+        "    var Caja<int> c = Caja<int>{ valor: 1 };\n"
+        "    return 0;\n"
+        "}\n")
+    assert "error int" in texto, texto
+    assert "Caja<int>" in texto, texto
+
+
+def test_la_destruccion_que_inserta_el_compilador_se_ve():
+    """El HIR transporta los drops de ámbito, el ``transfers`` del retorno y
+    el drop del temporal — y ninguna vista los mostraba. En un lenguaje cuyo
+    modelo de memoria es la característica principal, "¿qué decidió el
+    frontend que hay que destruir aquí?" es justo la pregunta que se le hace
+    a esta vista."""
+    texto = _pretty(
+        "fn __write__(str s) -> void;\n"
+        "struct { int id; } R;\n"
+        "hook fn __free__(R ptr r) -> void { __write__(\"x\"); };\n"
+        "struct { R b; int n; } Caja;\n"
+        "fn fabrica() -> R {\n"
+        "    var R nuevo = R{ id: 9 };\n"
+        "    return nuevo;\n"
+        "}\n"
+        "fn main() -> int {\n"
+        "    var R a = R{ id: 1 };\n"
+        "    var Caja k = Caja{ b: R{ id: 2 }, n: 0 };\n"
+        "    fabrica();\n"
+        "    return 0;\n"
+        "}\n")
+    # el drop del ámbito, con el hook que lo ejecuta
+    assert "drop a  ⟨hook __free__ de R⟩" in texto, texto
+    # ...y el de un CAMPO, con la ruta ya aplanada por el frontend
+    assert "drop k.b" in texto, texto
+    # la propiedad que sale hacia el llamador: el ámbito NO lo destruye
+    assert "⟨transfiere⟩" in texto, texto
+    # el valor que nadie recibe y muere al terminar la sentencia
+    assert "⟨temporal __free__ de R⟩" in texto, texto
+
+
+def test_una_variante_con_payload_no_se_lee_como_un_entero():
+    """``Numero(int)`` es un constructor, ``ROJO`` un entero. Sin los tipos
+    del payload las dos formas del enum se leían igual."""
+    texto = _pretty("enum Color { ROJO, VERDE = 5 };\n"
+                    "enum Dato { Vacio, Numero(int), Texto(str) };\n"
+                    "fn main() -> int { return 0; }\n")
+    assert "enum Color { ROJO, VERDE = 5 }" in texto, texto
+    assert "Numero(int)" in texto and "Texto(str)" in texto, texto
+
+
 def test_escribe_en_streaming_sin_armar_la_cadena():
     """El defecto que motivó esta vista: 'module_to_text' construía 20 MB en
     memoria. ``write_pretty`` escribe sobre el archivo a medida que recorre."""
