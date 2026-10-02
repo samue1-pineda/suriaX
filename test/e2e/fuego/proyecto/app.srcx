@@ -1,0 +1,108 @@
+/- Ejercicio de fuego 3: proyecto de varios archivos + propiedad bajo estres -/
+#from io #import stdp
+#from geo #import punto
+#import geo.figura as fig
+#import array.vector as vec
+
+// ---- tipos del paquete geo ---------------------------------------------
+fn geometria() -> void {
+    var punto.Punto a = punto.nuevo(0, 0);
+    var punto.Punto b = punto.Punto{ x: 3, y: 4 };
+    print(&b);
+    stdp.println(f"d^2 = {punto.distancia2(&a, &b)}");
+    var punto.Punto c = punto.nuevo(3, 4);
+    if (b == c) { stdp.println("b == c"); };
+
+    var vec.Vector<fig.Figura> figs = vec.dynamic<fig.Figura>(1);
+    figs.push(fig.Figura.Circulo(2));
+    figs.push(fig.Figura.Rect(3, 5));
+    figs.push(fig.Figura.Nada);
+    var int total = 0;
+    var int i = 0;
+    while (i < figs.len()) {
+        var fig.Figura f = figs.get(i);
+        stdp.println(f"{fig.nombre(f)}: area {fig.area(f)}");
+        total = total + fig.area(f);
+        i = i + 1;
+    };
+    stdp.println(f"area total {total}");
+}
+
+// ---- propiedad bajo estres ---------------------------------------------
+struct { str nombre; } Recurso;
+
+hook fn __free__(Recurso ptr r) -> void {
+    stdp.println(f"  libera {r.nombre}");
+}
+
+struct {
+    Recurso a;
+    Recurso b;
+} Par;
+
+hook fn __free__(Par ptr p) -> void {
+    stdp.println("  libera el par");
+}
+
+fn crea(str n) -> Recurso { return Recurso{ nombre: n }; }
+
+fn primero_largo(int limite) -> int {
+    var int i = 0;
+    while (i < 5) {
+        var Recurso r = crea(f"vuelta{i}");
+        if (i == limite) {
+            return i;            // return temprano: 'r' se libera igual
+        };
+        i = i + 1;
+    };                           // cada vuelta libera su 'r'
+    return -1;
+}
+
+fn falla_con_recurso() -> void {
+    var Recurso guardia = crea("guardia");
+    throw "fallo a proposito";   // el throw cruza el ambito: 'guardia' se libera
+}
+
+fn elige(bool quedarse) -> Recurso {
+    var Recurso x = crea("elegido");
+    var Recurso y = crea("descartado");
+    if (quedarse) {
+        return move x;
+    };
+    return move y;
+}
+
+fn toma(Recurso r) -> void {
+    stdp.println(f"  toma {r.nombre}");
+}
+
+fn propiedad() -> void {
+    stdp.println("-- return temprano en un bucle");
+    stdp.println(f"  salio en {primero_largo(2)}");
+
+    stdp.println("-- throw a traves de un ambito con destructor");
+    try {
+        falla_con_recurso();
+    } catch (str e) {
+        stdp.println(f"  atrapado: {e}");
+    };
+
+    stdp.println("-- struct que contiene dueños");
+    var Par p = Par{ a: crea("izq"), b: crea("der") };
+    var Recurso sacado = move p.a;
+    stdp.println(f"  sacado {sacado.nombre}");
+
+    stdp.println("-- mover segun una rama");
+    var Recurso ganador = elige(true);
+    stdp.println(f"  gano {ganador.nombre}");
+    toma(move ganador);
+
+    stdp.println("-- fin de propiedad()");
+}
+
+fn main() -> int {
+    geometria();
+    propiedad();
+    stdp.println("-- fin");
+    return 0;
+}

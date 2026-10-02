@@ -1,7 +1,7 @@
 /- classlib — una CLASE de OOP (sin la P), escrita solo con lo que ya hay.
 
  No usa ninguna sintaxis nueva: lo que en otro lenguaje serian palabras
- reservadas ('class', 'private', 'constructor', 'toString', 'finally') aqui
+ reservadas ('class', 'private', 'constructor', 'toString') aqui
  son piezas que el lenguaje ya tenia por otros motivos.
 
    estado          -> los campos del struct

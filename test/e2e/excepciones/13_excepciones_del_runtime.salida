@@ -1,0 +1,14 @@
+-- division entre una variable que vale cero
+  división por cero (linea 37, columna 27)
+-- el resto tambien
+  resto de una división por cero
+-- indice fuera de rango, y el vector sigue sirviendo
+  índice 5 fuera de rango [0, 2)
+  v[1] sigue siendo 20
+-- cada tipo cae en su rama
+  rama del indice
+-- sin tipo tambien se atrapan
+  atrapado por 'catch (e)'
+-- convertir el error del runtime en uno propio
+  promedio de una lista vacia (total 30)
+  y con datos: 10

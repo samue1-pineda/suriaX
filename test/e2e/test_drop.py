@@ -257,13 +257,73 @@ def test_un_resultado_ligado_no_es_un_temporal():
         "vivo\ndrop 1\n")
 
 
-def test_un_valor_pasado_por_nombre_no_se_destruye_dos_veces():
-    """Pasar un local por valor NO transfiere: lo destruye su dueño, una vez."""
+def test_pasar_por_valor_algo_con_destructor_exige_move():
+    """Pasar por nombre dejaba al llamador como dueño y ``move`` no dejaba a
+    NADIE: el recurso se perdía en silencio. Ahora el parámetro por valor es
+    el dueño, y cederlo se escribe (SEM032, la misma regla que un ``var``)."""
+    code, _out, err = run_source(
+        W + R + "fn recibe(R x) -> void { };\n"
+        "fn main() -> int { var R a = R{ id: 1 }; recibe(a); return 0; };\n")
+    assert code == 1, (code, err)
+    assert "SEM032" in err, err
+    assert "move a" in err and "R ptr" in err, err
+
+
+def test_el_parametro_movido_se_destruye_al_salir_de_la_funcion():
+    """El caso del bug: ``recibe(move a)`` no destruía nunca el valor."""
+    assert_output(
+        W + R + 'fn recibe(R x) -> void { __write__("dentro\\n"); };\n'
+        "fn main() -> int { var R a = R{ id: 1 }; recibe(move a); "
+        '__write__("vuelta\\n"); return 0; };\n',
+        "dentro\ndrop 1\nvuelta\n")
+
+
+def test_un_temporal_pasado_por_valor_se_destruye_una_vez():
+    """El parámetro es su dueño: el llamador ya no lo suelta al terminar la
+    sentencia (antes de la corrección salía 'drop 2' dos veces)."""
     assert_output(
         W + R + "fn recibe(R x) -> void { };\n"
-        "fn main() -> int { var R a = R{ id: 1 }; recibe(a); "
-        '__write__("vivo\\n"); return 0; };\n',
-        "vivo\ndrop 1\n")
+        'fn main() -> int { recibe(R{ id: 2 }); __write__("fin\\n"); return 0; };\n',
+        "drop 2\nfin\n")
+
+
+def test_un_parametro_devuelto_cede_la_propiedad_al_llamador():
+    assert_output(
+        W + R + "fn pasa(R x) -> R { return move x; };\n"
+        "fn main() -> int { var R a = R{ id: 3 }; var R b = pasa(move a); "
+        '__write__("fin\\n"); return 0; };\n',
+        "fin\ndrop 3\n")
+
+
+def test_un_parametro_reenviado_se_destruye_donde_termina():
+    assert_output(
+        W + R + "fn final(R x) -> void { };\n"
+        'fn reenvia(R x) -> void { final(move x); __write__("reenvia\\n"); };\n'
+        "fn main() -> int { var R a = R{ id: 4 }; reenvia(move a); return 0; };\n",
+        "drop 4\nreenvia\n")
+
+
+def test_un_argumento_de_metodo_por_valor_tambien_se_transfiere():
+    """``k.guarda(move r)``: la regla vale para los argumentos explícitos de
+    un método; el receptor (implícito) no cambia."""
+    assert_output(
+        W + R + "struct { int n; } Caja;\n"
+        "@impl Caja {\n"
+        "    fn guarda(Caja ptr mutable self, R r) -> void { self.n = r.id; }\n"
+        "}\n"
+        "fn main() -> int { var Caja k = Caja{ n: 0 }; var R r = R{ id: 6 }; "
+        'k.guarda(move r); __write__(f"caja {k.n}\\n"); return 0; };\n',
+        "drop 6\ncaja 6\n")
+
+
+def test_un_prestamo_no_transfiere_nada():
+    """Para solo leer, el parámetro es ``ptr``: el llamador sigue siendo el
+    dueño y lo destruye él, una vez."""
+    assert_output(
+        W + R + "fn lee(R ptr x) -> int { return x.id; };\n"
+        'fn main() -> int { var R a = R{ id: 5 }; __write__(f"lee {lee(&a)}\\n"); '
+        "return 0; };\n",
+        "lee 5\ndrop 5\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -279,3 +339,135 @@ def test_una_funcion_de_cuerpo_vacio_no_es_un_prototipo():
         'fn main() -> int { vacia(); __write__("ok\\n"); return 0; };\n',
         "ok\n")
 
+
+# --------------------------------------------------------------------------- #
+# no se cede lo que es de otro (SEM036)
+# --------------------------------------------------------------------------- #
+
+_CAJA = "struct { R dentro; } Caja;\n"
+
+
+def test_ceder_algo_a_traves_de_un_puntero_es_sem036():
+    """Un puntero es un PRESTAMO: lo que hay detras es de otro. Antes
+    'move c.dentro' (y 'return'/'throw' de lo mismo) compilaba y el valor se
+    destruia DOS veces: con el nuevo dueño y con la Caja."""
+    for cuerpo in ("var R x = move c.dentro;",
+                   "return c.dentro;",
+                   "throw c.dentro;"):
+        retorno = "R" if cuerpo.startswith("return") else "void"
+        code, _out, err = run_program(
+            W + R + _CAJA
+            + f"fn f(Caja ptr mutable c) -> {retorno} {{ {cuerpo} }}\n"
+            + "fn main() -> int { return 0; };")
+        assert code != 0 and "SEM036" in err, (cuerpo, err)
+
+
+def test_ceder_un_campo_PROPIO_sigue_valiendo():
+    """Lo que no pasa por un puntero es propio y se puede ceder: el campo se
+    destruye una vez, con su nuevo dueño."""
+    _run("    if (true) {\n"
+         "        var Caja c = Caja{ dentro: R{ id: 7 } };\n"
+         "        var R x = move c.dentro;\n"
+         '        __write__("movido\\n");\n'
+         "    };\n"
+         "    return 0;",
+         "movido\ndrop 7\n", extra=_CAJA)
+
+
+# --------------------------------------------------------------------------- #
+# destruir POR TIPO: lo que el frontend no puede aplanar
+# --------------------------------------------------------------------------- #
+
+def test_un_parametro_generico_es_dueno_de_lo_que_recibe():
+    """``toma<R>(R{...})``: con ``T = R`` la llamada exige ``move`` (SEM032),
+    asi que el parametro es el dueño y lo destruye al salir. Antes ``T`` no
+    se destruia nunca."""
+    _run('    toma<R>(R{ id: 1 });\n    __write__("fin\\n");\n    return 0;',
+         "drop 1\nfin\n", extra="fn toma<T>(T x) -> int { return 0; };\n")
+
+
+def test_un_generico_que_devuelve_su_T_lo_cede():
+    """Devolver un ``T`` local lo CEDE: si no, se destruiria lo que el
+    llamador acaba de recibir."""
+    _run('    var R d = devuelve<R>(R{ id: 2 });\n    __write__(f"tengo {d.id}\\n");\n'
+         '    return 0;',
+         "tengo 2\ndrop 2\n",
+         extra="fn devuelve<T>(T x) -> T { var T y = move x; return y; };\n")
+
+
+def test_un_catch_sin_tipo_destruye_lo_que_atrapa():
+    """``catch (e)`` sin tipo: de que tipo es lo atrapado se sabe recien al
+    ejecutar, y se destruye por ese tipo al cerrar la rama."""
+    _run('    try { throw R{ id: 3 }; } catch (e) { __write__("atrapado\\n"); };\n'
+         '    return 0;',
+         "atrapado\ndrop 3\n")
+
+
+def test_reasignar_destruye_el_valor_viejo():
+    """``a = R{...}`` perdia el destructor del viejo (los dos motores solo
+    soltaban su memoria). Vale igual para un campo."""
+    _run('    var R a = R{ id: 4 };\n    a = R{ id: 5 };\n    __write__("medio\\n");\n'
+         '    var Par p = Par{ x: R{ id: 6 } };\n    p.x = R{ id: 7 };\n'
+         '    __write__("fin\\n");\n    return 0;',
+         "drop 4\nmedio\ndrop 6\nfin\ndrop 7\ndrop 5\n",
+         extra="struct { R x; } Par;\n")
+
+
+def test_un_argumento_que_nadie_recibio_muere_si_otro_lanza():
+    """``usa(move r, falla())``: el ``R`` ya salio de ``r`` pero la llamada
+    nunca ocurrio. Muere en el desenrollado, ANTES que los locales (como en
+    Rust), y no con el ambito de ``r``."""
+    _run('    try {\n        var R a = R{ id: 1 };\n        var R r = R{ id: 2 };\n'
+         '        usa(move r, falla());\n    } catch (e) { __write__("atrapado\\n"); };\n'
+         '    return 0;',
+         "drop 2\ndrop 1\natrapado\n",
+         extra=('fn falla() -> int { throw "no"; };\n'
+                'fn usa(R r, int x) -> int { return x; };\n'))
+
+
+def test_soltar_un_bloque_destruye_sus_celdas():
+    """Un bloque de ``mem`` POSEE sus celdas no vacias: ``release`` las
+    destruye, de la ultima a la primera. ``b[i] = x`` destruye lo que habia."""
+    _run('    var R ptr mutable b = mem.reserve<R>(3);\n    b[0] = R{ id: 1 };\n'
+         '    b[2] = R{ id: 2 };\n    b[0] = R{ id: 3 };\n    mem.release<R>(b);\n'
+         '    __write__("fin\\n");\n    return 0;',
+         "drop 1\ndrop 2\ndrop 3\nfin\n", extra="#import mem\n")
+
+
+_VECTOR = "#import array.vector as vec\n#import collections.dictionary as dic\n"
+
+
+def test_un_vector_destruye_sus_elementos():
+    """``Vector<R>`` es dueño de sus elementos: los destruye al morir, al
+    reemplazarlos (``set``) y no los destruye al sacarlos (``pop``,
+    ``take``). ``at`` los presta sin copiar."""
+    _run('    var vec.Vector<R> v = vec.dynamic<R>(1);\n'
+         '    v.push(R{ id: 1 });\n    v.push(R{ id: 2 });\n    v.push(R{ id: 3 });\n'
+         '    __write__(f"at {v.at(1).id}\\n");\n'
+         '    v.set(0, R{ id: 4 });\n'
+         '    var R dos = v.take(1);\n    var R tres = v.pop();\n'
+         '    __write__(f"sacados {dos.id} {tres.id}, quedan {v.len()}\\n");\n'
+         '    return 0;',
+         "at 2\ndrop 1\nsacados 2 3, quedan 1\ndrop 3\ndrop 2\ndrop 4\n",
+         extra=_VECTOR)
+
+
+def test_un_diccionario_destruye_al_reemplazar_y_al_quitar():
+    _run('    var dic.Dictionary<str, R> d = dic.make<str, R>(2);\n'
+         '    d.put("a", R{ id: 1 });\n    d.put("b", R{ id: 2 });\n'
+         '    d.put("a", R{ id: 3 });\n    d.remove("b");\n'
+         '    __write__(f"a = {d.at("a").id}\\n");\n    return 0;',
+         "drop 1\ndrop 2\na = 3\ndrop 3\n", extra=_VECTOR)
+
+
+def test_un_free_que_lanza_dentro_de_un_contenedor_es_rt021():
+    """La regla de siempre —un destructor nunca lanza— vale tambien cuando
+    lo corre el contenedor al morir."""
+    code, out, err = run_program(
+        W + 'struct { int id; } Q;\n'
+        'fn lanza() -> void { throw "no"; };\n'
+        'hook fn __free__(Q ptr q) -> void { lanza(); };\n'
+        + _VECTOR +
+        'fn main() -> int {\n    var vec.Vector<Q> v = vec.dynamic<Q>(1);\n'
+        '    v.push(Q{ id: 1 });\n    return 0;\n};\n')
+    assert code != 0 and "RT021" in out + err, (code, out, err)

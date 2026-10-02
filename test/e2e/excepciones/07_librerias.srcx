@@ -1,0 +1,29 @@
+/- Excepciones 7: lo que lanza una libreria.
+
+ Un throw cruza la frontera de una libreria igual que la de una funcion.
+ El filtro usa el nombre COMPLETO del tipo: 'a.Error' y 'b.Error' son dos
+ tipos distintos aunque se llamen igual, y 'catch (b.Error e)' no atrapa
+ lo que lanzo la libreria 'a'. (Antes se comparaba solo 'Error'.)
+-/
+#from io #import stdp
+#from errs #import a
+#from errs #import b
+
+fn prueba(int cual) -> void {
+    try {
+        if (cual == 0) { a.falla(); } else { b.falla(); };
+    }
+    catch (b.Error e) { stdp.println(f"  b.Error con codigo {e.codigo}"); }
+    catch (a.Error e) { stdp.println(f"  a.Error: {e.msg}"); };
+}
+
+fn main() -> int {
+    stdp.println("-- cada tipo homonimo cae en su rama");
+    prueba(0);
+    prueba(1);
+
+    stdp.println("-- el valor de la libreria se lee por sus campos");
+    try { a.falla(); }
+    catch (a.Error e) { stdp.println(f"  mensaje de largo {len(e.msg)}"); };
+    return 0;
+}

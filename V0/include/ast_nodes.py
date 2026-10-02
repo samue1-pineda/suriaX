@@ -170,6 +170,26 @@ class InterpolatedString(Expression):
 
 
 @dataclass(slots=True)
+class FormattedValue(Expression):
+    """``{valor!r:08b}``: una interpolacion con su FORMATO (el nombre es el
+    del AST de Python, que tiene el mismo nodo para lo mismo).
+
+    Solo aparece dentro de ``InterpolatedString.parts``, y solo si hay algo
+    que formatear: un ``{x}`` sin ``!r`` ni ``:`` sigue siendo la expresion
+    sola.
+
+    - ``conversion``: ``"r"`` pide la REPRESENTACION (``"hola"`` con sus
+      comillas, ``Color.Verde``, ``Punto{x: 1}``); ``""`` el texto de siempre.
+    - ``format_spec``: ``[0][ancho][.precision][tipo]``, con ``tipo`` uno de
+      ``d x X b o`` (enteros) o ``f`` (flotantes). ``""`` = sin formato.
+    """
+    value: Expression
+    conversion: str = ""
+    format_spec: str = ""
+    restype: Optional[Type] = None
+
+
+@dataclass(slots=True)
 class Identifier(Expression):
     name: str
     restype: Optional[Type] = None
@@ -214,6 +234,13 @@ class Assignment(Expression):
     target: Expression
     value: Expression
     restype: Optional[Type] = None
+    drops_old: bool = False
+    """El destino posee recursos: su valor viejo se destruye (por su tipo
+    concreto) al recibir el nuevo. Lo decide la Semántica."""
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 
 
 @dataclass(slots=True)
@@ -234,6 +261,7 @@ class Call(Expression):
     consumidor del HIR se entera de que hubo una llamada."""
     hook: Optional[Any] = None
     temp_drop: Optional[Any] = None
+    temp_by_type: bool = False
     """``Symbol`` del ``__free__`` que destruye el resultado de esta expresion
     al terminar la sentencia, cuando el valor producido NO queda en manos de
     nadie (un temporal). ``None`` si lo recibe un binding, un ``return`` o una
@@ -267,6 +295,10 @@ class MemberAccess(Expression):
     otro acceso."""
 
 
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 @dataclass(slots=True)
 class StructLiteral(Expression):
     """``T{ campo: expr, ... }`` -- instancia un struct nominal ``T``.
@@ -286,6 +318,7 @@ class StructLiteral(Expression):
     hay que resolver, no texto: participan de la identidad del resultado."""
     restype: Optional[Type] = None
     temp_drop: Optional[Any] = None
+    temp_by_type: bool = False
     """``Symbol`` del ``__free__`` que destruye el resultado de esta expresion
     al terminar la sentencia, cuando el valor producido NO queda en manos de
     nadie (un temporal). ``None`` si lo recibe un binding, un ``return`` o una
@@ -313,6 +346,10 @@ class CastExpr(Expression):
     (anotado por la Semantica -- ``type_resolver``)."""
 
 
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 @dataclass(slots=True)
 class SizeofExpr(Expression):
     """``sizeof(X)`` -- el tamano de un TIPO, o el del tipo de un VALOR.
@@ -355,6 +392,11 @@ class Drop:
     esa la contesta el compilador."""
     hook: Optional[Any] = None
     """``Symbol`` del ``__free__`` que destruye lo que hay al final de ``path``."""
+    by_type: bool = False
+    """Destruir por el TIPO CONCRETO (``hook`` vacío): lo que hay al final de
+    ``path`` no se puede aplanar aquí —un ``T``, un ``catch (e)`` sin tipo, un
+    bloque de un campo— y lo decide el consumidor (ver ``Drop.by_type`` en
+    ``hir.proto``)."""
 
 
 @dataclass(slots=True)
@@ -363,6 +405,10 @@ class Block(Statement):
     drops: List[Drop] = field(default_factory=list)
     """Destrucciones al cerrar el bloque, en orden INVERSO al de declaracion
     (lo ultimo que nace es lo primero que muere). Las anota la Semantica."""
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 
 
 @dataclass(slots=True)
@@ -375,6 +421,10 @@ class VarDecl(Statement):
     visibility: Optional[str] = None
     """Reserva de visibilidad; solo aplica a un binding de NIVEL SUPERIOR
     (ver ``FunctionDecl.visibility``). En una variable local queda ``None``."""
+    inferido: bool = False
+    """Lo declaro el parser para un ``with`` SIN nombre (``with (guardian())``):
+    no hay nombre que anotar, asi que su tipo es el de su valor. Es el unico
+    binding del lenguaje sin tipo escrito, y no se puede escribir a mano."""
     capacity: Optional[Expression] = None
     """Capacidad ESCRITA de un contenedor: la ``n`` de ``int vec.Vector v[n];``.
 
@@ -385,6 +435,10 @@ class VarDecl(Statement):
     fase la necesita para producir codigo."""
 
 
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 @dataclass(slots=True)
 class TypeDecl(Statement):
     """``[qualifier] "type" IDENTIFIER [ "=" expression ] ";"``.
@@ -518,6 +572,10 @@ class MoveExpr(Expression):
     restype: Optional[Type] = None
 
 
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
 @dataclass(slots=True)
 class ThrowStmt(Statement):
     """``throw expression;`` -- inicia la propagacion de un error.
@@ -547,16 +605,22 @@ class CatchClause(ASTNode):
 
 @dataclass(slots=True)
 class TryStmt(Statement):
-    """``try block { catch "(" [type] IDENTIFIER ")" block }``.
+    """``try block { catch "(" [type] IDENTIFIER ")" block } [ finally block ]``.
 
     Ejecuta ``try_block``; si algo lanzado (``throw``) se propaga por el, se
     prueban las ramas EN ORDEN y gana la primera cuyo tipo encaje. Si ninguna
     encaja, el valor sigue propagandose — que es lo que hace util filtrar por
     tipo: una rama que no sabe manejar un fallo no se lo queda.
 
+    ``finally_block`` corre al salir por CUALQUIER camino: al terminar el
+    ``try`` o su ``catch``, con un ``return``/``break``/``continue`` que lo
+    atraviesa, o con una excepcion que nadie atrapo (que despues sigue su
+    camino). Hace falta al menos un ``catch`` o el ``finally``.
+
     El binding de cada rama vive solo en el scope de SU bloque."""
     try_block: Block
     catches: List[CatchClause] = field(default_factory=list)
+    finally_block: Optional[Block] = None
 
 
 @dataclass(slots=True)
@@ -599,6 +663,12 @@ class FunctionDecl(Declaration):
     ``["T"]``. Van tras el NOMBRE, igual que en un ``struct``/``type``: el
     lenguaje pone siempre junto al nombre lo que identifica la declaracion.
     Vacio en una funcion corriente."""
+    impl_type_params: List[str] = field(default_factory=list)
+    """Los parametros del ``@impl Vector<T>`` de un METODO (el parser aplana el
+    bloque en sus metodos). Van aparte de ``type_params`` para no cambiar la
+    firma que ve la Semantica; el HIR los emite juntos en
+    ``FunctionDecl.type_params``, que es lo que necesita un backend para
+    saber que ``T`` es un parametro y no un tipo desconocido."""
     dunder: Optional[str] = None
     """Nombre "dunder" SIN guiones (p. ej. ``"free"`` para ``fn __free__``)
     cuando ``name`` vino de un token ``DUNDER``; ``None`` para una funcion con

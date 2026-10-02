@@ -65,6 +65,14 @@ symbols {
         }
       }
       param_types {
+        kind: POINTER
+        inner {
+          kind: NOMINAL
+          name: "Nodo"
+        }
+        mut: true
+      }
+      param_types {
         kind: INT
       }
     }
@@ -128,6 +136,10 @@ items {
   function {
     name: "crea"
     params {
+      name: "n"
+      type_id: 3
+    }
+    params {
       name: "v"
       type_id: 1
     }
@@ -135,35 +147,37 @@ items {
       statements {
         ln: 4
         col: 5
-        var_decl {
-          qualifier: "var"
-          name: "n"
-          value {
+        expr_stmt {
+          expr {
             ln: 4
-            col: 18
-            type_id: 3
-            struct_literal {
-              type_name: "Nodo"
-              field_names: "x"
-              field_names: "sig"
-              values {
+            col: 5
+            type_id: 1
+            assignment {
+              target {
                 ln: 4
-                col: 27
+                col: 5
+                member {
+                  obj {
+                    ln: 4
+                    col: 5
+                    type_id: 3
+                    identifier {
+                      name: "n"
+                    }
+                  }
+                  member: "x"
+                }
+              }
+              value {
+                ln: 4
+                col: 11
                 type_id: 1
                 identifier {
                   name: "v"
                 }
               }
-              values {
-                ln: 4
-                col: 35
-                literal {
-                  kind: "null"
-                }
-              }
             }
           }
-          type_id: 3
         }
       }
       statements {
@@ -173,17 +187,9 @@ items {
           value {
             ln: 5
             col: 12
-            type_id: 4
-            addr_of {
-              operand {
-                ln: 5
-                col: 13
-                type_id: 3
-                identifier {
-                  name: "n"
-                }
-              }
-              mut: true
+            type_id: 3
+            identifier {
+              name: "n"
             }
           }
         }
@@ -209,7 +215,7 @@ items {
           condition {
             ln: 9
             col: 9
-            type_id: 6
+            type_id: 5
             binary {
               op: "=="
               left {
@@ -270,7 +276,7 @@ items {
         }
       }
     }
-    return_type_id: 5
+    return_type_id: 4
   }
 }
 items {
@@ -284,22 +290,73 @@ items {
         col: 5
         var_decl {
           qualifier: "var"
-          name: "cabeza"
+          name: "base"
           value {
             ln: 14
+            col: 21
+            type_id: 6
+            struct_literal {
+              type_name: "Nodo"
+              field_names: "x"
+              field_names: "sig"
+              values {
+                ln: 14
+                col: 30
+                type_id: 1
+                literal {
+                  kind: "int"
+                  int_value: 0
+                }
+              }
+              values {
+                ln: 14
+                col: 38
+                literal {
+                  kind: "null"
+                }
+              }
+            }
+          }
+          type_id: 6
+        }
+      }
+      statements {
+        ln: 15
+        col: 5
+        var_decl {
+          qualifier: "var"
+          name: "cabeza"
+          value {
+            ln: 15
             col: 28
             type_id: 2
             call {
               callee {
-                ln: 14
+                ln: 15
                 col: 28
                 identifier {
                   name: "crea"
                 }
               }
               args {
-                ln: 14
+                ln: 15
                 col: 33
+                type_id: 3
+                addr_of {
+                  operand {
+                    ln: 15
+                    col: 34
+                    type_id: 6
+                    identifier {
+                      name: "base"
+                    }
+                  }
+                  mut: true
+                }
+              }
+              args {
+                ln: 15
+                col: 40
                 type_id: 1
                 literal {
                   kind: "int"
@@ -312,30 +369,30 @@ items {
         }
       }
       statements {
-        ln: 15
+        ln: 16
         col: 5
         try_stmt {
           try_block {
             statements {
-              ln: 16
+              ln: 17
               col: 9
               var_decl {
                 qualifier: "var"
                 name: "t"
                 value {
-                  ln: 16
+                  ln: 17
                   col: 21
-                  type_id: 5
+                  type_id: 4
                   call {
                     callee {
-                      ln: 16
+                      ln: 17
                       col: 21
                       identifier {
                         name: "suma"
                       }
                     }
                     args {
-                      ln: 16
+                      ln: 17
                       col: 26
                       type_id: 2
                       identifier {
@@ -351,16 +408,20 @@ items {
           catches {
             name: "e"
             block {
+              drops {
+                path: "e"
+                by_type: true
+              }
             }
           }
         }
       }
       statements {
-        ln: 18
+        ln: 19
         col: 5
         return_stmt {
           value {
-            ln: 18
+            ln: 19
             col: 12
             type_id: 1
             literal {
@@ -390,10 +451,6 @@ types {
   }
 }
 types {
-  kind: NOMINAL
-  name: "Nodo"
-}
-types {
   kind: POINTER
   inner {
     kind: NOMINAL
@@ -409,4 +466,8 @@ types {
 }
 types {
   kind: BOOL
+}
+types {
+  kind: NOMINAL
+  name: "Nodo"
 }

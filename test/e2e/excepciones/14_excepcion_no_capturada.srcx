@@ -1,0 +1,21 @@
+/- Excepciones 14: una excepcion del runtime que nadie atrapa.
+
+ Si ningun 'catch' la acepta, el programa termina como con cualquier throw
+ no capturado (codigo de salida 70), pero el mensaje dice su CODIGO propio
+ -EXC001- y que fue: "excepcion no capturada — EXC001: division por cero".
+ El 'catch (int e)' de abajo no la atrapa: no es un int.
+
+ codigo: 70 EXC001
+-/
+#from io #import stdp
+
+fn reparte(int total, int partes) -> int { return total / partes; }
+
+fn main() -> int {
+    stdp.println("antes");
+    var int partes = 0;
+    try { stdp.println(f"{reparte(10, partes)}"); }
+    catch (int e) { stdp.println("no se ve: no es un int"); };
+    stdp.println("despues (no se ve)");
+    return 0;
+}

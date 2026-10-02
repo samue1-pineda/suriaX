@@ -40,9 +40,24 @@ from __future__ import annotations
 import ctypes
 import os
 import shutil
+import struct
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+def _estandar_cpp() -> str:
+    """El estándar de C++ ÚNICO del proyecto (``CXX_STANDARD`` de
+    ``version.py``, la misma fuente que lee CMake). Un bloque ``#extern cpp``
+    compilado en otro estándar que el backend que lo enlace es un conflicto
+    que compila y falla después."""
+    import sys
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if raiz not in sys.path:
+        sys.path.insert(0, raiz)
+    from version import CXX_STANDARD
+    return CXX_STANDARD
+
 
 #: Tipo del lenguaje -> tipo de ``ctypes`` en la frontera.
 #:
@@ -73,8 +88,15 @@ def _tabla() -> Dict[int, Any]:
         5: ctypes.c_uint32,        # CHAR: un code point
         6: ctypes.c_char_p,        # STR: 'const char*' UTF-8 (ver marshalling)
         7: ctypes.c_void_p,        # POINTER
+        12: ctypes.c_uint8,        # BYTE
     })
     return _CTYPES
+
+
+#: un 'byte ptr': un buffer de 'uint8_t'. Se distingue de los demas punteros
+#: porque el intérprete no sabe, mirando las celdas (enteros de Python), si
+#: un bloque es de 'int' o de 'byte': lo dice el TIPO del parámetro.
+_PTR_BYTE = ctypes.POINTER(ctypes.c_uint8)
 
 #: ``TypeKind`` que NO se pueden pasar por esta frontera, con el porqué.
 _SIN_ABI = {
@@ -241,6 +263,8 @@ def _tipo_ctypes(unidad, type_id: int) -> Tuple[Any, Optional[str]]:
     motivo = _SIN_ABI.get(kind)
     if motivo is not None:
         return None, motivo
+    if kind == 7 and tipos[type_id].inner.kind == 12:   # 'byte ptr'
+        return _PTR_BYTE, None
     tabla = _tabla()
     if kind not in tabla:
         return None, f"tipo sin equivalente en C ({kind})"
@@ -277,9 +301,97 @@ def _fuente(bloques: List[Tuple[str, str, int]], flags: List[str],
     return "\n".join(partes)
 
 
+def _objetivo(compilador: str) -> str:
+    """Para qué máquina produce ``compilador`` (``-dumpmachine``), o "".
+
+    Lo entienden g++ y clang++. Hace falta saberlo en Windows, donde hay dos
+    ABI con reglas distintas para exportar un símbolo.
+    """
+    try:
+        proceso = subprocess.run([compilador, "-dumpmachine"], capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace", timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proceso.stdout.strip() if proceso.returncode == 0 else ""
+
+
+def _ajustes(objetivo: str, flags: List[str]) -> List[str]:
+    """Las banderas que la MÁQUINA exige además de las del usuario.
+
+    Una biblioteca de 32 bits no se carga en un proceso de 64: si el
+    compilador produce por defecto para i686 (el clang de Windows lo hace) y
+    quien la va a cargar es de 64 bits, se pide ``-m64``. Quien escribió
+    ``-m32`` o ``-m64`` a mano ya decidió.
+    """
+    if any(f in ("-m32", "-m64") or f.startswith("--target") for f in flags):
+        return []
+    de_32 = objetivo.startswith(("i386", "i486", "i586", "i686"))
+    return ["-m64"] if de_32 and sys.maxsize > 2 ** 32 else []
+
+
+def definidos_coff(contenido: bytes) -> List[str]:
+    """Los símbolos EXTERNOS que un objeto COFF (``.obj`` de Windows) define.
+
+    Con la ABI de MSVC una DLL no exporta nada que no se marque
+    (``__declspec(dllexport)``), y un ``extern "C"`` corriente no lo está: la
+    biblioteca se construía y no traía ni un símbolo. Se exporta lo que el
+    programa declara como prototipo y el objeto de verdad define; saber qué
+    define exige leer su tabla de símbolos, que en COFF es simple:
+
+    * cabecera normal (20 bytes) o ``/bigobj`` (56), y los símbolos de 18 o 20
+      bytes a partir de ``PointerToSymbolTable``;
+    * un símbolo está DEFINIDO si su sección es > 0, y es EXTERNO si su clase
+      de almacenamiento es 2; su nombre va en línea (8 bytes) o en la tabla
+      de cadenas que sigue a los símbolos;
+    * en 32 bits el nombre de C lleva un ``_`` delante, que se quita.
+
+    Es la misma lectura que hace ``backend/src/externo.cpp`` para la VM.
+    """
+    if len(contenido) < 20:
+        return []
+    firma1, firma2 = struct.unpack_from("<HH", contenido, 0)
+    if firma1 == 0 and firma2 == 0xFFFF:          # /bigobj
+        if len(contenido) < 56:
+            return []
+        maquina = struct.unpack_from("<H", contenido, 6)[0]
+        tabla, cuantos = struct.unpack_from("<II", contenido, 48)
+        tam, formato = 20, "<8sIiHBB"
+    else:
+        maquina = firma1
+        tabla, cuantos = struct.unpack_from("<II", contenido, 8)
+        tam, formato = 18, "<8sIhHBB"
+    cadenas = tabla + cuantos * tam
+    salida: List[str] = []
+    i = 0
+    while i < cuantos:
+        base = tabla + i * tam
+        if base + tam > len(contenido):
+            break
+        nombre, _valor, seccion, _tipo, clase, aux = struct.unpack_from(
+            formato, contenido, base)
+        if clase == 2 and seccion > 0:
+            if nombre[:4] == b"\0\0\0\0":
+                desde = cadenas + struct.unpack_from("<I", nombre, 4)[0]
+                hasta = contenido.find(b"\0", desde)
+                texto = contenido[desde:hasta if hasta >= 0 else len(contenido)]
+            else:
+                texto = nombre.rstrip(b"\0")
+            simbolo = texto.decode("utf-8", "replace")
+            if maquina == 0x14C and simbolo.startswith("_"):
+                simbolo = simbolo[1:]
+            salida.append(simbolo)
+        i += 1 + aux
+    return salida
+
+
 def _construir(fuente: str, destino_dir: str, flags: List[str],
-               compilador: Optional[str]) -> Report:
-    """Escribe el ``.cpp`` y lo compila a una biblioteca compartida."""
+               compilador: Optional[str],
+               nombres: Optional[List[str]] = None) -> Report:
+    """Escribe el ``.cpp`` y lo compila a una biblioteca compartida.
+
+    ``nombres`` son los prototipos del programa: con un toolchain de ABI de
+    MSVC son lo que se exporta (ver :func:`definidos_coff`).
+    """
     report = Report()
     if compilador is None:
         report.error = (
@@ -306,17 +418,44 @@ def _construir(fuente: str, destino_dir: str, flags: List[str],
         report.biblioteca = so
         return report
 
-    orden = [compilador, "-shared", "-fPIC", "-std=c++17", "-O1",
-             cpp, "-o", so, *flags]
-    try:
-        proceso = subprocess.run(orden, capture_output=True, text=True,
-                                 timeout=300)
-    except (OSError, subprocess.SubprocessError) as exc:
-        report.error = f"no se pudo invocar a '{compilador}': {exc}"
-        return report
-    if proceso.returncode != 0:
-        report.error = ("el bloque '#extern cpp' no compila:\n" +
-                        proceso.stderr.strip())
+    # el MISMO estándar que el resto del proyecto (version.py): un bloque en
+    # otro estándar que el backend que lo enlace es un conflicto esperando
+    estandar = f"-std=c++{_estandar_cpp()}"
+    objetivo = _objetivo(compilador)
+    banderas = _ajustes(objetivo, flags) + list(flags)
+
+    def correr(orden: List[str]) -> Optional[str]:
+        try:
+            # los mensajes del compilador de C++ pueden no venir en UTF-8
+            # (MSVC escribe en la página de códigos de la consola): lo que no
+            # se decodifica se reemplaza en vez de tumbar la compilación
+            proceso = subprocess.run(orden, capture_output=True, text=True,
+                                     encoding="utf-8", errors="replace", timeout=300)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"no se pudo invocar a '{compilador}': {exc}"
+        if proceso.returncode != 0:
+            return "el bloque '#extern cpp' no compila:\n" + proceso.stderr.strip()
+        return None
+
+    if "msvc" in objetivo:
+        # ABI de MSVC: primero el objeto, para saber que define, y despues la
+        # DLL exportando justo eso ('/EXPORT' de un simbolo que no existe
+        # rompe el enlazado, por eso no se exportan todos los prototipos)
+        obj = os.path.join(destino_dir, _MODULO + ".obj")
+        error = correr([compilador, "-c", estandar, "-O1", cpp, "-o", obj, *banderas])
+        if error is None:
+            with open(obj, "rb") as fh:
+                definidos = set(definidos_coff(fh.read()))
+            exportar = [f"-Wl,/EXPORT:{n}" for n in (nombres or []) if n in definidos]
+            error = correr([compilador, "-shared", obj, "-o", so, *banderas, *exportar])
+    else:
+        # '-fPIC' es de ELF: en Windows (MinGW) el codigo ya es reubicable y
+        # un clang de Windows lo rechaza
+        pic = [] if os.name == "nt" else ["-fPIC"]
+        error = correr([compilador, "-shared", *pic, estandar, "-O1", cpp, "-o", so,
+                        *banderas])
+    if error is not None:
+        report.error = error
         return report
     report.biblioteca = so
     return report
@@ -360,8 +499,8 @@ def _a_buffer(bloque: Any) -> Tuple[Any, Any, Optional[str]]:
         elemento = _BUFFER.get(tipos.pop())
         if elemento is None:
             return None, None, ("sus elementos no tienen representacion de "
-                                "maquina (solo 'int' y 'float' cruzan como "
-                                "buffer)")
+                                "maquina (solo 'int', 'float' y 'byte' cruzan "
+                                "como buffer)")
     arreglo = (elemento * len(valores))(*valores)
     return arreglo, elemento, None
 
@@ -390,6 +529,11 @@ def _envolver(fn_c: Any, params: List[Any], resultado: Any):
                 preparados.append(valor.encode("utf-8"))
             elif tipo is ctypes.c_uint32 and isinstance(valor, str):
                 preparados.append(ord(valor))   # char -> code point
+            elif tipo is _PTR_BYTE and isinstance(valor, Block):
+                celdas = [c.value if c.value is not None else 0 for c in valor.cells]
+                buffer = (ctypes.c_uint8 * len(celdas))(*[v & 0xFF for v in celdas])
+                preparados.append(ctypes.cast(buffer, _PTR_BYTE))
+                devolver.append((buffer, valor))
             elif tipo is ctypes.c_void_p and isinstance(valor, Block):
                 buffer, _elemento, motivo = _a_buffer(valor)
                 if motivo is not None:
@@ -433,8 +577,10 @@ def bind(image, *, dumps_dir: str, config: Optional[dict] = None) -> Report:
     # este puente son eso mismo, no una seccion nueva.
     flags = _requisitos(image) + _banderas(config, "cpp")
     compilador = _compilador(config, "cpp")
+    prototipos = _prototipos(image)
     report = _construir(_fuente(bloques, flags, compilador),
-                        os.path.join(dumps_dir, "extern"), flags, compilador)
+                        os.path.join(dumps_dir, "extern"), flags, compilador,
+                        [fn.name for _unidad, fn in prototipos])
     if report.biblioteca is None:
         return report
 
@@ -444,7 +590,7 @@ def bind(image, *, dumps_dir: str, config: Optional[dict] = None) -> Report:
         report.error = f"no se pudo cargar '{report.biblioteca}': {exc}"
         return report
 
-    for unidad, fn in _prototipos(image):
+    for unidad, fn in prototipos:
         try:
             simbolo = getattr(lib, fn.name)
         except AttributeError:
@@ -466,6 +612,11 @@ def bind(image, *, dumps_dir: str, config: Optional[dict] = None) -> Report:
             elif resultado is ctypes.c_char_p:
                 motivo = ("devuelve 'str': quien libera ese buffer es una "
                           "pregunta de propiedad todavia sin decidir")
+            elif resultado is ctypes.c_void_p:
+                # antes se ligaba y suriaX recibia la direccion como un entero:
+                # un 'ptr' que no apunta a nada que el programa pueda usar
+                motivo = ("devuelve un puntero de C++: de quien es esa memoria "
+                          "todavia no esta decidido")
         if motivo is not None:
             report.omitidos.append((fn.name, motivo))
             continue

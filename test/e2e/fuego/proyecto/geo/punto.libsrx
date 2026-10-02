@@ -1,0 +1,29 @@
+/- geo.punto: un tipo publicado con sus hooks y funciones -/
+internal fn __write__(str s) -> void;
+
+struct {
+    int x;
+    int y;
+} Punto;
+
+hook fn __print__(Punto ptr p) -> void {
+    __write__(f"({p.x}, {p.y})\n");
+}
+
+hook fn __eq__(Punto ptr a, Punto ptr b) -> bool {
+    return a.x == b.x and a.y == b.y;
+}
+
+public fn nuevo(int x, int y) -> Punto {
+    return Punto{ x: x, y: y };
+}
+
+public fn distancia2(Punto ptr a, Punto ptr b) -> int {
+    var int dx = a.x - b.x;
+    var int dy = a.y - b.y;
+    return dx * dx + dy * dy;
+}
+
+internal fn secreto() -> int { return 42; }
+
+#export as punto

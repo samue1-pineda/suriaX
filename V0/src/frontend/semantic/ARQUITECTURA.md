@@ -112,7 +112,7 @@ V0/src/frontend/semantic/
 ├── semantic.py               # ORQUESTADOR: corre las pasadas en orden,
 │                              #   atiende '#test sem' (vuelca símbolos/diagnósticos)  [IMPLEMENTADO — parcial, secc. 12]
 ├── context.py                # Estado compartido entre pasadas (scope actual,
-│                              #   función actual, acumulador de errores)  [PENDIENTE]
+│                              #   función actual, acumulador de errores)  [IMPLEMENTADO]
 │
 ├── symbol_table.py           # Estructura CENTRAL: Symbol, Scope, SymbolTable  [IMPLEMENTADO]
 ├── hooks.py                   # Vocabulario y lógica de métodos "dunder" como

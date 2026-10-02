@@ -1,0 +1,18 @@
+/- una libreria de un archivo -/
+public const int BASE = 10;
+public struct { int a; int b; } Par;
+public enum Signo { POS, NEG };
+
+internal fn ayuda(int x) -> int {
+    return x + BASE;
+}
+
+public fn suma(int a, int b) -> int {
+    return ayuda(a) + b;
+}
+
+public fn par(int a) -> Par {
+    return Par{ a: a, b: a };
+}
+
+#export as calc

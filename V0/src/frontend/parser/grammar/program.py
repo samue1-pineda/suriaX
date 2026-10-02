@@ -1,4 +1,4 @@
-"""Punto de entrada gramatical: ``program = { top_level } EOF`` (EBNF secc. 1).
+"""Punto de entrada gramatical: ``program = { top_level } EOF`` (EBNF).
 
 El bucle raiz y la recuperacion de errores viven aqui; el despacho de cada
 item y su prefijo de modificadores (visibilidad, ``hook``/``dunder``) los dueña

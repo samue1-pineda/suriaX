@@ -1,0 +1,6 @@
+#import pk.a as a
+public fn usa() -> int {
+    var a.A x = a.crea();
+    return x.v + a.secreto();
+}
+#export as b

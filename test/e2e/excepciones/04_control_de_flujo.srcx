@@ -1,0 +1,81 @@
+/- Excepciones 4: try y el control de flujo.
+
+ 'break', 'continue' y 'return' funcionan igual dentro de un 'try' o de un
+ 'catch'. Un throw no deshace nada: lo que se modifico antes de lanzar
+ sigue modificado despues del catch.
+-/
+#from io #import stdp
+
+fn primero_negativo(int a, int b, int c) -> int {
+    var int i = 0;
+    while (i < 3) {
+        try {
+            var int v = a;
+            if (i == 1) { v = b; };
+            if (i == 2) { v = c; };
+            if (v < 0) { return v; };
+        } catch (int e) { stdp.println("  no se ve"); };
+        i = i + 1;
+    };
+    return 0;
+}
+
+fn desde_el_catch() -> str {
+    try { throw "x"; }
+    catch (str e) { return f"devuelto desde el catch ({e})"; };
+    return "no se llega";
+}
+
+fn cond(int x) -> bool {
+    if (x == 3) { throw "la condicion lanzo"; };
+    return true;
+}
+
+fn main() -> int {
+    stdp.println("-- break y continue dentro de un try");
+    var int i = 0;
+    while (i < 10) {
+        i = i + 1;
+        try {
+            if (i == 2) { continue; };
+            if (i == 4) { break; };
+            stdp.println(f"  vuelta {i}");
+        } catch (int e) { stdp.println("  no se ve"); };
+    };
+    stdp.println(f"  salio con i={i}");
+
+    stdp.println("-- un throw por vuelta, atrapado en cada una");
+    var int j = 0;
+    var int atrapados = 0;
+    while (j < 5) {
+        try { if (j % 2 == 0) { throw j; }; }
+        catch (int e) { atrapados = atrapados + 1; };
+        j = j + 1;
+    };
+    stdp.println(f"  atrapados {atrapados} de 5");
+
+    stdp.println("-- un throw corta el bucle entero si el try esta afuera");
+    var int k = 0;
+    try {
+        while (true) {
+            k = k + 1;
+            if (k == 6) { throw k; };
+        };
+    } catch (int e) { stdp.println(f"  corto en {e}"); };
+
+    stdp.println("-- return dentro del try y dentro del catch");
+    stdp.println(f"  {primero_negativo(3, -8, -1)}");
+    stdp.println(f"  {desde_el_catch()}");
+
+    stdp.println("-- throw en la condicion del while");
+    var int n = 0;
+    try { while (cond(n)) { n = n + 1; }; }
+    catch (str e) { stdp.println(f"  {e} con n={n}"); };
+
+    stdp.println("-- lo hecho antes del throw no se deshace");
+    var int s = 1;
+    try { s = 10; throw 0; }
+    catch (int e) { s = s + 1; };
+    stdp.println(f"  s = {s}");
+    return 0;
+}

@@ -114,8 +114,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install protobuf pyyaml
 
+      # la suite ENTERA, las categorias a pedido incluidas: lo que se publica
+      # tiene que pasar tambien las comparaciones (VM, bootstrap)
+      - name: Construir el backend C++
+        run: |
+          cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target suriax-hir -j
+
       - name: Suite
-        run: python test/main.py
+        run: python test/main.py --todo
 
   construir:
     name: Construir

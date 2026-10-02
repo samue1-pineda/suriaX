@@ -1,0 +1,39 @@
+/- Excepciones 12: un destructor ('__free__') nunca puede lanzar.
+
+ Mientras un throw sube, se destruye lo que deja atras. Si en ese momento un
+ '__free__' lanzara OTRO valor, habria dos excepciones a la vez y el catch
+ solo puede recibir una: antes, la segunda reemplazaba a la primera sin
+ decir nada y el '1' de abajo se perdia. Es la regla de C++.
+
+ Un 'throw' escrito dentro de un '__free__' ya no compila (SEM034). Aqui el
+ __free__ llama a una funcion que lanza, algo que solo se ve al ejecutar: el
+ programa termina con RT021, diciendo de que tipo era el destructor y que
+ lanzo. No se puede atrapar.
+
+ Si liberar puede fallar, el __free__ registra el fallo (lo imprime, lo
+ cuenta) y termina normalmente.
+
+ codigo: 70 RT021
+-/
+#from io #import stdp
+
+struct { str que; } Archivo;
+
+fn cerrar(str que) -> void { throw f"no pude cerrar {que}"; }
+
+hook fn __free__(Archivo ptr a) -> void {
+    stdp.println(f"cerrando {a.que}");
+    cerrar(a.que);
+}
+
+fn procesa() -> void {
+    var Archivo a = Archivo{ que: "datos.txt" };
+    throw 1;
+}
+
+fn main() -> int {
+    try { procesa(); }
+    catch (int e) { stdp.println(f"no se ve: {e}"); }
+    catch (str e) { stdp.println(f"no se ve tampoco: {e}"); };
+    return 0;
+}

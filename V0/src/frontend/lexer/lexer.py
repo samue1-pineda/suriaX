@@ -136,8 +136,11 @@ class Lexer:
         # identificadores / palabras reservadas
         if ch == "_" or ch.isidentifier():
             return self._guard(ident.scan)
-        # numeros
-        if ch.isdigit():
+        # numeros: SOLO dígitos ASCII. 'str.isdigit' también acepta '²' o
+        # '٣', que 'int()' no convierte (o convierte a otro número): el
+        # lexer reventaba con un ValueError (ICE000). Esos caracteres son
+        # ahora un carácter inesperado (LEX001), como cualquier otro símbolo.
+        if "0" <= ch <= "9":
             return self._guard(number.scan)
         # cadenas / caracteres
         if ch == '"':

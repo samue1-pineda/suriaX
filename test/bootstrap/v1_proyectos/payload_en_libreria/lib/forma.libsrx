@@ -1,0 +1,24 @@
+public struct { int x; } P;
+public struct { P a; P ptr b; } Q;
+public enum E { Uno(P), Dos };
+public const int K = 3;
+
+public fn f(P p, Q ptr q) -> P {
+    var P local = p;
+    const P ptr r = &local;
+    return local;
+}
+
+public fn g() -> E {
+    return E.Uno(P{ x: K });
+}
+
+public fn h(E e) -> int {
+    match (e) {
+        case E.Uno(p): { return p.x; }
+        case E.Dos: { return 0; }
+    }
+    return -1;
+}
+
+#export as forma

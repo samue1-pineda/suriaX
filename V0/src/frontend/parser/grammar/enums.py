@@ -1,4 +1,4 @@
-"""``enum_decl`` (EBNF secc. 1, tipos compuestos):
+"""``enum_decl`` (EBNF):
 
 ::
     enum_decl = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}"

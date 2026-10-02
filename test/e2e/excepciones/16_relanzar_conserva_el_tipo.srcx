@@ -1,0 +1,43 @@
+/- Excepciones 16: relanzar desde un 'catch' sin tipo conserva el tipo.
+
+ El patrón "limpiar y relanzar" (en Python, 'except: limpia(); raise'):
+ una función atrapa CUALQUIER cosa para dejar algo en orden, y la vuelve a
+ lanzar sin saber qué era. Quien está más arriba tiene que poder
+ atraparla por su tipo, como si nadie la hubiera tocado.
+
+ Al compilar, 'e' en 'catch (e)' no tiene tipo conocido; pero el valor
+ llegó con uno, y 'throw e;' lo relanza con ese. (Antes se relanzaba como
+ un 'error' sin tipo y caía en la rama equivocada.)
+-/
+#from io #import stdp
+#import excepciones as exc
+
+struct { str msg; } Fallo;
+
+fn interno(int caso) -> void {
+    if (caso == 0) { throw Fallo{ msg: "fallo propio" }; };
+    if (caso == 1) { throw 42; };
+    var int cero = 0;
+    stdp.println(f"{10 / cero}");
+}
+
+fn con_limpieza(int caso) -> void {
+    try { interno(caso); }
+    catch (e) {
+        stdp.println("  limpia y relanza");
+        throw e;
+    };
+}
+
+fn main() -> int {
+    var int caso = 0;
+    while (caso < 3) {
+        try { con_limpieza(caso); }
+        catch (Fallo f) { stdp.println(f"  Fallo: {f.msg}"); }
+        catch (int n) { stdp.println(f"  int: {n}"); }
+        catch (exc.DivisionPorCero d) { stdp.println(f"  DivisionPorCero: {d.mensaje}"); }
+        catch (e) { stdp.println("  MAL: cayo en la rama sin tipo"); };
+        caso = caso + 1;
+    };
+    return 0;
+}

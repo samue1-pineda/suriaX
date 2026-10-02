@@ -1,0 +1,39 @@
+/- Banco de la VM: MEMORIA cruda.
+
+ Criba de Eratostenes sobre un bloque de 'mem': lecturas y escrituras por
+ indice calculado, con su verificacion de limites en cada acceso.
+-/
+#from io #import stdp
+#import mem
+
+fn main() -> int {
+    var int n = 100000;
+    var bool ptr mutable es = mem.reserve<bool>(n + 1);
+    var int i = 0;
+    while (i <= n) {
+        es[i] = true;
+        i = i + 1;
+    };
+    es[0] = false;
+    es[1] = false;
+    var int p = 2;
+    while (p * p <= n) {
+        if (es[p]) {
+            var int m = p * p;
+            while (m <= n) {
+                es[m] = false;
+                m = m + p;
+            };
+        };
+        p = p + 1;
+    };
+    var int cuenta = 0;
+    i = 0;
+    while (i <= n) {
+        if (es[i]) { cuenta = cuenta + 1; };
+        i = i + 1;
+    };
+    mem.release<bool>(es);
+    stdp.println(f"primos hasta {n}: {cuenta}");
+    return 0;
+}

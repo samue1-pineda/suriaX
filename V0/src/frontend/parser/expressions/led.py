@@ -33,6 +33,11 @@ _BINARY_OPS: Dict[TokenType, str] = {
     TokenType.MULTIPLY: "*",
     TokenType.DIVIDE: "/",
     TokenType.MODULO: "%",
+    TokenType.PIPE: "|",
+    TokenType.CARET: "^",
+    TokenType.ADDRESS: "&",
+    TokenType.SHIFT_LEFT: "<<",
+    TokenType.SHIFT_RIGHT: ">>",
 }
 
 # asignacion COMPUESTA -> el operador binario que la expande. Es azucar: no
@@ -43,6 +48,11 @@ _COMPOUND_OPS: Dict[TokenType, str] = {
     TokenType.STAR_ASSIGN: "*",
     TokenType.SLASH_ASSIGN: "/",
     TokenType.PERCENT_ASSIGN: "%",
+    TokenType.AMP_ASSIGN: "&",
+    TokenType.PIPE_ASSIGN: "|",
+    TokenType.CARET_ASSIGN: "^",
+    TokenType.SHIFT_LEFT_ASSIGN: "<<",
+    TokenType.SHIFT_RIGHT_ASSIGN: ">>",
 }
 
 # lvalues validos para el lado izquierdo de 'target = value'
@@ -85,7 +95,9 @@ def expandir_compuesta(op_tok: Token, left: ast.Expression,
         )
     valor = ast.BinaryOp(ln=left.ln, col=left.col, operator=operador,
                          left=_copiar(left), right=right)
-    return ast.Assignment(ln=left.ln, col=left.col, target=left, value=valor)
+    return ast.Assignment(ln=left.ln, col=left.col, target=left, value=valor,
+                          azucar=f"'{op_tok.lexeme}': x = x {operador} "
+                                 + ("1" if op_tok.lexeme in ("++", "--") else "..."))
 
 
 def _exigir_lvalue(op_tok: Token, left: ast.Expression, cual: str) -> None:

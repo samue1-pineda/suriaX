@@ -88,11 +88,45 @@
         {
           "__node__": "Parameter",
           "ln": 3,
-          "col": 9,
+          "col": 14,
+          "type": {
+            "__node__": "PointerTypeExpr",
+            "ln": 3,
+            "col": 14,
+            "inner": {
+              "__node__": "NominalTypeExpr",
+              "ln": 3,
+              "col": 9,
+              "name": "Nodo",
+              "args": []
+            },
+            "mutable": true
+          },
+          "name": "n",
+          "restype": {
+            "__node__": "Type",
+            "kind": "POINTER",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "NOMINAL",
+              "name": "Nodo",
+              "inner": null,
+              "mut": false,
+              "args": []
+            },
+            "mut": true,
+            "args": []
+          }
+        },
+        {
+          "__node__": "Parameter",
+          "ln": 3,
+          "col": 29,
           "type": {
             "__node__": "PrimitiveTypeExpr",
             "ln": 3,
-            "col": 9,
+            "col": 29,
             "name": "int"
           },
           "name": "v",
@@ -109,15 +143,15 @@
       "return_type": {
         "__node__": "NullableTypeExpr",
         "ln": 3,
-        "col": 27,
+        "col": 47,
         "inner": {
           "__node__": "PointerTypeExpr",
           "ln": 3,
-          "col": 24,
+          "col": 44,
           "inner": {
             "__node__": "NominalTypeExpr",
             "ln": 3,
-            "col": 19,
+            "col": 39,
             "name": "Nodo",
             "args": []
           },
@@ -127,98 +161,81 @@
       "body": {
         "__node__": "Block",
         "ln": 3,
-        "col": 29,
+        "col": 49,
         "statements": [
           {
-            "__node__": "VarDecl",
+            "__node__": "ExprStmt",
             "ln": 4,
             "col": 5,
-            "qualifier": "var",
-            "type": {
-              "__node__": "NominalTypeExpr",
+            "expr": {
+              "__node__": "Assignment",
               "ln": 4,
-              "col": 9,
-              "name": "Nodo",
-              "args": []
-            },
-            "name": "n",
-            "value": {
-              "__node__": "StructLiteral",
-              "ln": 4,
-              "col": 18,
-              "type_name": "Nodo",
-              "field_names": [
-                "x",
-                "sig"
-              ],
-              "values": [
-                {
+              "col": 5,
+              "target": {
+                "__node__": "MemberAccess",
+                "ln": 4,
+                "col": 5,
+                "obj": {
                   "__node__": "Identifier",
                   "ln": 4,
-                  "col": 27,
-                  "name": "v",
+                  "col": 5,
+                  "name": "n",
                   "restype": {
                     "__node__": "Type",
-                    "kind": "INT",
+                    "kind": "POINTER",
                     "name": null,
-                    "inner": null,
-                    "mut": false,
+                    "inner": {
+                      "__node__": "Type",
+                      "kind": "NOMINAL",
+                      "name": "Nodo",
+                      "inner": null,
+                      "mut": false,
+                      "args": []
+                    },
+                    "mut": true,
                     "args": []
                   }
                 },
-                {
-                  "__node__": "Literal",
-                  "ln": 4,
-                  "col": 35,
-                  "value": null,
-                  "literal_kind": "null",
-                  "restype": null
+                "member": "x",
+                "restype": null,
+                "nombre_de_item": null,
+                "azucar": ""
+              },
+              "value": {
+                "__node__": "Identifier",
+                "ln": 4,
+                "col": 11,
+                "name": "v",
+                "restype": {
+                  "__node__": "Type",
+                  "kind": "INT",
+                  "name": null,
+                  "inner": null,
+                  "mut": false,
+                  "args": []
                 }
-              ],
-              "type_args": [],
+              },
               "restype": {
                 "__node__": "Type",
-                "kind": "NOMINAL",
-                "name": "Nodo",
+                "kind": "INT",
+                "name": null,
                 "inner": null,
                 "mut": false,
                 "args": []
               },
-              "temp_drop": null
-            },
-            "restype": {
-              "__node__": "Type",
-              "kind": "NOMINAL",
-              "name": "Nodo",
-              "inner": null,
-              "mut": false,
-              "args": []
-            },
-            "visibility": null,
-            "capacity": null
+              "drops_old": false,
+              "azucar": ""
+            }
           },
           {
             "__node__": "ReturnStmt",
             "ln": 5,
             "col": 5,
             "value": {
-              "__node__": "AddrOf",
+              "__node__": "Identifier",
               "ln": 5,
               "col": 12,
-              "operand": {
-                "__node__": "Identifier",
-                "ln": 5,
-                "col": 13,
-                "name": "n",
-                "restype": {
-                  "__node__": "Type",
-                  "kind": "NOMINAL",
-                  "name": "Nodo",
-                  "inner": null,
-                  "mut": false,
-                  "args": []
-                }
-              },
+              "name": "n",
               "restype": {
                 "__node__": "Type",
                 "kind": "POINTER",
@@ -233,13 +250,13 @@
                 },
                 "mut": true,
                 "args": []
-              },
-              "mut": true
+              }
             },
             "transfers": false
           }
         ],
-        "drops": []
+        "drops": [],
+        "azucar": ""
       },
       "return_restype": {
         "__node__": "Type",
@@ -264,6 +281,7 @@
         "args": []
       },
       "type_params": [],
+      "impl_type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -417,7 +435,8 @@
                   }
                 }
               ],
-              "drops": []
+              "drops": [],
+              "azucar": ""
             },
             "else_branch": null
           },
@@ -445,12 +464,14 @@
                 "mut": false,
                 "args": []
               },
-              "nombre_de_item": null
+              "nombre_de_item": null,
+              "azucar": ""
             },
             "transfers": false
           }
         ],
-        "drops": []
+        "drops": [],
+        "azucar": ""
       },
       "return_restype": {
         "__node__": "Type",
@@ -468,6 +489,7 @@
         "args": []
       },
       "type_params": [],
+      "impl_type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -495,16 +517,88 @@
             "col": 5,
             "qualifier": "var",
             "type": {
-              "__node__": "NullableTypeExpr",
+              "__node__": "NominalTypeExpr",
               "ln": 14,
+              "col": 9,
+              "name": "Nodo",
+              "args": []
+            },
+            "name": "base",
+            "value": {
+              "__node__": "StructLiteral",
+              "ln": 14,
+              "col": 21,
+              "type_name": "Nodo",
+              "field_names": [
+                "x",
+                "sig"
+              ],
+              "values": [
+                {
+                  "__node__": "Literal",
+                  "ln": 14,
+                  "col": 30,
+                  "value": 0,
+                  "literal_kind": "int",
+                  "restype": {
+                    "__node__": "Type",
+                    "kind": "INT",
+                    "name": null,
+                    "inner": null,
+                    "mut": false,
+                    "args": []
+                  }
+                },
+                {
+                  "__node__": "Literal",
+                  "ln": 14,
+                  "col": 38,
+                  "value": null,
+                  "literal_kind": "null",
+                  "restype": null
+                }
+              ],
+              "type_args": [],
+              "restype": {
+                "__node__": "Type",
+                "kind": "NOMINAL",
+                "name": "Nodo",
+                "inner": null,
+                "mut": false,
+                "args": []
+              },
+              "temp_drop": null,
+              "temp_by_type": false
+            },
+            "restype": {
+              "__node__": "Type",
+              "kind": "NOMINAL",
+              "name": "Nodo",
+              "inner": null,
+              "mut": false,
+              "args": []
+            },
+            "visibility": null,
+            "inferido": false,
+            "capacity": null,
+            "azucar": ""
+          },
+          {
+            "__node__": "VarDecl",
+            "ln": 15,
+            "col": 5,
+            "qualifier": "var",
+            "type": {
+              "__node__": "NullableTypeExpr",
+              "ln": 15,
               "col": 17,
               "inner": {
                 "__node__": "PointerTypeExpr",
-                "ln": 14,
+                "ln": 15,
                 "col": 14,
                 "inner": {
                   "__node__": "NominalTypeExpr",
-                  "ln": 14,
+                  "ln": 15,
                   "col": 9,
                   "name": "Nodo",
                   "args": []
@@ -515,20 +609,55 @@
             "name": "cabeza",
             "value": {
               "__node__": "Call",
-              "ln": 14,
+              "ln": 15,
               "col": 28,
               "callee": {
                 "__node__": "Identifier",
-                "ln": 14,
+                "ln": 15,
                 "col": 28,
                 "name": "crea",
                 "restype": null
               },
               "args": [
                 {
-                  "__node__": "Literal",
-                  "ln": 14,
+                  "__node__": "AddrOf",
+                  "ln": 15,
                   "col": 33,
+                  "operand": {
+                    "__node__": "Identifier",
+                    "ln": 15,
+                    "col": 34,
+                    "name": "base",
+                    "restype": {
+                      "__node__": "Type",
+                      "kind": "NOMINAL",
+                      "name": "Nodo",
+                      "inner": null,
+                      "mut": false,
+                      "args": []
+                    }
+                  },
+                  "restype": {
+                    "__node__": "Type",
+                    "kind": "POINTER",
+                    "name": null,
+                    "inner": {
+                      "__node__": "Type",
+                      "kind": "NOMINAL",
+                      "name": "Nodo",
+                      "inner": null,
+                      "mut": false,
+                      "args": []
+                    },
+                    "mut": true,
+                    "args": []
+                  },
+                  "mut": true
+                },
+                {
+                  "__node__": "Literal",
+                  "ln": 15,
+                  "col": 40,
                   "value": 7,
                   "literal_kind": "int",
                   "restype": {
@@ -566,7 +695,8 @@
               },
               "valor_constante": null,
               "hook": null,
-              "temp_drop": null
+              "temp_drop": null,
+              "temp_by_type": false
             },
             "restype": {
               "__node__": "Type",
@@ -591,36 +721,38 @@
               "args": []
             },
             "visibility": null,
-            "capacity": null
+            "inferido": false,
+            "capacity": null,
+            "azucar": ""
           },
           {
             "__node__": "TryStmt",
-            "ln": 15,
+            "ln": 16,
             "col": 5,
             "try_block": {
               "__node__": "Block",
-              "ln": 15,
+              "ln": 16,
               "col": 9,
               "statements": [
                 {
                   "__node__": "VarDecl",
-                  "ln": 16,
+                  "ln": 17,
                   "col": 9,
                   "qualifier": "var",
                   "type": {
                     "__node__": "PrimitiveTypeExpr",
-                    "ln": 16,
+                    "ln": 17,
                     "col": 13,
                     "name": "int"
                   },
                   "name": "t",
                   "value": {
                     "__node__": "Call",
-                    "ln": 16,
+                    "ln": 17,
                     "col": 21,
                     "callee": {
                       "__node__": "Identifier",
-                      "ln": 16,
+                      "ln": 17,
                       "col": 21,
                       "name": "suma",
                       "restype": null
@@ -628,7 +760,7 @@
                     "args": [
                       {
                         "__node__": "Identifier",
-                        "ln": 16,
+                        "ln": 17,
                         "col": 26,
                         "name": "cabeza",
                         "restype": {
@@ -673,7 +805,8 @@
                     },
                     "valor_constante": null,
                     "hook": null,
-                    "temp_drop": null
+                    "temp_drop": null,
+                    "temp_by_type": false
                   },
                   "restype": {
                     "__node__": "Type",
@@ -684,36 +817,50 @@
                     "args": []
                   },
                   "visibility": null,
-                  "capacity": null
+                  "inferido": false,
+                  "capacity": null,
+                  "azucar": ""
                 }
               ],
-              "drops": []
+              "drops": [],
+              "azucar": ""
             },
             "catches": [
               {
                 "__node__": "CatchClause",
-                "ln": 17,
+                "ln": 18,
                 "col": 7,
                 "name": "e",
                 "block": {
                   "__node__": "Block",
-                  "ln": 17,
+                  "ln": 18,
                   "col": 17,
                   "statements": [],
-                  "drops": []
+                  "drops": [
+                    {
+                      "__node__": "Drop",
+                      "path": [
+                        "e"
+                      ],
+                      "hook": null,
+                      "by_type": true
+                    }
+                  ],
+                  "azucar": ""
                 },
                 "type": null,
                 "restype": null
               }
-            ]
+            ],
+            "finally_block": null
           },
           {
             "__node__": "ReturnStmt",
-            "ln": 18,
+            "ln": 19,
             "col": 5,
             "value": {
               "__node__": "Literal",
-              "ln": 18,
+              "ln": 19,
               "col": 12,
               "value": 0,
               "literal_kind": "int",
@@ -729,7 +876,8 @@
             "transfers": false
           }
         ],
-        "drops": []
+        "drops": [],
+        "azucar": ""
       },
       "return_restype": {
         "__node__": "Type",
@@ -740,6 +888,7 @@
         "args": []
       },
       "type_params": [],
+      "impl_type_params": [],
       "dunder": null,
       "specifier": null,
       "visibility": null

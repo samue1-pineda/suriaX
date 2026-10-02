@@ -4,8 +4,10 @@ Visión legible de la sintaxis del lenguaje. La definición formal está en
 [gramar/grammar.ebnf](gramar/grammar.ebnf) y el detalle de tipos/tokens en
 [gramar/t_types.md](gramar/t_types.md).
 
-> - Estado: la sintaxis está **diseñada** casi que completamente.
-> - Estado: **en progreso**: terminar el parser.
+> - Estado: la sintaxis está **diseñada** e **implementada**: el parser la
+>   cubre entera y la suite la prueba regla a regla (`test/grammar/`).
+> - Lo que no existe todavía (p. ej. literales de arreglo `[1, 2, 3]`) está
+>   en [c_errorstfix.md](../c_errorstfix.md).
 
 ## Reglas generales
 
@@ -50,7 +52,7 @@ free q;                  // destrucción anticipada; si no, al cerrar el ámbito
 
 ## Secciones
 
-- Declaraciones: funciones, `struct`, `enum`, `type` (pendiente).
+- Declaraciones: funciones, `struct`, `enum`, `type` (metatipo: `const type int8;` declara un nominal opaco; ver [t_types.md](gramar/t_types.md)).
 - Visibilidad (prefijo opcional, default público): `public`/`private`/`internal`.
 - Métodos especiales: `hook fn __x__` (set fijo del compilador) / `dunder fn __x__` (libre).
 - Sentencias: `var`, `if`, `while`, `match`, `return`, `break`, `continue`.
@@ -68,5 +70,4 @@ free q;                  // destrucción anticipada; si no, al cerrar el ámbito
 
 ## TODO
 
-- [ ] Fijar la sintaxis de `type` o borrarlo.
 - [ ] Guía de estilo del lenguaje.

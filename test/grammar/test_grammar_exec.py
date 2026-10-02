@@ -8,7 +8,7 @@ tree-walk la evalúe de otra forma.
 
 Autocontenidos (prototipo ``__write__``, ligado a un intrínseco del host):
 no dependen del estado de ``lib/``. Los que sí ejercitan librerías viven en
-``e2e/test_libraries.py``.
+``e2e/test_libraries_*.py``.
 """
 
 from __future__ import annotations
@@ -160,13 +160,15 @@ def test_asignacion_a_campo():
 
 
 def test_enum_es_entero_estilo_c():
-    _run('__write__(f"{Color.Rojo} {Color.Verde} {Color.Azul}\\n");',
-         "0 1 2\n", extra="enum Color { Rojo, Verde, Azul };\n")
+    # el NUMERO se lee con cast<int>: en un f-string un enum sale por su nombre
+    _run('__write__(f"{cast<int>(Color.Rojo)} {cast<int>(Color.Verde)} '
+         '{cast<int>(Color.Azul)} {Color.Verde}\\n");',
+         "0 1 2 Verde\n", extra="enum Color { Rojo, Verde, Azul };\n")
 
 
 def test_enum_con_valor_explicito_continua_numerando():
-    _run('__write__(f"{E.A} {E.B} {E.C}\\n");', "0 5 6\n",
-         extra="enum E { A, B = 5, C };\n")
+    _run('__write__(f"{cast<int>(E.A)} {cast<int>(E.B)} {cast<int>(E.C)} {E.C}\\n");',
+         "0 5 6 C\n", extra="enum E { A, B = 5, C };\n")
 
 
 # --------------------------------------------------------------------------- #

@@ -49,6 +49,7 @@ export const TypeKind = {
   NOMINAL: 9,
   META: 10,
   ERROR: 11,
+  BYTE: 12,
 } as const;
 export type TypeKind = (typeof TypeKind)[keyof typeof TypeKind];
 
@@ -83,6 +84,7 @@ export const HookKind = {
   EQ: 9,
   MIN: 10,
   MAX: 11,
+  HASH: 12,
   /** Hook declarado por el proyecto (HTIMS): su identidad es el NOMBRE. */
   EXTENDED: 100,
 } as const;
@@ -91,7 +93,7 @@ export type HookKind = (typeof HookKind)[keyof typeof HookKind];
 /** Nombre legible de un `TypeKind` (diagnósticos y volcados). */
 export const TYPE_KIND_NAMES: readonly string[] = [
   "<?>", "void", "bool", "int", "float", "char", "str",
-  "pointer", "nullable", "nominal", "type", "error",
+  "pointer", "nullable", "nominal", "type", "error", "byte",
 ];
 
 /** Nombre legible de un `SymbolKind`, indexado por su valor. */
@@ -122,6 +124,7 @@ export const HOOK_KIND_NAMES: ReadonlyMap<HookKind, string> = new Map([
   [HookKind.EQ, "__eq__"],
   [HookKind.MIN, "__min__"],
   [HookKind.MAX, "__max__"],
+  [HookKind.HASH, "__hash__"],
   [HookKind.EXTENDED, "__extendido__"],
 ]);
 
@@ -212,7 +215,14 @@ export type Literal =
 /** Parte de un f-string: texto literal o expresión interpolada. */
 export type InterpPart =
   | { readonly case: "text"; readonly text: string }
-  | { readonly case: "expr"; readonly expr: Expr };
+  | {
+      readonly case: "expr";
+      readonly expr: Expr;
+      /** `{x!r}`: la representación (comillas, `Color.Verde`...). */
+      readonly repr?: boolean;
+      /** `{n:08b}`: el especificador `[0][ancho][.precision][tipo]`. */
+      readonly spec?: string;
+    };
 
 /** `message Expr`: posición + tipo resuelto + variante del `oneof`. */
 export interface Expr extends Pos {
@@ -334,6 +344,8 @@ export type StmtNode =
       readonly tryBlock: Block;
       /** Ramas 'catch' EN ORDEN; gana la primera cuyo tipo encaje. */
       readonly catches: readonly CatchClause[];
+      /** 'finally': corre al salir por cualquier camino; null = no hay. */
+      readonly finallyBlock: Block | null;
     }
   | { readonly case: "none" };
 

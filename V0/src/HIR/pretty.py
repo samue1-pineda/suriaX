@@ -97,9 +97,11 @@ def format_type(t, pb) -> str:
 class _Printer:
     """Estado de UNA impresión: stubs, pool de tipos resuelto y salida."""
 
-    __slots__ = ("pb", "out", "types", "_kind_names")
+    __slots__ = ("pb", "out", "types", "_kind_names", "marcas", "lineas",
+                 "_citadas")
 
-    def __init__(self, module, out: TextIO) -> None:
+    def __init__(self, module, out: TextIO, marcas: Optional[dict] = None,
+                 lineas: Optional[List[str]] = None) -> None:
         from .stubs import load_hir_pb2
         self.pb = load_hir_pb2()
         self.out = out
@@ -108,6 +110,11 @@ class _Printer:
         # por el que el pool existe en el artefacto).
         self.types: List[str] = [format_type(t, self.pb) for t in module.types]
         self._kind_names = {}
+        # la vista de DESUGARING: (ln, col, nodo) -> de que azucar salio, y
+        # las lineas del fuente para citar lo que se escribio
+        self.marcas = marcas or {}
+        self.lineas = lineas or []
+        self._citadas: set = set()
 
     # -- utilidades ------------------------------------------------------ #
     def type_of(self, type_id: int) -> str:
@@ -128,6 +135,23 @@ class _Printer:
 
     # -- expresiones ----------------------------------------------------- #
     def expr(self, e) -> str:
+        """La expresion, con su marca de AZUCAR si la vista la pide."""
+        texto = self._expr(e)
+        marca = self.marcas.get((e.ln, e.col, e.WhichOneof("node"))) if self.marcas else None
+        return f"{texto}  ⟨azúcar: {marca}⟩" if marca else texto
+
+    def _cita_la_fuente(self, s, indent: int) -> None:
+        """Antes de una sentencia con azucar, la linea tal como se escribio."""
+        if not self.marcas or s.ln in self._citadas:
+            return
+        if not any(ln == s.ln for (ln, _col, _n) in self.marcas):
+            return
+        self._citadas.add(s.ln)
+        if 0 < s.ln <= len(self.lineas):
+            self.line(f"// fuente {s.ln}: {self.lineas[s.ln - 1].strip()}",
+                      indent=indent)
+
+    def _expr(self, e) -> str:
         """Expresión -> una sola línea, con el tipo resuelto como sufijo.
 
         El sufijo ``:tipo`` solo aparece donde APORTA: en un literal el tipo
@@ -154,7 +178,8 @@ class _Printer:
             return f"({e.unary.op} {self.expr(e.unary.operand)})"
         if which == "assignment":
             return (f"{self.expr(e.assignment.target)} = "
-                    f"{self.expr(e.assignment.value)}")
+                    f"{self.expr(e.assignment.value)}"
+                    + ("  ⟨destruye el viejo⟩" if e.assignment.drops_old else ""))
         if which == "call":
             args = ", ".join(self.expr(a) for a in e.call.args)
             call = f"{self.expr(e.call.callee)}({args})"
@@ -188,7 +213,9 @@ class _Printer:
                 if part.WhichOneof("part") == "text":
                     partes.append(part.text)
                 else:
-                    partes.append("{" + self.expr(part.expr) + "}")
+                    formato = ("!r" if part.repr else "") + \
+                        (":" + part.spec if part.spec else "")
+                    partes.append("{" + self.expr(part.expr) + formato + "}")
             return 'f"' + "".join(partes) + '"'
         return f"<{which or 'vacío'}>"
 
@@ -239,12 +266,16 @@ class _Printer:
         # y en un lenguaje cuyo modelo de memoria es la característica
         # principal, esa es justo la pregunta.
         for drop in b.drops:
-            self.line(f"drop {'.'.join(drop.path)}{self._hook(drop.hook)}",
-                      indent=indent)
+            como = "  ⟨por su tipo⟩" if drop.by_type else self._hook(drop.hook)
+            self.line(f"drop {'.'.join(drop.path)}{como}", indent=indent)
 
     def stmt(self, s, indent: int) -> None:
         which = s.WhichOneof("node")
         ln, col = s.ln, s.col
+        self._cita_la_fuente(s, indent)
+        marca = self.marcas.get((ln, col, which)) if self.marcas else None
+        if marca:
+            self.line(f"⟨azúcar: {marca}⟩", indent=indent)
 
         if which == "var_decl":
             v = s.var_decl
@@ -306,6 +337,9 @@ class _Printer:
                           if rama.HasField("type") else "")
                 self.line(f"catch ({filtro}{rama.name})", indent=indent)
                 self.block(rama.block, indent + 1)
+            if s.try_stmt.HasField("finally_block"):
+                self.line("finally", indent=indent)
+                self.block(s.try_stmt.finally_block, indent + 1)
         elif which == "type_decl":
             t = s.type_decl
             valor = f" = {self.expr(t.value)}" if t.HasField("value") else ""
@@ -418,9 +452,15 @@ class _Printer:
 # --------------------------------------------------------------------------- #
 # API
 # --------------------------------------------------------------------------- #
-def write_pretty(module, out: TextIO) -> None:
-    """Escribe la vista legible de ``module`` en ``out``, en streaming."""
-    p = _Printer(module, out)
+def write_pretty(module, out: TextIO, *, marcas: Optional[dict] = None,
+                 lineas: Optional[List[str]] = None) -> None:
+    """Escribe la vista legible de ``module`` en ``out``, en streaming.
+
+    Con ``marcas`` (``(ln, col, nodo) -> azucar``) y las ``lineas`` del
+    fuente es la vista de DESUGARING: antes de cada sentencia que salio de un
+    azucar, la linea como se escribio, y cada nodo fabricado marcado con de
+    que azucar viene."""
+    p = _Printer(module, out, marcas, lineas)
     pb = p.pb
 
     simbolos = len(module.symbols.types) + len(module.symbols.values)

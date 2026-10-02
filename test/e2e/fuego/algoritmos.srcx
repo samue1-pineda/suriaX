@@ -1,0 +1,185 @@
+/- Ejercicio de fuego 2: algoritmos clasicos y memoria cruda.
+
+ Criba de Eratostenes sobre un bloque de 'mem', fibonacci con memo en un
+ Vector, multiplicacion de matrices en un bloque plano, MCD recursivo,
+ palindromos y cifrado Cesar con 'cast', una PILA generica sobre Vector y una
+ lista enlazada con punteros y nullables.
+-/
+#from io #import stdp
+#import array.vector as vec
+#import mem
+
+// --- criba --------------------------------------------------------------
+fn primos_hasta(int n) -> int {
+    var bool ptr mutable es = mem.reserve<bool>(n + 1);
+    var int i = 0;
+    while (i <= n) {
+        es[i] = true;
+        i = i + 1;
+    };
+    es[0] = false;
+    es[1] = false;
+    var int p = 2;
+    while (p * p <= n) {
+        if (es[p]) {
+            var int m = p * p;
+            while (m <= n) {
+                es[m] = false;
+                m = m + p;
+            };
+        };
+        p = p + 1;
+    };
+    var int cuenta = 0;
+    i = 0;
+    while (i <= n) {
+        if (es[i]) { cuenta = cuenta + 1; };
+        i = i + 1;
+    };
+    mem.release<bool>(es);
+    return cuenta;
+}
+
+// --- fibonacci con memo -------------------------------------------------
+fn fib(int n, vec.Vector<int> ptr mutable memo) -> int {
+    if (n < memo.len()) {
+        return memo.get(n);
+    };
+    var int valor = fib(n - 1, memo) + fib(n - 2, memo);
+    memo.push(valor);
+    return valor;
+}
+
+// --- matrices en un bloque plano ----------------------------------------
+fn multiplica(int ptr a, int ptr b, int ptr mutable c, int n) -> void {
+    var int i = 0;
+    while (i < n) {
+        var int j = 0;
+        while (j < n) {
+            var int s = 0;
+            var int k = 0;
+            while (k < n) {
+                s = s + a[i * n + k] * b[k * n + j];
+                k = k + 1;
+            };
+            c[i * n + j] = s;
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+}
+
+// --- aritmetica ---------------------------------------------------------
+fn mcd(int a, int b) -> int {
+    if (b == 0) { return a; };
+    return mcd(b, a % b);
+}
+
+// --- cadenas ------------------------------------------------------------
+fn es_palindromo(str s) -> bool {
+    var int i = 0;
+    var int j = len(s) - 1;
+    while (i < j) {
+        if (s[i] != s[j]) { return false; };
+        i = i + 1;
+        j = j - 1;
+    };
+    return true;
+}
+
+fn cesar(str s, int k) -> str {
+    var str salida = "";
+    var int i = 0;
+    while (i < len(s)) {
+        var int c = cast<int>(s[i]);
+        if (c >= 97 and c <= 122) {
+            c = 97 + (c - 97 + k) % 26;
+        };
+        salida = salida + cast<str>(cast<char>(c));
+        i = i + 1;
+    };
+    return salida;
+}
+
+// --- pila generica sobre Vector -----------------------------------------
+struct { vec.Vector<T> datos; } Pila<T>;
+
+fn nueva_pila<T>() -> Pila<T> {
+    return Pila<T>{ datos: vec.dynamic<T>(2) };
+}
+
+@impl Pila {
+    fn apila(Pila<T> ptr mutable self, T x) -> void { self.datos.push(x); }
+    fn desapila(Pila<T> ptr mutable self) -> T { return self.datos.pop(); }
+    fn vacia(Pila<T> ptr self) -> bool { return self.datos.len() == 0; }
+}
+
+// parentesis balanceados con la pila
+fn balanceado(str s) -> bool {
+    var Pila<char> p = nueva_pila<char>();
+    var int i = 0;
+    while (i < len(s)) {
+        var char c = s[i];
+        if (c == '(' or c == '[') {
+            p.apila(c);
+        } else {
+            if (c == ')' or c == ']') {
+                if (p.vacia()) { return false; };
+                var char tope = p.desapila();
+                if (c == ')' and tope != '(') { return false; };
+                if (c == ']' and tope != '[') { return false; };
+            };
+        };
+        i = i + 1;
+    };
+    return p.vacia();
+}
+
+// --- lista enlazada -----------------------------------------------------
+struct {
+    int valor;
+    Nodo ptr mutable? sig;
+} Nodo;
+
+fn suma_lista(Nodo ptr mutable? n) -> int {
+    var int total = 0;
+    var Nodo ptr mutable? actual = n;
+    while (actual != null) {
+        total = total + actual.valor;
+        actual = actual.sig;
+    };
+    return total;
+}
+
+fn main() -> int {
+    stdp.println(f"primos hasta 100: {primos_hasta(100)}");
+
+    var vec.Vector<int> memo = vec.dynamic<int>(2);
+    memo.push(0);
+    memo.push(1);
+    stdp.println(f"fib(40) = {fib(40, &memo)}");
+
+    var int ptr mutable a = mem.reserve<int>(4);
+    var int ptr mutable b = mem.reserve<int>(4);
+    var int ptr mutable c = mem.reserve<int>(4);
+    a[0] = 1; a[1] = 2; a[2] = 3; a[3] = 4;
+    b[0] = 5; b[1] = 6; b[2] = 7; b[3] = 8;
+    multiplica(a, b, c, 2);
+    stdp.println(f"matriz: [{c[0]} {c[1]}; {c[2]} {c[3]}]");
+    mem.release<int>(a);
+    mem.release<int>(b);
+    mem.release<int>(c);
+
+    stdp.println(f"mcd(1071, 462) = {mcd(1071, 462)}");
+    stdp.println(f"reconocer es palindromo: {es_palindromo("reconocer")}");
+    stdp.println(f"suriax es palindromo: {es_palindromo("suriax")}");
+    stdp.println(f"cesar: {cesar("hola mundo", 3)} -> {cesar(cesar("hola mundo", 3), 23)}");
+    stdp.println(f"balanceado '([()])': {balanceado("([()])")}");
+    stdp.println(f"balanceado '([)]': {balanceado("([)]")}");
+
+    var Nodo tres = Nodo{ valor: 3, sig: null };
+    var Nodo dos = Nodo{ valor: 2, sig: &tres };
+    var Nodo uno = Nodo{ valor: 1, sig: &dos };
+    stdp.println(f"suma de la lista: {suma_lista(&uno)}");
+    return 0;
+}

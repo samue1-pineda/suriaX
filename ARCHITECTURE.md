@@ -8,8 +8,12 @@ explícitas.
 
 > status: **arquitectura general definida**. El frontend, el HIR y el
 > intérprete están completos; el target web ejecuta un subconjunto del
-> lenguaje; del backend C++ existe el **lector del HIR** (`backend/`) y falta
-> todo lo demás (MIR, VM/JIT).
+> lenguaje; el backend C++ (`backend/`) lee el HIR, lo baja a **MIR** y lo
+> ejecuta en una **VM de registros** con verificación de propiedad. El
+> compilador escrito en suriaX (la V1, `src/`) se compila a sí mismo con
+> resultados idénticos a los de la V0 (el punto fijo). Falta el JIT y
+> cualquier artefacto nativo. Lo que falla en la versión vigente está en
+> [c_errorstfix.md](c_errorstfix.md).
 
 ## Visión general del pipeline
 
@@ -127,6 +131,26 @@ El **linker de librerías** (`V0/src/linker_p/`) resuelve `#import`/`#from`
 contra archivos `.libsrx` y paquetes, con caché por ruta. Cada unidad compila
 a **su propio `.phir`**; el módulo principal solo las referencia.
 
+## El compilador escrito en suriaX (la V1)
+
+[`src/`](src/readme.md) es el MISMO frontend reescrito en suriaX: lexer,
+parser, Semántica (tipos, símbolos, propiedad, genéricos, métodos,
+excepciones), linker y emisor del HIR. La V0 lo compila a `.phir` y la VM lo
+ejecuta. Su contrato es producir el MISMO `.phir`, byte a byte, que la V0:
+qué emite la V0 y por qué está escrito regla por regla en
+[`src/hir/contrato.md`](src/hir/contrato.md).
+
+Se verifica en dos niveles: un corpus de programas y proyectos que la V0 y la
+V1 compilan por igual (`test/bootstrap/test_bootstrap_v1.py`) y el **punto
+fijo** (`test/bootstrap/test_punto_fijo.py`): la V1 compila su propio fuente
+—30 unidades, ella y cada librería que importa— igual que la V0, y la V1
+compilada por sí misma vuelve a dar lo mismo.
+
+El plan de versiones: la **V1** no optimiza (su meta es la identidad con la
+V0); la **V2** es la reproducción estable del autocompilado; la **V3**, el
+compilador optimizado, que puede divergir porque las anteriores fijan la
+referencia contra la que se compara.
+
 ## El sistema de tipos
 
 No es una fase: es **transversal**. Opera sobre el AST, el AST-tipado y la
@@ -174,25 +198,25 @@ reservados. Move-semantics sí viaja (`MoveStmt`, `Symbol.moved_at`).
 
 ## Backend C++ (en construcción)
 
-> El target nativo es la **VM de bytecode con JIT**, no LLVM. La generación
-> de LLVM IR está fuera del plan actual: el MIR ya es un IR de registros con
-> CFG, y meter LLVM en medio añadía una dependencia enorme y un segundo
-> modelo de máquina antes de tener el primero funcionando. `compilerconfig`
-> sigue detectando `llvm-config` y lo reporta en `--check`, pero nada de la
-> compilación depende de ello.
+> El target nativo es una **VM con JIT**, no LLVM. La generación de LLVM IR
+> está fuera del plan: el MIR ya es un IR de registros con CFG, y meter LLVM
+> en medio añadía una dependencia enorme y un segundo modelo de máquina antes
+> de tener el primero funcionando. Nada del compilador detecta ni usa LLVM.
 
 Vive en [`backend/`](backend/README.md) y se construye con el mismo CMake de
-la raíz (`cmake --build build --target suriax-hir`). Necesita protobuf para
-C++; si falta, se omite con un aviso y el resto del repositorio sigue
-compilando — el frontend en Python no depende de este lado.
+la raíz (`cmake --build build --target suriax-hir`). Solo necesita CMake y un
+compilador de C++20: lee el `.phir` con su propio decodificador, sin
+protobuf. El frontend en Python no depende de este lado.
 
 | Fase | Entrada → Salida | Responsabilidad |
 |------|------------------|-----------------|
-| **Lector HIR** ✅ | `.phir` → `Module` + índices | Valida `schema_version` fail-fast, reconstruye la tabla de símbolos, liga las N unidades y recorre el árbol con un `switch` exhaustivo por `oneof`. Sus dos vistas (`--pretty`, `--summary`) son **byte-idénticas** a las de Python: eso convierte `test/e2e/test_backend_cpp.py` en un diferencial entre consumidores. |
-| **MIR lowering** | HIR → **MIR** | IR de **registros** con control de flujo explícito (CFG) y las verificaciones del modelo de memoria (lifetimes de región, move). |
-| **VM / JIT** | MIR → bytecode | **Target nativo estándar.** Ejecuta el bytecode y compila en caliente las rutas calientes. |
-| **Targets** | bytecode → artefacto | Según `compilerconfig`: `IS_WIN32` → `.exe`, `IS_LINUX` → `.o`. |
-| **Linker** | objeto(s) → ejecutable | Etapa final; `compilerconfig` aporta rutas y flags. |
+| **Lector HIR** ✅ | `.phir` → `Module` + índices | Valida `schema_version` fail-fast, reconstruye la tabla de símbolos, liga las N unidades y recorre el árbol con un `switch` exhaustivo por `oneof`. Sus dos vistas (`--pretty`, `--summary`) son **byte-idénticas** a las de Python: eso convierte `test/backend/test_backend_cpp_*.py` en un diferencial entre consumidores. |
+| **Resolución** ✅ | `Image` → funciones resueltas | Cada función con sus slots, a qué se resuelve cada llamada y qué destruye cada bloque (`--resolve`). Falla si queda una llamada sin resolver. |
+| **MIR lowering** ✅ | HIR → **MIR** | IR de **registros virtuales** con control de flujo explícito (bloques con terminador). Los locales viven en el marco (`LoadLocal`/`StoreLocal`), los structs son handles con campos por índice y un `throw` es una arista del grafo. Lo que no sabe bajar lo nombra con su posición (hoy: `&` sobre un escalar). Ver [docs/mir.md](docs/mir.md). |
+| **Verificación de propiedad** ✅ | MIR → hallazgos | Análisis de flujo hacia adelante sobre el CFG: uso tras `move` por **todos** los caminos que llegan a un punto (`--mir`). Los préstamos se siguen dentro de un bloque; entre bloques, todavía no. |
+| **VM** ✅ | MIR → ejecución | Intérprete de **registros** del MIR (`--run`), con la MISMA semántica que el intérprete de Python (enteros de 64 bits que envuelven, división que trunca). Lo comprueba un diferencial. Límites para máquinas modestas: `--pasos N` y `--memoria-max` (la memoria del programa; `RT023`). |
+| **JIT** | MIR → código de máquina | Pendiente. La VM es su requisito, no su sustituto. |
+| **Targets / Linker** | → `.exe` / `.o` | Pendiente. Según `compilerconfig`: `IS_WIN32` → `.exe`, `IS_LINUX` → `.o`. |
 
 ## Target web (WebAssembly)
 
@@ -242,10 +266,9 @@ El **runtime** es independiente del target y lo comparten los backends:
   loader, evaluator, entornos, despacho de hooks y memoria (nativa o Python
   puro, seleccionable con `SURIAX_NATIVE_MEM`).
 
-Punteros, `&` y move-semantics funcionan de punta a punta por este runtime.
-El **drop automático** y las **arenas** se construirán encima de estas
-primitivas — después de validar que los punteros son reales y manejables, no
-antes.
+Punteros, `&`, move-semantics y el **drop automático** (el `__free__` de cada
+valor al cerrar su ámbito) funcionan de punta a punta por este runtime. Las
+**arenas**, como tipo de librería, se construirán encima de estas primitivas.
 
 El build del lado nativo es **único**: un `CMakeLists.txt` en la raíz y la
 lógica reutilizable en [`CMake/`](CMake/), que descubre los módulos de
@@ -261,17 +284,19 @@ contenido viaja intacto hasta el backend C++, que lo compila e integra vía los
 El viaje ya está completo hasta el lado nativo: `suriax-hir --emit-cpp`
 recoge los bloques de todas las unidades y los escribe como una unidad de
 traducción de C++, con `#line` al `.srcx` para que los errores del compilador
-apunten al archivo del usuario. Compilarlo y enlazarlo es del backend nativo,
-que aún no existe. El
-target web lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
+apunten al archivo del usuario. Enlazarlo a la VM del backend nativo está
+pendiente. Donde **sí** se ejecuta hoy es en el intérprete:
+[`runtime/extern_cpp.py`](runtime/extern_cpp.py) compila el bloque con el
+compilador de C++ del sistema y liga sus prototipos al ejecutar. El target web
+lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
 
 ## `compilerconfig` y la selección de target
 
 `config/compilerconfig.py` es transversal a la compilación:
 
-- detecta plataforma y dependencias (protobuf, pybind11, pyyaml, y LLVM vía
-  `llvm-config` — que hoy solo se reporta: **no** está en la ruta de
-  generación de código, ver el backend C++);
+- detecta plataforma, dependencias opcionales (pyyaml, protobuf, pybind11) y
+  el toolchain de C++ que usa `#extern cpp{}`. LLVM no se detecta: no forma
+  parte del plan;
 - lee/genera el formato de compilación `.suriaX_config.yaml`;
 - expone los flags (`IS_WEB`, `IS_WIN32`, `IS_LINUX`) que el backend consulta
   para elegir el target y orquestar el linker.
@@ -284,3 +309,11 @@ Cada fase tiene su jerarquía de errores con códigos estables (`LEXxxx`,
 por construcciones del programa: **acumulan** diagnósticos con posición y los
 devuelven, de modo que una compilación reporta todo lo que está mal de una
 vez. `--emit-diagnostics` los expone en JSON para el editor.
+
+Un fallo **del compilador** —una excepción que ninguna fase esperaba— no es
+un diagnóstico del programa y no se mezcla con ellos: es `ICE000`
+([`InternalCompilerError`](V0/error_handler/InternalCompilerError.py)). El
+driver lo lanza con la fase en la que ocurrió y la excepción original
+encadenada; la CLI lo muestra como un traceback de Python seguido de la fase y
+el archivo, y termina con el código **6** (distinto del `1` de "el programa
+tiene errores").

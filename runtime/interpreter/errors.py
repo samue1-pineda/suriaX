@@ -5,8 +5,17 @@ COMPILACIÓN): aquí el programa ya validó estáticamente y falla EJECUTANDO �
 la red de la que caen los casos que el análisis conservador no ve
 (use-after-move a través de ramas, use-after-free, null deref...).
 
-Cada error lleva código estable ``RTxxx`` y la posición (``ln``/``col``) del
-nodo HIR que lo disparó, para el reporte educativo.
+Cada error lleva código estable y la posición (``ln``/``col``) del nodo HIR
+que lo disparó, para el reporte educativo. Hay DOS familias:
+
+- ``EXCxxx`` (:class:`ExcepcionDelPrograma`): una operación sin resultado
+  posible —dividir entre cero, un índice fuera de rango, un ``cast`` que no
+  convierte—. Es una EXCEPCIÓN del programa, como en Python: el ``try`` más
+  cercano la atrapa (``catch (excepciones.DivisionPorCero e)`` o
+  ``catch (e)``); solo si nadie la atrapa termina el programa.
+- ``RTxxx``: el programa está ROTO o la máquina no puede seguir (usar algo
+  después de ``move``, agotar la pila, un destructor que lanza). No se
+  atrapan: siempre terminan el programa.
 """
 
 from __future__ import annotations
@@ -31,9 +40,23 @@ class SuriaXRuntimeError(Exception):
         self.ln = ln
         self.col = col
         self.fn = fn
-        where = f" ({fn}:" if fn else " ("
-        loc = f"{where}{ln}:{col})" if ln else ""
-        super().__init__(f"{self.code}: {message}{loc}")
+        super().__init__(self._texto())
+
+    def _texto(self) -> str:
+        where = f" ({self.fn}:" if self.fn else " ("
+        loc = f"{where}{self.ln}:{self.col})" if self.ln else ""
+        return f"{self.code}: {self.message}{loc}"
+
+    def ubicar(self, ln: int, col: int) -> "SuriaXRuntimeError":
+        """Pone la posición si el error no traía una y devuelve el mismo error.
+
+        Un intrínseco del host no sabe desde dónde lo llamaron: su error nace
+        sin posición y la pone quien hizo la llamada. Asignar ``ln`` a mano no
+        bastaba: el texto del error ya estaba armado sin ella."""
+        if not self.ln:
+            self.ln, self.col = ln, col
+            self.args = (self._texto(),)
+        return self
 
 
 class UseAfterMoveError(SuriaXRuntimeError):
@@ -94,21 +117,64 @@ class StepLimitError(SuriaXRuntimeError):
     code = "RT010"
 
 
+class MemoryLimitError(SuriaXRuntimeError):
+    """El programa pasó la memoria máxima de la VM (``suriax-hir
+    --memoria-max``). Lo emite SOLO la VM, que contabiliza en bytes lo que el
+    programa crea; el intérprete no lleva esa cuenta (sus valores son objetos
+    de Python, cuyo tamaño no dice nada del programa). Vive aquí porque este
+    es el catálogo de los códigos RT."""
+    code = "RT023"
+
+
 class UnsupportedNodeError(SuriaXRuntimeError):
     """Nodo HIR sin soporte de ejecución todavía (parte del plan por fases)."""
     code = "RT011"
 
 
+class ExcepcionDelPrograma(SuriaXRuntimeError):
+    """Base de los errores de ejecución que el programa PUEDE ATRAPAR.
+
+    El ``try`` del intérprete la recibe igual que un ``throw``: la convierte
+    en un valor del struct ``excepciones.<tipo_excepcion>`` (declarado en
+    ``lib/excepciones.libsrx``) con el mensaje y la posición, y la pasa por
+    las mismas ramas ``catch``. Por eso la conversión vive en UN sitio (el
+    ``try``) y no en cada ``raise``: quien detecta el fallo no necesita saber
+    si alguien lo va a atrapar.
+    """
+    tipo_excepcion = ""
+
+
 class InvalidCastRuntimeError(SuriaXRuntimeError):
-    """``cast`` sin conversión resoluble en runtime (par no registrado)."""
+    """``cast`` sin conversión resoluble en runtime (par no registrado).
+
+    NO es atrapable: la Semántica ya rechaza toda conversión sin resultado
+    (SEM016), así que llegar aquí indica un HIR inconsistente, no un
+    programa que pueda recuperarse. Cuando exista una conversión que pueda
+    fallar con un programa válido (``str`` -> ``int``), su fallo será una
+    excepción del programa (``EXC004``)."""
     code = "RT012"
 
 
-class IndexOutOfRangeError(SuriaXRuntimeError):
+class IndexOutOfRangeError(ExcepcionDelPrograma):
     """``buf[i]`` con ``i`` fuera de ``[0, tamaño)`` (o no entero) sobre un
-    bloque reservado con ``__reserve__``."""
-    code = "RT013"
-    severity = "panic"  # acceso fuera de rango = violacion de memoria
+    bloque reservado con ``__reserve__``. Se atrapa como
+    ``excepciones.IndiceFueraDeRango``: el acceso se COMPRUEBA antes de
+    hacerse, así que la memoria sigue intacta y el programa puede seguir."""
+    code = "EXC002"
+    tipo_excepcion = "IndiceFueraDeRango"
+
+
+class FileAccessError(ExcepcionDelPrograma):
+    """Una operación de archivo de ``lib/sistema`` que no se pudo hacer: no
+    existe, es una carpeta, no es UTF-8, falta permiso. Se atrapa como
+    ``excepciones.ErrorDeArchivo``.
+
+    El mensaje es CANÓNICO (no el ``strerror`` del sistema): el mismo texto
+    en el intérprete y en la VM, en Windows y en Linux. El del sistema cambia
+    con el idioma y la plataforma, y un programa que lo imprime daría otra
+    salida en cada máquina."""
+    code = "EXC003"
+    tipo_excepcion = "ErrorDeArchivo"
 
 
 class NotIndexableError(SuriaXRuntimeError):
@@ -126,7 +192,26 @@ class CorruptMemoryHandleError(SuriaXRuntimeError):
     severity = "panic"
 
 
-class DivisionByZeroError(SuriaXRuntimeError):
+class ConversionError(ExcepcionDelPrograma):
+    """Un texto que no se puede convertir: ``text.parse_int("12a")``, unos
+    bytes que no son UTF-8. Se atrapa como ``excepciones.ConversionInvalida``.
+    El mensaje es canonico, el mismo en la VM."""
+    code = "EXC004"
+    tipo_excepcion = "ConversionInvalida"
+
+
+class ShiftOutOfRangeError(ExcepcionDelPrograma):
+    """``x << n`` o ``x >> n`` con ``n`` fuera de ``[0, 64)``.
+
+    En C es comportamiento indefinido y en Python da un entero de otro
+    tamaño; aqui no hay respuesta que dar con 64 bits, y el programa puede
+    atraparlo (``excepciones.DesplazamientoInvalido``).
+    """
+    code = "EXC005"
+    tipo_excepcion = "DesplazamientoInvalido"
+
+
+class DivisionByZeroError(ExcepcionDelPrograma):
     """``a / 0`` o ``a % 0``.
 
     Existe porque el fallo salia como un ``ZeroDivisionError`` de Python: un
@@ -134,8 +219,12 @@ class DivisionByZeroError(SuriaXRuntimeError):
     posición y sin decirle al usuario que su programa dividió por cero. Un
     error del programa se reporta como tal; un traceback es un fallo del
     compilador, y confundirlos hace imposible saber cuál de los dos pasó.
+
+    Se atrapa como ``excepciones.DivisionPorCero``. Una división por un cero
+    LITERAL (``x / 0``) ni siquiera compila: SEM035.
     """
-    code = "RT016"
+    code = "EXC001"
+    tipo_excepcion = "DivisionPorCero"
 
 
 class MissingReturnError(SuriaXRuntimeError):
@@ -170,12 +259,72 @@ class ExternBoundaryError(SuriaXRuntimeError):
     code = "RT018"
 
 
+class StackOverflowError(SuriaXRuntimeError):
+    """Desbordamiento de pila: demasiadas llamadas anidadas.
+
+    Casi siempre es una recursión sin caso base. Antes el intérprete dejaba
+    escapar el ``RecursionError`` de Python y salía como error INTERNO del
+    compilador (ICE000), diciendo "no es un fallo de tu programa" cuando la
+    causa estaba justo en el programa.
+
+    El límite NO es un número fijo: lo pone la pila de Python, y cada llamada
+    de suriaX gasta más o menos marcos según cuánto anida su cuerpo (medido:
+    entre ~600 y ~1400 llamadas). La VM de C++ tiene su propio límite
+    (``kMaxDepth`` = 4096 marcos). El error dice la profundidad alcanzada
+    para que se vea que no es un número mágico.
+    """
+    code = "RT019"
+
+
+class UncaughtThrowError(SuriaXRuntimeError):
+    """Un ``throw`` escapó de todo ``try``/``catch`` y terminó el programa.
+
+    No es un fallo del intérprete: es el programa terminando mal, con el valor
+    que lanzó. Era el único error de ejecución que salía SIN código estable
+    ("error no capturado — throw x"), así que un editor o una prueba no podía
+    distinguirlo sin leer el texto.
+    """
+    code = "RT020"
+
+
+class DestructorThrewError(SuriaXRuntimeError):
+    """Un ``__free__`` lanzó: un destructor NUNCA puede fallar.
+
+    Es la regla de C++ (los destructores son ``noexcept`` desde C++11). La
+    razón se ve en el desenrollado: si un ``throw`` ya está subiendo y, al
+    destruir lo que deja atrás, un ``__free__`` lanza OTRO, habría dos
+    excepciones en vuelo y el ``catch`` solo puede recibir una. Antes la
+    segunda reemplazaba a la primera sin decir nada —un error oculto—. Es,
+    de cierto modo, un "move después de move" de la excepción.
+
+    Un ``throw`` escrito directamente en un ``__free__`` ya lo rechaza la
+    Semántica (SEM034); este error cubre el caso que no se ve al compilar:
+    el ``__free__`` llama a una función que lanza. Siempre termina el
+    programa: no se puede atrapar.
+    """
+    code = "RT021"
+
+
+class FinallyThrewError(SuriaXRuntimeError):
+    """Un ``finally`` lanzó mientras ya viajaba otra excepción.
+
+    El ``finally`` corría PORQUE una excepción estaba saliendo del ``try``. Si
+    el ``finally`` lanza otra, habría dos en vuelo y el ``catch`` de afuera
+    solo puede recibir una: la primera se perdería sin rastro. Es la misma
+    regla que ``RT021`` (un destructor que lanza durante un desenrollado).
+    Siempre termina el programa: no se puede atrapar.
+    """
+    code = "RT022"
+
+
 __all__ = [
-    "SuriaXRuntimeError", "UseAfterMoveError", "DoubleMoveError",
+    "SuriaXRuntimeError", "ExcepcionDelPrograma", "UseAfterMoveError", "DoubleMoveError",
     "UseAfterFreeError", "NullDereferenceError", "InvalidFreeError",
     "UndefinedNameError", "NotCallableError", "MissingIntrinsicError",
     "MissingEntryError", "StepLimitError", "UnsupportedNodeError",
     "InvalidCastRuntimeError", "IndexOutOfRangeError", "NotIndexableError",
-    "CorruptMemoryHandleError", "DivisionByZeroError",
-    "MissingReturnError", "ExternBoundaryError",
+    "FileAccessError",
+    "CorruptMemoryHandleError", "DivisionByZeroError", "ShiftOutOfRangeError",
+    "MissingReturnError", "ExternBoundaryError", "StackOverflowError",
+    "UncaughtThrowError", "DestructorThrewError", "FinallyThrewError",
 ]

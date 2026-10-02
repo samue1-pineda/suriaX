@@ -1,0 +1,26 @@
+(3, 4)
+d^2 = 25
+b == c
+circulo de radio 2: area 12
+rectangulo 3x5: area 15
+nada: area 0
+area total 27
+-- return temprano en un bucle
+  libera vuelta0
+  libera vuelta1
+  libera vuelta2
+  salio en 2
+-- throw a traves de un ambito con destructor
+  libera guardia
+  atrapado: fallo a proposito
+-- struct que contiene dueños
+  sacado izq
+-- mover segun una rama
+  libera descartado
+  gano elegido
+  toma elegido
+  libera elegido
+-- fin de propiedad()
+  libera izq
+  libera el par
+-- fin

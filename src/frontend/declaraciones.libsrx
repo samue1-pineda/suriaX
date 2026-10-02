@@ -1,0 +1,378 @@
+/- frontend.declaraciones — lo que va en el nivel superior de un archivo
+   (`V0/.../grammar/modifiers.py`, `functions.py`, `structs.py`, `enums.py`,
+   `decorators.py`, `traits.py`).
+
+     top_level = directiva | test | "@" decorador
+               | [ visibilidad ] [ hook | dunder ] ( fn | struct | enum | binding )
+     fn        = "fn" NAME [ <T> ] "(" [ tipo NAME { "," tipo NAME } ] ")"
+                 [ "->" tipo ] ( bloque | ";" )
+     struct    = "struct" "{" { tipo NAME ";" } "}" NAME [ <T> ] ";"
+     enum      = "enum" NAME "{" item { "," item } [ "," ] "}" ";"
+-/
+
+#import frontend.tokens as tk
+#import frontend.cursor as cu
+#import frontend.tipos as ti
+#import frontend.expresiones as ex
+#import frontend.sentencias as se
+#import frontend.directivas as di
+#import frontend.arbol as ar
+#import array.vector as vec
+
+public fn item(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.actual(p);
+    if (t.tipo == tk.TType.DIRECTIVE) { return di.directiva(p); }
+    if (t.tipo == tk.TType.TEST) { return prueba(p); }
+    if (t.tipo == tk.TType.DECORATOR) { return decorador(p); }
+    var str visibilidad = visibilidad_de(p);
+    var str especificador = especificador_de(p);
+    if (especificador != "") {
+        if (not cu.es(p, tk.TType.FUNCTION)) {
+            var tk.Token x = cu.actual(p);
+            cu.falla("PAR003", f"'{especificador}' solo puede preceder a 'fn', se encontro {tk.nombre_de(x.tipo)}",
+                     x.linea, x.col);
+        }
+        return funcion(p, visibilidad, especificador);
+    }
+    if (cu.es(p, tk.TType.FUNCTION)) { return funcion(p, visibilidad, ""); }
+    if (cu.es(p, tk.TType.STRUCT)) { return estructura(p, visibilidad); }
+    if (cu.es(p, tk.TType.ENUM)) { return enumeracion(p, visibilidad); }
+    return se.sentencia(p, visibilidad);
+}
+
+fn visibilidad_de(cu.Parser ptr mutable p) -> str {
+    if (cu.acepta(p, tk.TType.PUBLIC)) { return "public"; }
+    if (cu.acepta(p, tk.TType.PRIVATE)) { return "private"; }
+    if (cu.acepta(p, tk.TType.INTERNAL)) { return "internal"; }
+    return "";
+}
+
+fn especificador_de(cu.Parser ptr mutable p) -> str {
+    if (cu.acepta(p, tk.TType.HOOK)) { return "hook"; }
+    if (cu.acepta(p, tk.TType.DUNDER_KW)) { return "dunder"; }
+    return "";
+}
+
+/- `test "nombre" { ... }` — un bloque de prueba con nombre (estilo Zig). -/
+fn prueba(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.TEST);
+    var tk.Token nombre = cu.exige(p, tk.TType.STRING_LIT);
+    var int cuerpo = se.bloque(p);
+    cu.acepta(p, tk.TType.SEMICOLON);
+    var int n = cu.nodo_en(p, "TestDecl", t);
+    cu.texto(p, n, "name", ex.plano(nombre));
+    cu.hijo(p, n, "body", cuerpo);
+    return n;
+}
+
+// --------------------------------------------------------------------------- //
+// funciones
+// --------------------------------------------------------------------------- //
+
+public fn funcion(cu.Parser ptr mutable p, str visibilidad, str especificador) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.FUNCTION);
+    var tk.Token nombre = cu.actual(p);
+    var str forma_dunder = "";
+    if (nombre.tipo == tk.TType.DUNDER) {
+        cu.avanza(p);
+        forma_dunder = cu.nombre_dunder(nombre);
+    } else if (nombre.tipo == tk.TType.IDENTIFIER) {
+        cu.avanza(p);
+    } else {
+        cu.falla("PAR003", f"se esperaba el nombre de la funcion (IDENTIFIER o DUNDER), se encontro {tk.nombre_de(nombre.tipo)}",
+                 nombre.linea, nombre.col);
+    }
+    if (especificador != "" and forma_dunder == "") {
+        cu.falla("PAR003", f"'{especificador}' requiere un nombre con forma '__x__'; '{nombre.lexema}' no la tiene",
+                 nombre.linea, nombre.col);
+    }
+    var str parametros_de_tipo = ti.parametros(p);
+    cu.exige(p, tk.TType.L_PAREN);
+    var vec.Vector<int> parametros = vec.dynamic<int>(4);
+    if (not cu.es(p, tk.TType.R_PAREN)) {
+        parametros.push(parametro(p));
+        while (cu.acepta(p, tk.TType.COMMA)) { parametros.push(parametro(p)); }
+    }
+    cu.exige(p, tk.TType.R_PAREN);
+    var int retorno = -1;
+    if (cu.acepta(p, tk.TType.ARROW)) {
+        retorno = ti.tipo(p);
+    } else {
+        // sin flecha devuelve 'void': un nodo sintético en la posición del 'fn'
+        retorno = cu.nodo_en(p, "PrimitiveTypeExpr", t);
+        cu.texto(p, retorno, "name", "void");
+    }
+    var int cuerpo = -1;
+    if (not cu.acepta(p, tk.TType.SEMICOLON)) { cuerpo = se.bloque(p); }
+    var int n = cu.nodo_en(p, "FunctionDecl", t);
+    cu.texto(p, n, "name", nombre.lexema);
+    ar.pon_nombre(&p.arbol, n, nombre.lexema, forma_dunder);
+    if (parametros_de_tipo != "") { cu.crudo(p, n, "type_params", parametros_de_tipo); }
+    if (forma_dunder != "") { cu.texto(p, n, "dunder", forma_dunder); }
+    if (especificador != "") { cu.texto(p, n, "specifier", especificador); }
+    if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+    var int i = 0;
+    while (i < parametros.len()) {
+        cu.hijo(p, n, "params", parametros.get(i));
+        i = i + 1;
+    }
+    cu.hijo(p, n, "return_type", retorno);
+    cu.hijo(p, n, "body", cuerpo);
+    return n;
+}
+
+fn parametro(cu.Parser ptr mutable p) -> int {
+    var int tipo = ti.tipo(p);
+    var tk.Token nombre = cu.exige_nombre(p);
+    var int n = cu.nodo(p, "Parameter", ar.linea_de(&p.arbol, tipo), ar.col_de(&p.arbol, tipo));
+    cu.texto(p, n, "name", nombre.lexema);
+    cu.hijo(p, n, "type", tipo);
+    return n;
+}
+
+// --------------------------------------------------------------------------- //
+// struct y enum
+// --------------------------------------------------------------------------- //
+
+fn estructura(cu.Parser ptr mutable p, str visibilidad) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.STRUCT);
+    cu.exige(p, tk.TType.L_BRACE);
+    var vec.Vector<int> campos = vec.dynamic<int>(4);
+    while (not cu.es(p, tk.TType.R_BRACE) and not cu.al_final(p)) {
+        var int tipo = ti.tipo(p);
+        var tk.Token nombre = cu.exige_nombre(p);
+        cu.exige(p, tk.TType.SEMICOLON);
+        var int campo = cu.nodo(p, "Field", ar.linea_de(&p.arbol, tipo), ar.col_de(&p.arbol, tipo));
+        cu.texto(p, campo, "name", nombre.lexema);
+        cu.hijo(p, campo, "type", tipo);
+        campos.push(campo);
+    }
+    cu.exige(p, tk.TType.R_BRACE);
+    var tk.Token nombre = cu.exige_nombre(p);
+    var str parametros = ti.parametros(p);
+    cu.exige(p, tk.TType.SEMICOLON);
+    var int n = cu.nodo_en(p, "StructDecl", t);
+    cu.texto(p, n, "name", nombre.lexema);
+    if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+    if (parametros != "") { cu.crudo(p, n, "type_params", parametros); }
+    var int i = 0;
+    while (i < campos.len()) {
+        cu.hijo(p, n, "fields", campos.get(i));
+        i = i + 1;
+    }
+    return n;
+}
+
+fn enumeracion(cu.Parser ptr mutable p, str visibilidad) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.ENUM);
+    var tk.Token nombre = cu.exige_nombre(p);
+    cu.exige(p, tk.TType.L_BRACE);
+    var int n = cu.nodo_en(p, "EnumDecl", t);
+    cu.texto(p, n, "name", nombre.lexema);
+    if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+    if (not cu.es(p, tk.TType.R_BRACE)) {
+        cu.hijo(p, n, "items", variante(p));
+        while (cu.acepta(p, tk.TType.COMMA)) {
+            if (cu.es(p, tk.TType.R_BRACE)) { break; }
+            cu.hijo(p, n, "items", variante(p));
+        }
+    }
+    cu.exige(p, tk.TType.R_BRACE);
+    cu.exige(p, tk.TType.SEMICOLON);
+    return n;
+}
+
+/- `Nombre`, `Nombre = valor` o `Nombre(tipo, ...)` (una variante con
+   payload: el enum pasa a ser un tipo SUMA). -/
+fn variante(cu.Parser ptr mutable p) -> int {
+    var tk.Token nombre = cu.exige_nombre(p);
+    var int n = cu.nodo_en(p, "EnumItem", nombre);
+    cu.texto(p, n, "name", nombre.lexema);
+    if (cu.acepta(p, tk.TType.L_PAREN)) {
+        cu.hijo(p, n, "payload", ti.tipo(p));
+        while (cu.acepta(p, tk.TType.COMMA)) {
+            if (cu.es(p, tk.TType.R_PAREN)) { break; }
+            cu.hijo(p, n, "payload", ti.tipo(p));
+        }
+        cu.exige(p, tk.TType.R_PAREN);
+        if (cu.es(p, tk.TType.ASSIGN)) {
+            var tk.Token igual = cu.actual(p);
+            cu.falla("PAR013", f"la variante '{nombre.lexema}' lleva payload, asi que no tiene un valor entero que fijar: el '=' de un enum numera variantes UNIDAD",
+                     igual.linea, igual.col);
+        }
+        return n;
+    }
+    if (cu.acepta(p, tk.TType.ASSIGN)) { cu.hijo(p, n, "value", ex.expresion(p)); }
+    return n;
+}
+
+// --------------------------------------------------------------------------- //
+// decoradores, @impl y @trait
+// --------------------------------------------------------------------------- //
+
+fn decorador(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.avanza(p);
+    var str nombre = cu.sin_prefijo(t);
+    var str args = "";
+    if (cu.acepta(p, tk.TType.L_PAREN)) {
+        if (not cu.es(p, tk.TType.R_PAREN)) {
+            args = cu.exige_nombre(p).lexema;
+            while (cu.acepta(p, tk.TType.COMMA)) { args = args + "," + cu.exige_nombre(p).lexema; }
+        }
+        cu.exige(p, tk.TType.R_PAREN);
+    }
+    var str visibilidad = visibilidad_de(p);
+    if (nombre == "trait") {
+        if (args != "") { cu.falla("PAR003", "'@trait' no toma argumentos", t.linea, t.col); }
+        return rasgo(p, t, visibilidad);
+    }
+    if (nombre == "impl" and args == "") {
+        if (visibilidad != "") {
+            cu.falla("PAR003", "un bloque '@impl' no lleva visibilidad (ponla en cada método)", t.linea, t.col);
+        }
+        return bloque_impl(p, t);
+    }
+    var str especificador = especificador_de(p);
+    var int objetivo = decorado(p, nombre, visibilidad, especificador);
+    var int n = cu.nodo_en(p, "DecoratorDecl", t);
+    cu.texto(p, n, "name", nombre);
+    if (args != "") { cu.crudo(p, n, "args", "[" + args + "]"); }
+    if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+    cu.hijo(p, n, "target", objetivo);
+    return n;
+}
+
+fn decorado(cu.Parser ptr mutable p, str decorador, str visibilidad, str especificador) -> int {
+    var tk.Token x = cu.actual(p);
+    if (especificador != "") {
+        if (x.tipo != tk.TType.FUNCTION) {
+            cu.falla("PAR003", f"'{especificador}' solo precede a 'fn', se encontro {tk.nombre_de(x.tipo)}",
+                     x.linea, x.col);
+        }
+        return funcion(p, visibilidad, especificador);
+    }
+    if (x.tipo == tk.TType.FUNCTION) { return funcion(p, visibilidad, ""); }
+    if (x.tipo == tk.TType.STRUCT) { return estructura(p, visibilidad); }
+    if (x.tipo == tk.TType.ENUM) { return enumeracion(p, visibilidad); }
+    cu.falla("PAR003", f"un decorador '@{decorador}' debe preceder a fn/struct/enum, se encontro {tk.nombre_de(x.tipo)}",
+             x.linea, x.col);
+    return -1;
+}
+
+/- El último tramo de un nombre calificado: "pt.Punto" -> "Punto". -/
+fn hoja(str nombre) -> str {
+    var int desde = 0;
+    var int i = 0;
+    while (i < len(nombre)) {
+        if (nombre[i] == '.') { desde = i + 1; }
+        i = i + 1;
+    }
+    return cu.trozo(nombre, desde, len(nombre));
+}
+
+/- El nombre-hoja del tipo nominal del receptor (`Tipo ptr mutable` ->
+   `Tipo`), o "" si no es un nominal. -/
+fn receptor(cu.Parser ptr p, int metodo) -> str {
+    var int param = ar.hijo_llamado(&p.arbol, metodo, "params");
+    if (param < 0) { return ""; }
+    var int t = ar.hijo_llamado(&p.arbol, param, "type");
+    var int vueltas = 0;
+    while (vueltas < 8 and (cu.clase(p, t) == "PointerTypeExpr" or cu.clase(p, t) == "NullableTypeExpr")) {
+        t = ar.hijo_llamado(&p.arbol, t, "inner");
+        vueltas = vueltas + 1;
+    }
+    if (cu.clase(p, t) == "NominalTypeExpr" and cu.nombre(p, t) != "") { return hoja(cu.nombre(p, t)); }
+    return "";
+}
+
+/- `@impl Tipo { fn m(Tipo ptr self, ...) { ... } ... }`: los métodos de
+   un tipo. Cada uno lleva el receptor explícito y nombre llano, y se marca
+   como `dunder` de nombre llano. El programa los APLANA (ver `parser`). -/
+fn bloque_impl(cu.Parser ptr mutable p, tk.Token deco) -> int {
+    var tk.Token tipo = cu.exige_nombre(p);
+    var str parametros = ti.parametros(p);
+    cu.exige(p, tk.TType.L_BRACE);
+    var int n = cu.nodo_en(p, "ImplDecl", deco);
+    cu.texto(p, n, "type_name", tipo.lexema);
+    if (parametros != "") { cu.crudo(p, n, "type_params", parametros); }
+    while (not cu.es(p, tk.TType.R_BRACE) and not cu.al_final(p)) {
+        if (not cu.es(p, tk.TType.FUNCTION)) {
+            var tk.Token x = cu.actual(p);
+            cu.falla("PAR003", f"un bloque '@impl' solo contiene métodos ('fn ...'), se encontro {tk.nombre_de(x.tipo)}",
+                     x.linea, x.col);
+        }
+        var int m = funcion(p, "", "");
+        var int ml = ar.linea_de(&p.arbol, m);
+        var int mc = ar.col_de(&p.arbol, m);
+        var str nombre = cu.nombre(p, m);
+        if (ar.extra_de(&p.arbol, m) != "") {
+            cu.falla("PAR003", "un método de '@impl' usa nombre llano ('fn push'), no '__x__'", ml, mc);
+        }
+        if (ar.hijo_llamado(&p.arbol, m, "body") < 0) {
+            cu.falla("PAR003", "un método de '@impl' necesita cuerpo, no es un prototipo", ml, mc);
+        }
+        var str recibe = receptor(p, m);
+        if (recibe != hoja(tipo.lexema)) {
+            var str visto = recibe;
+            if (visto == "") { visto = "ninguno"; }
+            cu.falla("PAR003", f"el primer parámetro de '{nombre}' debe ser el receptor '{tipo.lexema} ptr [mutable] <nombre>' (se encontró '{visto}')",
+                     ml, mc);
+        }
+        // los parámetros del '@impl' viajan con cada método (la V0 los
+        // guarda aparte de los propios para el HIR)
+        if (parametros != "") { cu.crudo(p, m, "impl_type_params", parametros); }
+        cu.texto(p, m, "dunder", nombre);
+        cu.texto(p, m, "specifier", "dunder");
+        cu.hijo(p, n, "methods", m);
+    }
+    cu.exige(p, tk.TType.R_BRACE);
+    cu.acepta(p, tk.TType.SEMICOLON);
+    return n;
+}
+
+/- `@trait struct { prototipos } Nombre;` o `@trait fn __x__(tipos);`. -/
+fn rasgo(cu.Parser ptr mutable p, tk.Token deco, str visibilidad) -> int {
+    var int n = cu.nodo_en(p, "TraitDecl", deco);
+    if (cu.acepta(p, tk.TType.STRUCT)) {
+        cu.exige(p, tk.TType.L_BRACE);
+        var vec.Vector<int> metodos = vec.dynamic<int>(4);
+        while (not cu.es(p, tk.TType.R_BRACE) and not cu.al_final(p)) { metodos.push(prototipo(p)); }
+        cu.exige(p, tk.TType.R_BRACE);
+        var tk.Token nombre = cu.exige_nombre(p);
+        cu.exige(p, tk.TType.SEMICOLON);
+        cu.texto(p, n, "name", nombre.lexema);
+        if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+        var int i = 0;
+        while (i < metodos.len()) {
+            cu.hijo(p, n, "methods", metodos.get(i));
+            i = i + 1;
+        }
+        return n;
+    }
+    var int metodo = prototipo(p);
+    cu.texto(p, n, "name", cu.nombre(p, metodo));
+    if (visibilidad != "") { cu.texto(p, n, "visibility", visibilidad); }
+    cu.hijo(p, n, "methods", metodo);
+    return n;
+}
+
+/- `[hook|dunder] fn NOMBRE(tipo, ...) [-> tipo];` — solo tipos, sin nombres. -/
+fn prototipo(cu.Parser ptr mutable p) -> int {
+    especificador_de(p);
+    var tk.Token t = cu.exige(p, tk.TType.FUNCTION);
+    var tk.Token nombre = cu.exige_nombre(p);
+    cu.exige(p, tk.TType.L_PAREN);
+    var int n = cu.nodo_en(p, "TraitMethod", t);
+    cu.texto(p, n, "name", nombre.lexema);
+    ar.pon_nombre(&p.arbol, n, nombre.lexema, "");
+    if (not cu.es(p, tk.TType.R_PAREN)) {
+        cu.hijo(p, n, "params", ti.tipo(p));
+        while (cu.acepta(p, tk.TType.COMMA)) { cu.hijo(p, n, "params", ti.tipo(p)); }
+    }
+    cu.exige(p, tk.TType.R_PAREN);
+    if (cu.acepta(p, tk.TType.ARROW)) { cu.hijo(p, n, "return_type", ti.tipo(p)); }
+    cu.exige(p, tk.TType.SEMICOLON);
+    return n;
+}
+
+#export as declaraciones

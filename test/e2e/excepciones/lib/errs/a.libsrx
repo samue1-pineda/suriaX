@@ -1,0 +1,4 @@
+// libreria de prueba para 07_librerias: un 'Error' con mensaje
+struct { str msg; } Error;
+public fn falla() -> void { throw Error{ msg: "desde a" }; }
+#export as a

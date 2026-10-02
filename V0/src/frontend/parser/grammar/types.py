@@ -1,4 +1,4 @@
-"""``type = base_type { type_suffix }`` (EBNF secc. 4).
+"""``type = base_type { type_suffix }`` (EBNF).
 
 ::
 
@@ -59,6 +59,7 @@ _PRIMITIVE_TOKENS: Dict[TokenType, str] = {
     TokenType.FLOAT: "float",
     TokenType.CHAR: "char",
     TokenType.STR: "str",
+    TokenType.BYTE: "byte",
 }
 
 
@@ -191,7 +192,7 @@ def _parametro(cursor: Cursor) -> str:
 
 def parse_type_args(cursor: Cursor, ctx: ParserContext) -> list[ast.TypeExpr]:
     """``type_args = "<" type { "," type } ">"`` -- posicion de ARGUMENTOS DE
-    TIPO (EBNF secc. 4).
+    TIPO (EBNF).
 
     Regla COMPARTIDA por toda construccion que parametrice con tipos: hoy la
     usa ``cast<T>(expr)`` (unica forma nativa); las librerias la reutilizaran

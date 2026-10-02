@@ -363,6 +363,7 @@ class _Emitter:
             self._emit_function(node, msg.function)
         elif cls is ast.StructDecl:
             msg.struct_decl.name = node.name
+            msg.struct_decl.type_params.extend(node.type_params or [])
             for f in node.fields:
                 field = msg.struct_decl.fields.add()
                 field.name = f.name
@@ -427,6 +428,8 @@ class _Emitter:
             msg.dunder = fn.dunder
         if decorator:
             msg.decorator = decorator
+        msg.type_params.extend(list(fn.impl_type_params or [])
+                               + list(fn.type_params or []))
 
     # ------------------------------------------------------------------ #
     # sentencias
@@ -454,7 +457,10 @@ class _Emitter:
         for drop in block.drops:
             out = msg.drops.add()
             out.path.extend(drop.path)
-            self._emit_hook_ref(drop.hook, out.hook)
+            if drop.by_type:
+                out.by_type = True
+            else:
+                self._emit_hook_ref(drop.hook, out.hook)
 
     def _stmt_block(self, node: ast.Block, msg) -> None:
         self._emit_block(node, msg.block)
@@ -543,6 +549,9 @@ class _Emitter:
             self._emit_block(clausula.block, rama.block)
             if clausula.restype is not None:
                 self._emit_type(clausula.restype, rama.type)
+        if node.finally_block is not None:
+            out.finally_block.SetInParent()   # presente aunque este vacio
+            self._emit_block(node.finally_block, out.finally_block)
 
     def _stmt_import_binding(self, node: ast.ImportBinding, msg) -> None:
         out = msg.import_binding
@@ -589,6 +598,12 @@ class _Emitter:
             entry = msg.interp.parts.add()
             if isinstance(part, str):
                 entry.text = part
+            elif isinstance(part, ast.FormattedValue):
+                self._emit_expr(part.value, entry.expr)
+                if part.conversion == "r":
+                    entry.repr = True
+                if part.format_spec:
+                    entry.spec = part.format_spec
             else:
                 self._emit_expr(part, entry.expr)
 
@@ -614,6 +629,8 @@ class _Emitter:
     def _expr_assignment(self, node: ast.Assignment, msg) -> None:
         self._emit_expr(node.target, msg.assignment.target)
         self._emit_expr(node.value, msg.assignment.value)
+        if node.drops_old:
+            msg.assignment.drops_old = True
 
     def _expr_call(self, node: ast.Call, msg) -> None:
         # 'min(T)'/'max(T)' se resolvieron a un entero en compilacion (el
@@ -629,6 +646,8 @@ class _Emitter:
             self._emit_expr(arg, msg.call.args.add())
         self._emit_hook_ref(node.hook, msg.call.hook)
         self._emit_hook_ref(node.temp_drop, msg.call.temp_drop)
+        if node.temp_by_type:
+            msg.call.temp_by_type = True
 
     def _expr_index(self, node: ast.Index, msg) -> None:
         self._emit_expr(node.obj, msg.index.obj)
@@ -664,6 +683,8 @@ class _Emitter:
             out.field_names.append(name)
             self._emit_expr(value, out.values.add())
         self._emit_hook_ref(node.temp_drop, msg.struct_literal.temp_drop)
+        if node.temp_by_type:
+            msg.struct_literal.temp_by_type = True
 
     def _expr_sizeof(self, node: ast.SizeofExpr, msg) -> None:
         # el tipo CONSULTADO ('sizeof(Punto)' -> Punto) lo dejo resuelto la

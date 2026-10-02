@@ -38,6 +38,7 @@ _PRIMITIVOS = {
     "float": "double",
     "bool": "bool",
     "char": "char32_t",
+    "byte": "uint8_t",
     "void": "void",
 }
 

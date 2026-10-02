@@ -56,6 +56,20 @@ def validated_alias(library: LoadedLibrary, lib: str, errors: List,
     return None
 
 
+def _en_archivo(error, path: str) -> None:
+    """Ubica ``error`` en ``path`` (el parser no sabe de qué archivo vienen
+    sus tokens, así que sus errores nacen sin archivo)."""
+    error.file = path
+    error.loc = error._coerce_location(None, error.line, error.column, path)
+
+
+def reubicar(error, ln: int, col: int) -> None:
+    """Lleva ``error`` a la línea ``ln``/``col`` del archivo que se compila
+    (sin archivo propio: el del consumidor)."""
+    error.line, error.column, error.file = ln, col, None
+    error.loc = error._coerce_location(None, ln, col, None)
+
+
 def parse_and_collect(
     lib: str, path: str, config, errors: List, notes, ln: int, col: int,
     *, expect_package: bool,
@@ -81,12 +95,21 @@ def parse_and_collect(
     program = parser.parse()
 
     if lexer.errors or parser.ctx.errors:
-        detail = "; ".join(
-            f"{e.code}: {e.message}" for e in (*lexer.errors, *parser.ctx.errors)
-        )
+        # Cada error de la librería sale con SU archivo y SU posición, y el
+        # SEM010 queda en la línea del '#import' del consumidor. Antes iba
+        # todo en un solo mensaje con el archivo de la librería y la línea
+        # del consumidor ('lexer.libsrx:10:1'), una posición que no existía,
+        # y sin decir dónde estaba cada error.
+        internos = (*lexer.errors, *parser.ctx.errors)
+        for error in internos:
+            if not getattr(error, "file", None):
+                _en_archivo(error, path)
+            errors.append(error)
         errors.append(SemanticError.InvalidLibraryError(
-            f"'{os.path.basename(path)}' contiene errores léxicos/sintácticos: {detail}",
-            line=ln, column=col, file=path,
+            f"la librería '{lib}' ({os.path.basename(path)}) no compila: "
+            f"{len(internos)} error(es) léxico(s)/sintáctico(s), cada uno con "
+            "su posición en ese archivo",
+            line=ln, column=col,
         ))
         return None
 
@@ -118,6 +141,16 @@ def parse_and_collect(
                 err.loc.file = path
         errors.extend(lib_ctx.errors)
 
+    # Los cuerpos GENERICOS: que copia cada uno viaja en su Symbol, y el
+    # consumidor lo necesita para rechazar 'Vector<R>.get' (SEM038). Sus
+    # diagnosticos se descartan: salen al emitir el .phir de la unidad.
+    if not lib_ctx.errors:
+        from ..frontend.semantic import scope_resolver
+        antes = (len(lib_ctx.errors), len(lib_ctx.notes))
+        scope_resolver.run_generics(program, lib_ctx)
+        del lib_ctx.errors[antes[0]:]
+        del lib_ctx.notes[antes[1]:]
+
     scope = lib_ctx.table.global_scope
     # El contrato PUBLICO de la libreria se expresa en nombres canonicos.
     #
@@ -127,6 +160,12 @@ def parse_and_collect(
     # veria dos tipos donde hay uno.
     _canonicalizar(scope.values, scope)
     _canonicalizar(scope.types, scope)
+    # ...y los METODOS, hooks y conversiones: 'fn keys(...) -> vec.Vector<K>'
+    # dentro de un '@impl' llegaba al consumidor como 'vec.Vector<str>' (el
+    # alias de la libreria) y no unificaba con su 'vector.Vector<str>'
+    _canonicalizar(lib_ctx.table.dunders, scope)
+    _canonicalizar(lib_ctx.table.hooks, scope)
+    _canonicalizar(lib_ctx.table.casts, scope)
     # el nombre publico ES el del '#export': ni el del archivo ni el de su
     # carpeta (regla central del linker, ver 'packages.py').
     #
@@ -148,6 +187,8 @@ def parse_and_collect(
         hooks=_without_internal(lib_ctx.table.hooks),
         casts=_without_internal(lib_ctx.table.casts),
         dunders=_without_internal(lib_ctx.table.dunders),
+        internos={n: "internal" for n, s in {**scope.types, **scope.values}.items()
+                  if getattr(s, "visibility", None) == "internal"},
     )
 
 

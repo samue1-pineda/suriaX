@@ -23,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import analyze, assert_output, lex, parse  # noqa: E402
+from helpers import analyze, assert_output, lex, omitir, parse  # noqa: E402
 
 WRITE = "fn __write__(str s) -> void;\n"
 
@@ -199,8 +199,11 @@ def test_escalado_lineal_del_frontend():
 
     _, t_small = _timed(analyze, gen(200))
     _, t_large = _timed(analyze, gen(800))
-    if t_small < 0.01:  # demasiado rápido para medir con fiabilidad
-        return
+    if t_small < 0.01:
+        # por debajo de 10 ms el ruido del reloj domina la razón: comparar
+        # dos medidas así no probaría el escalado, solo el azar.
+        omitir(f"medición no fiable: 200 funciones tardaron "
+               f"{t_small * 1000:.1f} ms (< 10 ms)")
     ratio = t_large / t_small
     assert ratio < 10.0, (
         f"escalado sospechoso: 4x el tamaño costó {ratio:.1f}x el tiempo "

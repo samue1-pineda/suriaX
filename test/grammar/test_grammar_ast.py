@@ -425,3 +425,27 @@ def test_make_es_identificador_corriente():
     """'make' se retiró de KEYWORDS: es el nombre natural de una fábrica."""
     fn = _items("fn make(int n) -> int { return n; };")[0]
     assert fn.name == "make"
+
+
+def test_bits_ligan_mas_que_las_comparaciones():
+    """'a & b == c' es '(a & b) == c' (como Python y Rust, no como C)."""
+    e = _expr("a & b == c")
+    assert e.operator == "==" and e.left.operator == "&"
+
+
+def test_orden_de_los_operadores_de_bits():
+    """| < ^ < & < desplazamientos < suma."""
+    e = _expr("a | b ^ c & d << 1 + 2")
+    assert e.operator == "|"
+    assert e.right.operator == "^"
+    assert e.right.right.operator == "&"
+    assert e.right.right.right.operator == "<<"
+    assert e.right.right.right.right.operator == "+"
+
+
+def test_dos_mayor_pegados_son_un_desplazamiento():
+    """El lexer no junta '>>' (para no romper 'Vector<Vector<int>>'): lo
+    junta el parser, y solo si los dos '>' van pegados."""
+    e = _expr("a >> 2")
+    assert e.operator == ">>"
+    assert _expr("~a").operator == "~"

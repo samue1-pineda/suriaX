@@ -10,7 +10,7 @@ mismo.
 ```
 
 ```bash
-suri src/aritmetica/calc.srcx     # necesita lib/ y este paquete al alcance
+suri src/aritmetica/calc.srcx
 ```
 
 | archivo | qué es |
@@ -42,7 +42,7 @@ Encontrado escribiéndolo, no leyendo el compilador:
 
 | límite | consecuencia aquí |
 |---|---|
-| **Un submódulo no puede importar a un hermano de su paquete** | El linker lo ve como import circular al re-entrar en el paquete que está cargando. Por eso `tokens`, `scanner` y `parser` están en **un solo archivo** en vez de en tres, que es como los tiene la V0. Es el límite que más pesa para el bootstrapping. |
+| **Un submódulo no podía importar a un hermano de su paquete** *(corregido en la 0.3.1)* | El linker buscaba el paquete empezando en la carpeta del submódulo, que está dentro de él, y no lo encontraba (`SEM009`); el propio `calc.srcx` tampoco corría desde aquí. Por eso `tokens`, `scanner` y `parser` están en **un solo archivo** en vez de en tres, que es como los tiene la V0. Ya se pueden separar. |
 | **`error` es palabra reservada** | El campo del parser se llama `fallo`. Razonable —`error T` es un tipo—, pero el diagnóstico dice *"se esperaba un nombre, se encontro ERRORTYPE"* y no que el nombre esté reservado. |
 | **`.name` de un enum es constante** | Se resuelve al compilar, así que vale sobre `TType.PLUS.name` pero no sobre una variable: `nombre_de` tiene que escribir el `match` de diez ramas. |
 | **Sin punteros a función** | Una tabla de precedencias dirigida por datos no se puede escribir; la precedencia queda codificada en qué nivel llama a cuál (que aquí es legible, pero no escala a un lenguaje entero). |

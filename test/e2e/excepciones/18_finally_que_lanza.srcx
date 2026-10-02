@@ -1,0 +1,27 @@
+/- Excepciones 18: un 'finally' no puede lanzar mientras ya viaja otra.
+
+ El 'finally' corria PORQUE una excepcion estaba saliendo del 'try'. Si lanza
+ otra, habria dos en vuelo y el 'catch' de afuera solo puede recibir una: la
+ primera se perderia sin rastro. El programa termina con RT022, la misma
+ regla que un destructor que lanza (RT021). No se puede atrapar.
+
+ Sin otra excepcion en vuelo, un 'throw' dentro de un 'finally' es uno mas:
+ sube como cualquiera (lo muestra la primera parte).
+
+ codigo: 70 RT022
+-/
+#from io #import stdp
+
+fn main() -> int {
+    try {
+        try { stdp.println("try sin fallo"); } finally { throw "desde el finally"; };
+    } catch (str e) {
+        stdp.println(f"atrapado: {e}");
+    };
+    try {
+        try { throw 1; } finally { throw 2; };
+    } catch (int e) {
+        stdp.println("no se ve");
+    };
+    return 0;
+}

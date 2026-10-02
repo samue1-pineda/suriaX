@@ -1,0 +1,15 @@
+#import mem
+
+public struct { T ptr mutable datos; int n; } Bolsa<T>;
+public struct { A a; B b; } Par<A, B>;
+
+public fn nueva<T>(int n) -> Bolsa<T> {
+    return Bolsa<T>{ datos: mem.reserve<T>(n), n: n };
+}
+public fn primero<T>(Bolsa<T> ptr b) -> T { return b.datos[0]; }
+public fn libera<T>(Bolsa<T> ptr mutable b) -> void { mem.release<T>(b.datos); }
+public fn junta<A, B>(A a, B b) -> Par<A, B> { return Par<A, B>{ a: a, b: b }; }
+internal fn oculta<T>(T x) -> T { return x; }
+public fn usa_oculta(int x) -> int { return oculta<int>(x) + oculta(x); }
+
+#export as caja

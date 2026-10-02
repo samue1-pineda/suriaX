@@ -27,8 +27,8 @@ from __future__ import annotations
 from .execute import execute, finish_report
 from .options import (EXIT_COMPILE_ERROR, EXIT_CONFIG_ERROR,
                       EXIT_EXTENSION_ERROR, EXIT_FILE_NOT_FOUND,
-                      EXIT_MISSING_DEPENDENCY, EXIT_OK, CompileOptions,
-                      CompileResult)
+                      EXIT_INTERNAL_ERROR, EXIT_MISSING_DEPENDENCY, EXIT_OK,
+                      CompileOptions, CompileResult)
 from .pipeline import compile_source, emit_library_units, load_config
 from .reporting import Reporter, SilentReporter
 
@@ -38,4 +38,5 @@ __all__ = [
     "load_config",
     "EXIT_OK", "EXIT_COMPILE_ERROR", "EXIT_FILE_NOT_FOUND",
     "EXIT_MISSING_DEPENDENCY", "EXIT_EXTENSION_ERROR", "EXIT_CONFIG_ERROR",
+    "EXIT_INTERNAL_ERROR",
 ]

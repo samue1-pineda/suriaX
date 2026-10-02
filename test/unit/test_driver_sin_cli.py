@@ -71,8 +71,10 @@ def test_el_driver_no_ejecuta_por_su_cuenta():
     """Compilar y ejecutar son dos cosas: el pipeline deja el '.phir' y dice
     si el target lo pide, pero lanzar es decisión del llamador."""
     resultado = _compilar(_PROGRAMA, run=True, emit_hir="")
-    if resultado.phir_path is None:      # sin protobuf no hay HIR que ejecutar
-        return
+    assert resultado.phir_path is not None, (
+        "con --run el driver tiene que dejar el .phir listo: "
+        f"estado {resultado.status}, diagnósticos "
+        f"{[d.code for d in resultado.diagnostics]}")
     assert resultado.should_run, "con --run el driver debe señalar que toca ejecutar"
     salida = io.StringIO()
     with redirect_stdout(salida):

@@ -1,0 +1,17 @@
+/- Banco de la VM: LLAMADAS.
+
+ Fibonacci recursivo sin memo: unas 2 * fib(n) llamadas, casi sin trabajo en
+ cada una. Mide lo que cuesta entrar y salir de una funcion: crear el marco,
+ pasar argumentos, devolver.
+-/
+#from io #import stdp
+
+fn fib(int n) -> int {
+    if (n < 2) { return n; };
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() -> int {
+    stdp.println(f"fib(24) = {fib(24)}");
+    return 0;
+}

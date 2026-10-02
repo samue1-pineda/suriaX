@@ -35,10 +35,15 @@ def _forward_argv(argv: list[str]) -> list[str]:
     cuando el usuario está compilando y ejecutando un archivo fuente
     """
     args = argv[1:]
-    has_source = any(not a.startswith("-") for a in args)
-    is_subcommand = any(a in _NON_RUN_FLAGS for a in args)
-    if has_source and not is_subcommand and "--run" not in args:
-        args = args + ["--run"]
+    propios = args[:args.index("--")] if "--" in args else args
+    has_source = any(not a.startswith("-") for a in propios)
+    is_subcommand = any(a in _NON_RUN_FLAGS for a in propios)
+    pide_run = any(a == "--run" or a.startswith("--run=") for a in propios)
+    if has_source and not is_subcommand and not pide_run:
+        # ANTES del '--': lo que va despues es del programa, y un '--run'
+        # ahi era un argumento mas de 'sistema.proceso.argumento(i)'
+        corte = args.index("--") if "--" in args else len(args)
+        args = args[:corte] + ["--run"] + args[corte:]
     return ["V0/main.py", *args]
 
 

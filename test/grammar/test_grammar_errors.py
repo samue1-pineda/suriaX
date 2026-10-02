@@ -218,3 +218,41 @@ def test_entradas_rotas_no_revientan():
                 f"{source!r} produjo una excepción no controlada: "
                 f"{type(exc).__name__}: {exc}"
             ) from exc
+
+
+def test_salir_de_un_finally():
+    """PAR027: 'return', o 'break'/'continue' que salen del 'finally'.
+
+    El 'finally' corre mientras otra salida esta en curso (un return, una
+    excepcion): saltar desde el la reemplazaria en silencio. Un bucle
+    DENTRO del finally si puede usar break/continue: no salen de el.
+    """
+    _assert_code("fn f() -> int { try { return 1; } finally { return 2; }; }",
+                 "PAR027")
+    _assert_code("fn f() -> void { while (true) { try { } finally { break; }; }; }",
+                 "PAR027")
+    _assert_code("fn f() -> void { while (true) { try { } finally { continue; }; }; }",
+                 "PAR027")
+    _assert_clean("fn f() -> void { try { } finally { while (true) { break; }; }; }")
+    _assert_clean("fn f() -> int { try { return 1; } finally { }; }")
+
+
+def test_try_sin_catch_ni_finally():
+    """Un 'try' solo, sin 'catch' ni 'finally', no dice que hacer."""
+    assert _codes("fn f() -> void { try { }; }")
+    _assert_clean("fn f() -> void { try { } finally { }; }")
+
+
+def test_campo_de_receptor_fuera_de_un_with():
+    """PAR028: '.campo' necesita un 'with' de UN valor alrededor."""
+    _assert_code("fn f() -> void { .x = 1; }", "PAR028")
+    _assert_code("fn f() -> void { with (a, b) { .x = 1; }; }", "PAR028")
+    _assert_clean("fn f() -> void { with (v) { .x = 1; .y(); }; }")
+    _assert_clean("fn f() -> void { with (var int a = 1, guardia()) { }; }")
+
+
+def test_with_de_llamada_declara_su_resultado():
+    """'with f(...)' sin la declaracion en el primer argumento no dice que
+    nombre tiene el resultado."""
+    assert _codes("fn f() -> void { with abre(1) { }; }")
+    _assert_clean("fn f() -> void { with abre(var R r, 1) { }; }")

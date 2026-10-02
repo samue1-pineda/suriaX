@@ -46,18 +46,13 @@ def default_config() -> dict:
         "version": 2,
         # target de ejecución. Todos parten del MISMO HIR (el contrato que
         # desacopla el frontend de sus consumidores, ver ARCHITECTURE.md):
-        #   native  -> HIR -> MIR -> VM bytecode/JIT -> objeto/ejecutable
-        #   wasm    -> íd., artefacto .wasm
+        #   native  -> HIR -> MIR -> la VM de C++ (suriax-hir): COMPILADO
+        #   wasm    -> el target web, artefacto .wasm
         #   interp  -> HIR -> intérprete tree-walk en Python (runtime/interpreter/)
-        # El target PRINCIPAL del proyecto es 'interp' (Pre-Alpha: única ruta
-        # que ejecuta), y así viene en el .suriaX_config.yaml del repo. Pero
-        # este DEFAULT en memoria — el fallback cuando NO hay yaml o no se pudo
-        # cargar — se mantiene 'native' a propósito: es el contrato de
-        # "Python pelado" (how_to_run.md secc. 3, tests e2e/stdlib-only), donde
-        # el frontend compila y reporta SIN protobuf. Poner 'interp' aquí
-        # forzaría protobuf en ese camino mínimo. Los flujos que SÍ ejecutan no
-        # dependen de este fallback: el yaml del repo trae 'interp' y
-        # 'python main.py archivo.srcx' fuerza --run.
+        # Por defecto se COMPILA: '--run' (y 'python main.py archivo.srcx',
+        # que lo agrega) ejecuta en la VM. Para interpretar por defecto se
+        # escribe 'target: interp', y '--run compiler|interpreter' manda
+        # sobre el yaml. Sin la VM construida se interpreta con un aviso.
         "target": "wasm" if deps.IS_WEB else "native",  # native | wasm | interp
         "platform": (
             "win32" if deps.IS_WIN32 else "linux" if deps.IS_LINUX else

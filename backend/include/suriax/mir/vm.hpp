@@ -22,8 +22,12 @@
 // excepciones.
 #pragma once
 
+#include <iosfwd>
+
 #include <cstdint>
+#include <map>
 #include <string>
+#include <vector>
 
 #include "suriax/mir/mir.hpp"
 
@@ -58,11 +62,58 @@ struct RunStatus {
 };
 
 // Limite de PASOS: un programa que no termina no puede colgar al que lo
-// ejecuta. Cero = sin limite.
+// ejecuta. Cero = sin limite ('suriax-hir --pasos N').
 inline constexpr std::uint64_t kDefaultStepLimit = 100'000'000;
 
+// Limite de MEMORIA del programa, en bytes ('suriax-hir --memoria-max'): lo
+// que la VM contabiliza de lo que el PROGRAMA crea —los campos de sus
+// objetos y bloques (8 bytes cada uno), los bloques de 'byte' (uno por
+// celda) y el texto de las cadenas que crea al ejecutar—. No es la memoria
+// del proceso: lo que la VM usa para si misma no cuenta, y por eso el limite
+// es el mismo en todos los sistemas. Cero = sin limite (el defecto). Es para
+// maquinas con poca memoria: cortar con un error que dice donde, en vez de
+// que el sistema mate el proceso.
+inline constexpr std::uint64_t kSinLimiteDeMemoria = 0;
+
+// Lo que la VM sabe de su memoria al terminar ('suriax-hir --run --memoria').
+// Un programa que libera todo lo que crea termina con 'vivos == 0'.
+struct Memoria {
+    std::uint64_t creados = 0;
+    std::uint64_t liberados = 0;
+    std::uint64_t vivos = 0;
+    std::uint64_t maximo = 0;       // el pico de objetos vivos a la vez
+    // los BYTES del programa (ver 'kSinLimiteDeMemoria'): los vivos al
+    // terminar y el pico
+    std::uint64_t bytes = 0;
+    std::uint64_t bytes_maximo = 0;
+    // los que quedaron vivos, por tipo ("vector.Vector<int>", "bloque de
+    // Punto", "objeto"): es lo que dice DONDE esta una fuga
+    std::map<std::string, std::uint64_t> vivos_por_tipo;
+    // las CADENAS que el programa crea al ejecutar (concatenar, interpolar,
+    // leer un archivo); las constantes del fuente no cuentan
+    std::uint64_t cadenas_creadas = 0;
+    std::uint64_t cadenas_recogidas = 0;
+    std::uint64_t cadenas_vivas = 0;
+};
+
 // Ejecuta 'program' desde su entrada. No lanza.
+//
+// 'traza': si no es nulo, cada llamada y cada retorno se escriben ahi
+// ("[call] f (profundidad)" / "[ret ] f"), lo mismo que '--trace-exec' en el
+// interprete. Es lo que permite ver POR DONDE va una ejecucion que diverge.
+//
+// 'argumentos': lo que ve 'sistema.argumento(i)'. El 0 es el archivo que se
+// ejecuta, como en el interprete.
+// 'externos': paralelo a 'program.hosts', el simbolo de C++ que cumple
+// cada primitiva ('#extern cpp', ver 'externo.hpp'); nullptr = la cumple la
+// VM. Sin tabla, ninguna la cumple C++.
+using FuncionExterna = void (*)();
 RunStatus run(const Program& program,
-              std::uint64_t step_limit = kDefaultStepLimit);
+              std::uint64_t step_limit = kDefaultStepLimit,
+              std::ostream* traza = nullptr,
+              std::vector<std::string> argumentos = {},
+              Memoria* memoria = nullptr,
+              const std::vector<FuncionExterna>* externos = nullptr,
+              std::uint64_t limite_bytes = kSinLimiteDeMemoria);
 
 }  // namespace suriax::mir

@@ -20,6 +20,7 @@ columna.
    ``HIR``     Emisor del HIR         Al serializar el programa validado.
    ``RT``      Intérprete             Durante la ejecución.
    ``WEB``     Target web             Al preparar y generar WebAssembly.
+   ``ICE``     Interno                En cualquier fase: el que falló es el **compilador**, no el programa.
    ==========  ====================  =============================================================================
 
 Ninguna fase se detiene en el primer problema: acumula todo lo que encuentra y
@@ -218,6 +219,8 @@ PAR — análisis sintáctico
 .. _PAR024-def:
 .. _PAR025-def:
 .. _PAR026-def:
+.. _PAR027-def:
+.. _PAR028-def:
 
 
 .. table::
@@ -251,6 +254,10 @@ PAR — análisis sintáctico
    ``PAR024``  InvalidExternBlockError           Un ``#extern`` mal formado.
    ``PAR025``  ExpressionTooDeepError            Anidamiento por encima del límite.
    ``PAR026``  InvalidLibraryNameError           Un nombre de librería mal formado.
+   ``PAR027``  ExitFromFinallyError              ``return``, o ``break``/``continue`` que salen de un
+                                                 ``finally``: reemplazarían la salida en curso.
+   ``PAR028``  WithReceiverError                 ``.campo`` sin un ``with`` de UN valor alrededor
+                                                 (fuera de un ``with``, o en uno con varios).
    ==========  ================================  ==================================================
 
 .. _ast-errores:
@@ -324,11 +331,15 @@ SEM — semántica
 .. _SEM026-def:
 .. _SEM027-def:
 .. _SEM028-def:
-.. _SEM029-def:
 .. _SEM030-def:
 .. _SEM031-def:
 .. _SEM032-def:
 .. _SEM033-def:
+.. _SEM034-def:
+.. _SEM035-def:
+.. _SEM036-def:
+.. _SEM037-def:
+.. _SEM038-def:
 
 
 .. table::
@@ -364,14 +375,30 @@ SEM — semántica
    ``SEM026``  InfiniteSizeTypeError           Un ``struct`` que se contiene a sí mismo por valor.
    ``SEM027``  TypeArityError                  Un genérico usado con un número de argumentos que no es el suyo.
    ``SEM028``  IncompleteStructLiteralError    Un literal de struct que deja campos sin valor.
-   ``SEM029``  UnsupportedPayloadError         Una variante de ``enum`` que lleva un valor con destructor.
    ``SEM030``  NonExhaustiveMatchError         **Aviso**: un ``match`` sobre un ``enum`` deja variantes sin cubrir.
    ``SEM031``  NotIndexableError               ``x[i]`` sobre un primitivo, que nunca puede declarar ``__index__``.
-   ``SEM032``  ImplicitOwnershipCopyError      Ligar a otro nombre un valor con destructor sin ``move``.
+   ``SEM032``  ImplicitOwnershipCopyError      Ligar a otro nombre —un ``var``, un parámetro por
+                                               valor, una asignación o el campo de un literal— un
+                                               valor con destructor sin ``move``.
    ``SEM033``  ContainerOverflowError          Mas ``push`` seguidos que espacios reservados en la
                                                declaracion (``int vec.Vector v[2];``). Solo cuando la
                                                cuenta no depende de la ejecucion; el resto sigue
                                                fallando en ejecucion.
+   ``SEM034``  ThrowInDestructorError          Un ``throw`` escrito dentro de un ``__free__``: un
+                                               destructor nunca puede lanzar (ver ``RT021``).
+   ``SEM035``  LiteralDivisionByZeroError      ``x / 0`` o ``x % 0`` con un cero entero literal. Un
+                                               divisor que vale cero al ejecutar es ``EXC001``.
+   ``SEM036``  MoveOutOfBorrowError            Ceder (``move``, ``return``, ``throw``) algo con
+                                               destructor a través de un puntero (o un elemento de
+                                               un bloque): es de otro y se destruiría dos veces. Se
+                                               lee con ``&``; un elemento se saca con ``mem.take``.
+   ``SEM037``  DanglingAddressError            ``return &x`` (o ``&x.campo``) con ``x`` local: muere
+                                               al salir y el llamador recibiría un puntero a nada.
+   ``SEM038``  GenericOwnerCopyError           Un genérico que COPIA su ``T`` (``Vector.get``,
+                                               ``v[i]``) instanciado con un tipo con destructor: la
+                                               copia y el original serían dos dueños. Sale en la
+                                               llamada y dice dónde copia; se usa ``at`` (préstamo)
+                                               o ``take``.
    ==========  ==============================  ====================================================
 
 .. _hir-errores:
@@ -431,6 +458,17 @@ RT — ejecución
 .. _RT015-def:
 .. _RT016-def:
 .. _RT017-def:
+.. _RT018-def:
+.. _RT019-def:
+.. _RT020-def:
+.. _RT021-def:
+.. _RT022-def:
+.. _RT023-def:
+
+Un error ``RT`` indica un programa ROTO o una máquina que no puede seguir:
+**siempre** termina el programa (código de salida 70) y **no** se puede
+atrapar con ``catch``. Lo que tiene arreglo dentro del propio programa es una
+excepción ``EXC`` (abajo).
 
 
 .. table::
@@ -451,12 +489,96 @@ RT — ejecución
    ``RT010``   StepLimitError                  Se alcanzó el límite de pasos de ejecución.
    ``RT011``   UnsupportedNodeError            Un nodo que el intérprete aún no ejecuta.
    ``RT012``   InvalidCastRuntimeError         Conversión sin par registrado en runtime.
-   ``RT013``   IndexOutOfRangeError            Índice fuera de rango.
+   ``RT013``   —                               Retirado: ahora es ``EXC002``.
    ``RT014``   NotIndexableError               Indexación sobre algo que no la admite.
    ``RT015``   CorruptMemoryHandleError        El backend de memoria recibió un handle inválido.
-   ``RT016``   DivisionByZeroError             ``a / 0`` o ``a % 0``.
+   ``RT016``   —                               Retirado: ahora es ``EXC001``.
    ``RT017``   MissingReturnError              Una función con tipo de retorno terminó sin devolver un valor.
+   ``RT019``   StackOverflowError              Desbordamiento de pila: demasiadas llamadas anidadas
+                                               (casi siempre, una recursión sin caso base). El límite
+                                               lo pone la pila de Python y depende de cuánto anida
+                                               cada función.
+   ``RT020``   UncaughtThrowError              Un ``throw`` escapó de todo ``try``/``catch`` y terminó el
+                                               programa, con el valor lanzado.
+   ``RT021``   DestructorThrewError            Un ``__free__`` lanzó (casi siempre llamando a algo
+                                               que lanza): un destructor nunca puede lanzar. Si ya
+                                               había un ``throw`` subiendo, habría dos a la vez.
+   ``RT022``   FinallyThrewError               Un ``finally`` lanzó mientras ya subía otra excepción:
+                                               habría dos a la vez y la primera se perdería. Sin otra
+                                               en vuelo, un ``throw`` en el ``finally`` es uno más.
+   ``RT023``   MemoryLimitError                El programa pasó la memoria máxima que se le dio a la VM
+                                               (``suriax-hir --memoria-max``): sus objetos, bloques y
+                                               cadenas, contados por la VM, después de recoger las
+                                               cadenas que ya nadie usa. El intérprete no tiene ese
+                                               límite.
    ==========  ==============================  ====================================================
+
+.. _exc-errores:
+
+EXC — excepciones del runtime (se pueden atrapar)
+--------------------------------------------------
+
+.. _EXC001-def:
+.. _EXC002-def:
+.. _EXC003-def:
+.. _EXC004-def:
+.. _EXC005-def:
+
+Una operación sin resultado posible no mata el programa: el runtime **lanza**
+un valor, y el ``try`` más cercano lo recibe igual que un ``throw`` del
+usuario. Los tipos están en la librería estándar ``excepciones``, y cada uno
+trae ``mensaje``, ``linea`` y ``columna``:
+
+.. code-block:: srcx
+
+   #from io #import stdp
+   #import excepciones as exc
+
+   fn main() -> int {
+       var int cero = 0;
+       try { stdp.println(f"{10 / cero}"); }
+       catch (exc.DivisionPorCero e) { stdp.println(e.mensaje); };
+       return 0;
+   }
+
+La misma librería es el **repertorio** de excepciones de suriaX, como el de
+Python: además de las que lanza el runtime trae las de uso general, para que
+el programa las lance sin inventar un tipo por cada error común —
+``ValorInvalido`` (``ValueError``), ``NoEncontrado`` (``KeyError``),
+``NoImplementado`` (``NotImplementedError``) y ``EstadoInvalido``
+(``RuntimeError``)—. Estas solo llevan ``mensaje``:
+``throw exc.ValorInvalido{ mensaje: "edad negativa" };``.
+
+``catch (e)`` sin tipo también las atrapa, sin importar la librería. Si nadie
+las atrapa, el programa termina con ``excepción no capturada — EXCxxx`` y el
+código de salida 70. La serie ``test/e2e/excepciones/`` (programas 13 y 14)
+las muestra en uso.
+
+.. table::
+   :widths: auto
+
+   ==========  ========================================  ================================================
+   Código      Tipo que se atrapa                        Cuándo
+   ==========  ========================================  ================================================
+   ``EXC001``  ``excepciones.DivisionPorCero``           ``a / b`` o ``a % b`` entre enteros con ``b``
+                                                         igual a cero al ejecutar (con ``float`` no:
+                                                         IEEE-754 da ``inf``/``nan``). Antes ``RT016``.
+   ``EXC002``  ``excepciones.IndiceFueraDeRango``        ``v[i]`` o un acceso a memoria con ``i`` fuera
+                                                         de ``[0, tamaño)``. Se comprueba antes de
+                                                         acceder: el programa puede seguir. Antes
+                                                         ``RT013``.
+   ``EXC003``  ``excepciones.ErrorDeArchivo``            Una operación de archivo de ``sistema`` que no
+                                                         se pudo hacer: no existe, es una carpeta, no es
+                                                         UTF-8, falta permiso. El mensaje nombra la ruta
+                                                         y es el mismo en todas las máquinas.
+   ``EXC004``  ``excepciones.ConversionInvalida``        Un texto que no se puede convertir:
+                                                         ``text.parse_int("12a")``,
+                                                         ``text.parse_float(".5")``, un número que no
+                                                         cabe, o unos bytes que no son UTF-8
+                                                         (``text.from_bytes``).
+   ``EXC005``  ``excepciones.DesplazamientoInvalido``    ``x << n`` o ``x >> n`` con ``n`` fuera de
+                                                         ``[0, 64)``: con 64 bits no hay resultado.
+   ==========  ========================================  ================================================
 
 .. _web-errores:
 
@@ -514,6 +636,59 @@ traduce**.
      - Nodo del HIR sin variante
      - Lector
 
+.. _ice-errores:
+
+ICE — error interno del compilador
+-----------------------------------
+
+Todos los demás códigos dicen que el **programa** está mal. ``ICE000`` dice lo
+contrario: el programa pudo estar bien y el que falló es el compilador —una
+excepción de Python que ninguna fase esperaba—. Mezclar los dos es el peor
+error posible en un compilador educativo: quien aprende buscaría en su código
+un fallo que no existe.
+
+Por eso tiene su propio **código de salida, 6** (distinto del ``1`` de "hay
+errores"), y se muestra como lo mostraría Python: primero el traceback de la
+excepción original —dónde falló dentro del compilador y por qué— y después la
+fase y el archivo que se procesaba. No señala una línea del fuente, porque no
+ocurrió en ninguna.
+
+.. code-block:: text
+
+   Traceback (most recent call last):
+     File ".../V0/src/frontend/semantic/scope_resolver.py", line 812, in visit_expr
+       tipo = self.tabla[nombre]
+              ~~~~~~~~~~^^^^^^^^
+   KeyError: 'x'
+
+   ICE000: error interno del compilador en la fase 'semantica'
+     procesando: prog.srcx
+     esto es un fallo del compilador, no de tu programa
+
+.. _ICE000-def:
+
+.. table::
+   :widths: auto
+
+   ==========  ==============================  ====================================================
+   Código      Clase                           Cuándo
+   ==========  ==============================  ====================================================
+   ``ICE000``  InternalCompilerError           El compilador lanzó una excepción que ninguna fase
+                                               esperaba. Es un bug: repórtalo con el archivo y la
+                                               traza (``--debug`` la guarda en ``dumps/``).
+   ==========  ==============================  ====================================================
+
+**Un ICE es un comportamiento indefinido (UB) del compilador.** Cada programa
+que se sabe que hoy termina en ``ICE000`` se documenta en el catálogo de UB de
+``c_errorstfix.md`` (en la raíz del repositorio), junto al error propio que
+debería producir. Cuando ese error existe, el caso sale del catálogo: el
+objetivo es que la lista de ICE conocidos se vaya vaciando. Así pasó con la
+recursión infinita, que era un ICE y hoy es ``RT019``.
+
+En el canal del editor (``--emit-diagnostics``) llega como un diagnóstico más,
+en la línea 1, con la excepción y el sitio del compilador en el mensaje;
+``SURIAX_ICE_TRACEBACK=1`` añade la traza completa.
+
 .. _severidad:
 
 Severidad
@@ -528,5 +703,6 @@ Severidad
    ``critical``    Impide continuar con el resultado de esa fase.
    ``warning``     No detiene la compilación.
    ``note``        Información: el linker resolvió algo, un archivo se cargó.
-   ``panic``       Error interno del compilador.
+   ``panic``       Violaciones de memoria (use-after-free/move, doble free/move) y
+                   errores internos del compilador (``ICE000``).
    ==============  ==========================================================

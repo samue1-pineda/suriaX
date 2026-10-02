@@ -1,0 +1,85 @@
+# Empaquetado del comando 'suri' (tooling de suriniX).
+#
+# Lo que se instala es el ENVOLTORIO ('suri/'), no el compilador: 'suri' busca
+# 'V0/main.py' en SURIAX_ROOT, en la raiz del repositorio o en el directorio
+# actual (ver 'suri/command.py'). Por eso la instalacion prevista es EDITABLE,
+# desde el clon:
+#
+#     pip install -e .
+#     suri archivo.srcx            # compila y ejecuta
+#     suri --run archivo.srcx      # lo mismo, explicito
+#
+# Una instalacion no editable ('pip install .') deja el comando fuera del
+# repositorio: funciona solo con SURIAX_ROOT apuntando al clon.
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "suriax"
+# La version NO se escribe aqui: se lee de 'version.py', su fuente unica (la
+# misma que usan CMake, la documentacion, '--version' y el release). Un numero
+# escrito a mano en este archivo seria el tercero en desincronizarse.
+dynamic = ["version"]
+description = "suriaX: un compilador educativo que muestra lo que entrega cada fase"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Samuel Pineda" }]
+# El compilador corre con la biblioteca estandar de Python. Lo opcional
+# (pyyaml, protobuf, pybind11) esta en 'requirements.txt', para desarrollo.
+dependencies = []
+
+[project.scripts]
+suri = "suri.command:main"
+
+[project.urls]
+Repository = "https://github.com/samue1-pineda/suriaX"
+Documentation = "https://samue1-pineda.github.io/suriaX/"
+
+[tool.setuptools]
+packages = ["suri"]
+
+[tool.setuptools.dynamic]
+version = { attr = "version.VERSION" }
+
+# ---------------------------------------------------------------------------
+# Calidad (docs/quality): la configuración de las herramientas vive aquí y en
+# '.flake8' / '.clang-tidy'; los scripts que las corren, en docs/quality/tools.
+# NADA de esto corre con 'test/main.py'. Mismo largo de línea en las tres
+# (99, el máximo que PEP 8 acepta por acuerdo del equipo).
+# ---------------------------------------------------------------------------
+
+[tool.black]
+# solo se usa para MEDIR ('black --check'): el código no se reformatea
+line-length = 99
+target-version = ["py310"]
+extend-exclude = "(/build[^/]*/|/web/|/node_modules/|/V0/src/HIR/gen/|/suriax-[^/]*/)"
+
+[tool.pylint.main]
+ignore-patterns = ["^suriax-.*"]
+ignore-paths = ["^build.*", "^web/.*", ".*/node_modules/.*", "^V0/src/HIR/gen/.*"]
+jobs = 0
+py-version = "3.10"
+
+[tool.pylint.format]
+max-line-length = 99
+
+[tool.pydocstyle]
+# PEP 257 tal cual (sin las convenciones de numpy o google)
+convention = "pep257"
+match-dir = "^(?!(__pycache__|build.*|web|node_modules|gen|suriax-.*)$).*"
+
+[tool.coverage.run]
+# el compilador y sus dos motores de Python; la suite corre casi todo en
+# SUBPROCESOS (la CLI), por eso 'patch = subprocess'
+source = ["V0", "runtime", "htims", "config", "suri"]
+omit = ["*/__pycache__/*", "V0/src/HIR/gen/*"]
+branch = true
+parallel = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+skip_empty = true

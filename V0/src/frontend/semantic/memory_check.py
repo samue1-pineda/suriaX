@@ -102,6 +102,18 @@ def _fin_de_ancestro(muertos: _Muertos, path: str) -> Optional[_Fin]:
         prefix = prefix[:cut]
 
 
+def _sale(statements) -> bool:
+    """¿El bloque termina SALIENDO (``return`` o ``throw``)? Entonces lo que
+    movio no llega a la sentencia siguiente: por ese camino no hay siguiente.
+
+    Sin esto, ``if (b) { throw r; }; usa(r);`` era SEM004: la union
+    conservadora del ``if`` sumaba el ``move`` de una rama que no continua.
+    (``break``/``continue`` no cuentan: su camino sigue despues del bucle.)
+    """
+    return bool(statements) and isinstance(
+        statements[-1], (ast.ReturnStmt, ast.ThrowStmt))
+
+
 def _revive(muertos: _Muertos, base: str) -> None:
     """Un binding/valor NUEVO en ``base`` lo revive junto con sus descendientes
     (reasignar ``o`` revive ``o.it``; reasignar ``o.it`` revive ``o.it.v``)."""
@@ -168,8 +180,12 @@ class _PropiedadChecker:
                 else:
                     self.check_block(branch.statements, else_muertos)
             # union conservadora: movido en ALGUNA rama => movido despues
-            muertos.update(then_muertos)
-            muertos.update(else_muertos)
+            # (salvo en una rama que sale: por ella no hay "despues")
+            if not _sale(stmt.then_block.statements):
+                muertos.update(then_muertos)
+            if branch is None or isinstance(branch, ast.IfStmt) \
+                    or not _sale(branch.statements):
+                muertos.update(else_muertos)
         elif cls is ast.WhileStmt:
             self.check_expr(stmt.condition, muertos)
             self.check_block(stmt.body.statements, muertos)  # una sola pasada
@@ -205,13 +221,27 @@ class _PropiedadChecker:
             # el try y el catch son caminos alternativos: cada uno parte del
             # 'muertos' de entrada (copia) y al cerrar se unen conservadoramente
             # (mismo criterio que if/else).
+            # El catch parte de la ENTRADA del try, no de su final: el throw
+            # pudo saltar antes de cualquier 'move' del try. Partir del final
+            # (como se hacia) rechazaba un programa valido —'try {
+            # verifica(); toma(move r); } catch (int e) { usa r }'— con
+            # SEM004; si el move si ocurrio, lo caza la ejecucion (RT001).
+            entrada = dict(muertos)
             try_muertos = dict(muertos)
             self.check_block(stmt.try_block.statements, try_muertos)
             muertos.update(try_muertos)
             for clausula in stmt.catches:
-                rama = dict(muertos)
+                rama = dict(entrada)
+                # 'catch (R r)' liga un valor NUEVO (el lanzado), como un
+                # 'var': revive el nombre. Sin esto, 'throw move r;' dentro
+                # del try dejaba el 'r' del catch "movido" (SEM004 falso).
+                _revive(rama, clausula.name)
                 self.check_block(clausula.block.statements, rama)
                 muertos.update(rama)
+            # el 'finally' corre despues de CUALQUIERA de los caminos: parte
+            # de su union (lo que cualquiera pudo haber movido)
+            if stmt.finally_block is not None:
+                self.check_block(stmt.finally_block.statements, muertos)
         # Break/Continue/ImportBinding: sin expresiones que verificar
 
     # ------------------------------------------------------------------ #

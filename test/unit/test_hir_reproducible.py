@@ -28,7 +28,7 @@ for _p in (_REPO_ROOT, _V0):
         sys.path.insert(0, _p)
 
 sys.path.insert(0, os.path.join(_REPO_ROOT, "test"))
-from helpers import lex  # noqa: E402
+from helpers import lex, omitir  # noqa: E402
 
 _PROGRAMA = """
 struct { int x; int y; } Punto;
@@ -114,7 +114,7 @@ def test_dos_procesos_emiten_los_mismos_bytes():
     huellas = set()
     for _ in range(3):
         out = subprocess.run([sys.executable, "-c", script], capture_output=True,
-                             text=True, timeout=120)
+                             text=True, encoding="utf-8", errors="replace", timeout=120)
         assert out.returncode == 0, out.stderr
         huellas.add(out.stdout.strip())
     assert len(huellas) == 1, (
@@ -137,32 +137,58 @@ def test_el_codec_propio_coincide_con_google_protobuf():
     (este codec sí lo fija, por clave). Lo que tiene que coincidir es el
     mensaje.
 
-    Se SALTA si la librería o el stub generado no están — que es justamente
-    el punto de haberlos quitado: el proyecto ya no los necesita para
-    funcionar, solo para esta comprobación cruzada.
+    La referencia se genera AQUÍ, con ``protoc``, en un temporal: el proyecto
+    ya no genera stubs (ver ``src/HIR/stubs.py``). Antes esta prueba buscaba
+    el stub en ``V0/src/HIR/gen/``, que nada volvió a crear, y hacía
+    ``return`` — así que "pasaba" en todas partes, también en la CI, sin
+    haber comparado nunca un byte.
+
+    Se OMITE (visible, con el motivo) si falta ``google.protobuf`` o
+    ``protoc``: el compilador no los necesita, solo esta comprobación.
     """
     import importlib.util
+    import shutil
+    import subprocess
+    import tempfile
 
-    if importlib.util.find_spec("google.protobuf") is None:
-        return
-    stub = os.path.join(_REPO_ROOT, "V0", "src", "HIR", "gen", "hir_pb2.py")
-    if not os.path.isfile(stub):
-        return
-
-    spec = importlib.util.spec_from_file_location("hir_pb2_real", stub)
-    real = importlib.util.module_from_spec(spec)
-    sys.modules.setdefault("hir_pb2_real", real)
     try:
-        spec.loader.exec_module(real)
-    except Exception:
-        return          # gencode y runtime incompatibles: no es lo que se prueba
+        import google.protobuf  # noqa: F401
+    except ImportError:
+        omitir("google.protobuf no está instalado (pip install protobuf): es "
+               "la referencia independiente contra la que se compara el codec")
+    protoc = shutil.which("protoc")
+    if protoc is None:
+        omitir("protoc no está en el PATH: hace falta para generar desde "
+               "hir.proto el descriptor de referencia")
 
-    nuestros, _modulo = _emitir()
-    a = real.Module()
-    a.ParseFromString(nuestros)                  # falla si los bytes no valen
-    b = real.Module()
-    b.ParseFromString(a.SerializeToString(deterministic=True))
-    assert a == b, "protobuf no reconstruye el mismo mensaje desde nuestros bytes"
+    proto = os.path.join(_V0, "src", "HIR", "proto", "hir.proto")
+    with tempfile.TemporaryDirectory(prefix="suriax-pb2-") as tmp:
+        gen = subprocess.run(
+            [protoc, f"--proto_path={os.path.dirname(proto)}",
+             f"--python_out={tmp}", proto],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+        assert gen.returncode == 0, (
+            f"protoc no pudo compilar {proto} (exit {gen.returncode}):\n"
+            f"{gen.stderr}")
+
+        stub = os.path.join(tmp, "hir_pb2.py")
+        spec = importlib.util.spec_from_file_location("hir_pb2_real", stub)
+        real = importlib.util.module_from_spec(spec)
+        sys.modules["hir_pb2_real"] = real
+        try:
+            spec.loader.exec_module(real)
+        except Exception as exc:  # noqa: BLE001 - se omite CON la causa
+            # un protoc y un google.protobuf de versiones que se rechazan
+            # entre sí: es un problema de la máquina, no del codec.
+            omitir(f"el stub que generó {protoc} no carga con este "
+                   f"google.protobuf ({type(exc).__name__}: {exc})")
+
+        nuestros, _modulo = _emitir()
+        a = real.Module()
+        a.ParseFromString(nuestros)                  # falla si los bytes no valen
+        b = real.Module()
+        b.ParseFromString(a.SerializeToString(deterministic=True))
+        assert a == b, "protobuf no reconstruye el mismo mensaje desde nuestros bytes"
 
 
 def test_el_emisor_es_el_unico_que_serializa():

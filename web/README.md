@@ -1,7 +1,7 @@
 # Backend web de suriaX
 
 Target **WebAssembly**, con el módulo **JS/TS** como host. A diferencia del
-backend C++ —que baja el HIR a MIR y de ahí a LLVM IR— este consume el
+backend C++ —que baja el HIR a MIR y lo ejecuta en una VM de registros— este consume el
 **mismo `.phir`** y baja a WASM por su propio IR. No hay LLVM en medio: el HIR
 es la única frontera compartida.
 
@@ -310,9 +310,9 @@ Tres niveles, y cada uno cubre lo que los otros no pueden:
    ejecutado por el intérprete, por el WebAssembly y por el JS tiene que dar
    la misma salida y el mismo valor. Ya encontró dos fallos reales.
 
-Los `.phir` de [`test/fixtures/`](test/fixtures/) son **bytes reales**
+Los `.phir` de [`test/web/fixtures/`](../test/web/fixtures/) son **bytes reales**
 emitidos por el compilador Python a partir de
-[`prog.srcx`](test/fixtures/prog.srcx); se regeneran con
+[`prog.srcx`](../test/web/fixtures/prog.srcx); se regeneran con
 `python V0/main.py prog.srcx --emit-hir`. Probar el lector solo contra un
 codificador propio no demostraría nada: los fixtures son la prueba de que
 entiende el formato de verdad.
@@ -326,4 +326,4 @@ entiende el formato de verdad.
   parameter properties — `erasableSyntaxOnly` lo impone.
 - `web/node.d.ts` declara a mano lo poquito que el CLI y las pruebas usan de
   node, en vez de arrastrar `@types/node`.
-- [`.web/`](../.web/) es para dumps y caché del compilador web, no para código.
+- `.web/` (en la raíz, ignorada por git) es para dumps y caché del compilador web, no para código.

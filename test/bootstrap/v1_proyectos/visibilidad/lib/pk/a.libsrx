@@ -1,0 +1,6 @@
+public struct { int v; } A;
+private hook fn __free__(A ptr a) -> void { }
+private fn secreto() -> int { return 1; }
+internal fn interno() -> int { return 2; }
+public fn crea() -> A { return A{ v: secreto() + interno() }; }
+#export as a

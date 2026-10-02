@@ -1,0 +1,121 @@
+/- frontend.directivas — `#import`, `#from`, `#export` (`V0/.../directives.py`).
+
+     import_dir = "#import" lib_name [ "as" NAME ] [ ";" ]
+     from_dir   = "#from" lib_name "#import" NAME [ "as" NAME ] [ ";" ]
+     export_dir = "#export" ( [ "as" ] NAME | "package" "as" NAME ) [ ";" ]
+     lib_name   = NAME { "." NAME }
+
+ `as` y `package` no son palabras reservadas: son nombres que el parser
+ compara por su texto. `#extern cpp { ... }` queda fuera del bootstrap: su
+ cuerpo es C++ crudo, que el lexer de suriaX todavía no captura.
+-/
+
+#import frontend.tokens as tk
+#import frontend.cursor as cu
+
+public fn directiva(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.actual(p);
+    var str nombre = cu.sin_prefijo(t);
+    if (nombre == "import") { return importa(p); }
+    if (nombre == "export") { return exporta(p); }
+    if (nombre == "from") { return desde(p); }
+    if (nombre == "extern") {
+        cu.falla("PAR024", "'#extern cpp' no esta soportado por el parser del bootstrap",
+                 t.linea, t.col);
+    }
+    if (nombre == "test") {
+        cu.falla("PAR020", "la directiva '#test' debe ser el PRIMER elemento del archivo",
+                 t.linea, t.col);
+    }
+    cu.falla("PAR020", f"directiva '#{nombre}' no valida en esta posicion", t.linea, t.col);
+    return -1;
+}
+
+/- `as <alias>` si está (`as` se compara por su texto). -/
+fn alias(cu.Parser ptr mutable p) -> str {
+    var tk.Token t = cu.actual(p);
+    if (t.tipo == tk.TType.IDENTIFIER and t.lexema == "as") {
+        cu.avanza(p);
+        return cu.exige(p, tk.TType.IDENTIFIER).lexema;
+    }
+    return "";
+}
+
+/- Un componente del nombre de una librería. Si es una palabra reservada
+   el error lo dice, en vez del genérico "se esperaba IDENTIFIER". -/
+fn nombre_de_modulo(cu.Parser ptr mutable p) -> str {
+    var tk.Token t = cu.actual(p);
+    if (t.tipo != tk.TType.IDENTIFIER and tk.palabra_clave(t.lexema) != tk.TType.IDENTIFIER) {
+        cu.falla("PAR026", f"'{t.lexema}' es una palabra reservada del lenguaje y no puede nombrar un modulo; renombra el alias de su '#export'",
+                 t.linea, t.col);
+    }
+    return cu.exige(p, tk.TType.IDENTIFIER).lexema;
+}
+
+fn nombre_de_libreria(cu.Parser ptr mutable p) -> str {
+    var str r = nombre_de_modulo(p);
+    while (cu.es(p, tk.TType.DOT)) {
+        cu.avanza(p);
+        r = r + "." + nombre_de_modulo(p);
+    }
+    return r;
+}
+
+public fn importa(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.DIRECTIVE);
+    var str lib = nombre_de_libreria(p);
+    var str a = alias(p);
+    cu.acepta(p, tk.TType.SEMICOLON);
+    var int n = cu.nodo_en(p, "ImportDirective", t);
+    cu.texto(p, n, "lib", lib);
+    if (a != "") { cu.texto(p, n, "alias", a); }
+    return n;
+}
+
+fn exporta(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.DIRECTIVE);
+    var tk.Token nombre = cu.exige(p, tk.TType.IDENTIFIER);
+    var bool paquete = false;
+    if (nombre.lexema == "package") {
+        var tk.Token como = cu.exige(p, tk.TType.IDENTIFIER);
+        if (como.lexema != "as") {
+            cu.falla("PAR020", "se esperaba 'as <alias>' tras '#export package'", como.linea, como.col);
+        }
+        paquete = true;
+        nombre = cu.exige(p, tk.TType.IDENTIFIER);
+    } else if (nombre.lexema == "as") {
+        nombre = cu.exige(p, tk.TType.IDENTIFIER);
+    }
+    cu.acepta(p, tk.TType.SEMICOLON);
+    var int n = cu.nodo_en(p, "ExportDirective", t);
+    cu.texto(p, n, "alias", nombre.lexema);
+    if (paquete) { cu.crudo(p, n, "package", "true"); }
+    return n;
+}
+
+public fn desde(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.exige(p, tk.TType.DIRECTIVE);
+    var str lib = nombre_de_libreria(p);
+    var tk.Token importa_tok = cu.exige(p, tk.TType.DIRECTIVE);
+    if (cu.sin_prefijo(importa_tok) != "import") {
+        cu.falla("PAR020", "se esperaba '#import' tras '#from <lib>'", importa_tok.linea, importa_tok.col);
+    }
+    var tk.Token nombre = cu.exige(p, tk.TType.IDENTIFIER);
+    if (cu.es(p, tk.TType.DOT)) {
+        var tk.Token punto = cu.actual(p);
+        var tk.Token miembro = cu.mira(p, 1);
+        var str sugerido = "<miembro>";
+        if (miembro.tipo == tk.TType.IDENTIFIER) { sugerido = miembro.lexema; }
+        cu.falla("PAR020", f"'#from {lib} #import {nombre.lexema}.{sugerido}': el miembro que se trae no lleva el modulo delante, que ya lo dijo el '#from'. Escribe '#from {nombre.lexema} #import {sugerido}' si '{nombre.lexema}' es el modulo, o '#import {lib}.{nombre.lexema}' para traerlo entero",
+                 punto.linea, punto.col);
+    }
+    var str a = alias(p);
+    cu.acepta(p, tk.TType.SEMICOLON);
+    var int n = cu.nodo_en(p, "FromDirective", t);
+    cu.texto(p, n, "lib", lib);
+    cu.texto(p, n, "name", nombre.lexema);
+    if (a != "") { cu.texto(p, n, "alias", a); }
+    return n;
+}
+
+#export as directivas

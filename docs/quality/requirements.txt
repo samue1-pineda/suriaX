@@ -1,0 +1,7 @@
+# Herramientas de calidad (docs/quality). NO son dependencias del compilador:
+# solo las usa docs/quality/tools/quality.py.
+flake8>=7
+black>=24
+pylint>=3
+pydocstyle>=6.3
+coverage>=7.10    # 'patch = subprocess' (mide los subprocesos de la suite)

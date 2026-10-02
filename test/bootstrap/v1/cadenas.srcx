@@ -1,0 +1,13 @@
+struct { int x; int y; } P;
+
+fn main() -> int {
+    var str s = "ab" + "cd";
+    var int n = 42;
+    var float f = 3.5;
+    var P p = P{ x: 1, y: 2 };
+    var str t = f"n={n} f={f:.2f} hex={n:x} r={s!r} p={p} {{lit}}";
+    var char c = s[1];
+    var int l = len(s);
+    var str u = cast<str>(n) + cast<str>(c);
+    return l + len(t) + len(u);
+}

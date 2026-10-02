@@ -50,6 +50,26 @@ def test_ligar_un_struct_lo_copia():
         "};", "1 99\n")
 
 
+def test_asignar_un_struct_lo_copia():
+    """``b = a`` (y ``e.dentro = c``) tampoco pueden dejar dos dueños del
+    mismo objeto: antes solo copiaba la declaración, y la asignación
+    compartía."""
+    assert_output(
+        _W + "struct { int v; } Caja;\n"
+        "struct { Caja dentro; } Par;\n"
+        "fn main() -> int {\n"
+        "    var Caja a = Caja{ v: 1 };\n"
+        "    var Caja b = Caja{ v: 0 };\n"
+        "    b = a;\n"
+        "    b.v = 99;\n"
+        "    var Par e = Par{ dentro: Caja{ v: 0 } };\n"
+        "    e.dentro = a;\n"
+        "    e.dentro.v = 7;\n"
+        '    __write__(f"{a.v} {b.v} {e.dentro.v}\\n");\n'
+        "    return 0;\n"
+        "};", "1 99 7\n")
+
+
 def test_un_parametro_por_valor_no_muta_al_llamador():
     """Si mutar un parámetro por valor tocara al llamador, ``ptr mutable`` no
     tendría sentido: bastaría pasar el struct para escribir donde no se debe."""
@@ -119,7 +139,7 @@ def test_dividir_por_cero_es_un_diagnostico():
         '    __write__(f"{10 / cero}\\n");\n'
         "    return 0;\n"
         "};", args=["--run"])
-    assert "RT016" in err, err
+    assert "EXC001" in err, err   # antes RT016: ahora se puede atrapar
     assert "Traceback" not in err, err
 
 
@@ -229,10 +249,24 @@ def test_el_cociente_y_el_resto_se_sostienen_mutuamente():
         "};", "-7\n7\n")
 
 
+def test_dividir_por_un_cero_LITERAL_no_compila():
+    """'x / 0' escrito: el texto ya dice que no hay resultado (SEM035). Lo
+    que se atrapa (EXC001) es el divisor que vale cero AL EJECUTAR. Un
+    '0.0' no cuenta: entre float, IEEE-754 si tiene respuesta."""
+    code, out, err = run_program(
+        _W + "fn main() -> int {\n"
+        "    var int a = 7 / 0;\n"
+        "    var int b = 7 % 0;\n"
+        "    var float f = 1.0 / 0.0;\n"
+        "    return 0;\n"
+        "};")
+    assert code != 0 and err.count("SEM035") == 2, (out, err)
+
+
 def test_dividir_por_cero_entre_FLOTANTES_no_es_un_error():
     """IEEE-754 sí tiene respuesta: ``1.0 / 0.0`` es ``+inf``.
 
-    El intérprete lanzaba RT016 mirando solo si el divisor valía cero, sin
+    El intérprete lanzaba el error (hoy EXC001) mirando solo si el divisor valía cero, sin
     mirar el TIPO, así que inventaba un error donde el target web —y cualquier
     FPU— daba un valor. Entre enteros no hay respuesta y el error se queda.
     """
@@ -257,7 +291,7 @@ def test_dividir_por_cero_entre_ENTEROS_sigue_siendo_un_error():
         '    __write__(f"{a / b}\\n");\n'
         "    return 0;\n"
         "};")
-    assert "RT016" in err, (out, err)
+    assert "EXC001" in err, (out, err)
 
 
 # --------------------------------------------------------------------------- #
@@ -288,3 +322,42 @@ def test_un_literal_que_no_cabe_en_int_es_un_error_con_su_posicion():
              "return 0; };")
     assert "AST006" in err, (out, err)
     assert "no cabe en 'int'" in err
+
+
+def test_una_recursion_sin_caso_base_es_RT019_y_no_un_error_interno():
+    """Agotaba la pila de Python y salía como ICE000 ("no es un fallo de tu
+    programa") cuando la causa estaba en el programa."""
+    code, out, err = run_source(
+        _W + "fn sin_fin(int n) -> int { return sin_fin(n + 1); };\n"
+        "fn main() -> int { return sin_fin(0); };", args=["--run"])
+    assert code == 70, (code, err)
+    assert "RT019" in err, err
+    assert "sin_fin" in err, err
+    assert "Traceback" not in err and "ICE000" not in err, err
+
+
+def test_el_desbordamiento_se_reporta_aunque_el_cuerpo_anide_mucho():
+    """Un cuerpo con bloques anidados gasta más pila de Python por llamada:
+    el límite llega antes, pero el error tiene que ser el mismo."""
+    code, _out, err = run_source(
+        _W + "fn g(int n) -> int {\n"
+        "    var int i = 0;\n"
+        "    while (i < 1) {\n"
+        "        if (n >= 0) { return g(n + 1) + 1; };\n"
+        "    };\n"
+        "    return 0;\n"
+        "};\n"
+        "fn main() -> int { return g(0); };", args=["--run"])
+    assert code == 70, (code, err)
+    assert "RT019" in err, err
+
+
+def test_una_recursion_profunda_pero_finita_sigue_funcionando():
+    """El otro lado: la guarda no puede cortar recursiones legítimas."""
+    assert_output(
+        _W + "fn suma(int n) -> int {\n"
+        "    if (n == 0) { return 0; };\n"
+        "    return n + suma(n - 1);\n"
+        "};\n"
+        'fn main() -> int { __write__(f"{suma(200)}\\n"); return 0; };',
+        "20100\n")

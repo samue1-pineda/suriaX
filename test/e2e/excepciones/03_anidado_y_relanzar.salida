@@ -1,0 +1,13 @@
+-- el interno atrapa, el externo no se entera
+  interno 1
+  sigue dentro del externo
+-- relanzar el mismo valor
+  interno ve 2 y lo relanza
+  externo 2
+-- relanzar convertido a otro tipo
+  error numero 404
+-- tres niveles: el del medio filtra y relanza
+  medio 3.5
+  externo sube
+-- un throw dentro de un catch no lo atrapa su propio try
+  externo 2

@@ -1,0 +1,14 @@
+#import calc
+#import geo.punto as pt
+#from geo.dist #import distancia
+#from io #import stdp
+
+fn main() -> int {
+    var calc.Par par = calc.par(3);
+    const calc.Signo s = calc.Signo.NEG;
+    var pt.Punto a = pt.crea("a", 1);
+    var pt.Punto b = pt.crea("b", calc.BASE);
+    pt.crea("tirado", 0);
+    stdp.println("hola");
+    return distancia(&a, &b) + calc.suma(par.a, par.b);
+}

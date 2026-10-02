@@ -1,4 +1,4 @@
-"""``decorator_decl`` GENERALIZADO (EBNF secc. 1).
+"""``decorator_decl`` GENERALIZADO (EBNF).
 
 ::
     decorator_decl = "@" IDENTIFIER [ "(" [ arg_list ] ")" ]
@@ -123,6 +123,10 @@ def _parse_impl_block(cursor: Cursor, ctx: ParserContext,
         # marcar como método: dunder de nombre llano (owner = 1er param).
         method.dunder = method.name
         method.specifier = "dunder"
+        # los parametros del '@impl Vector<T>' viajan con el metodo al HIR
+        # (FunctionDecl.type_params); van APARTE de los propios para no
+        # cambiar lo que la Semantica ve de la firma
+        method.impl_type_params = list(type_params)
         methods.append(method)
     cursor.expect(TokenType.R_BRACE)
     cursor.match(TokenType.SEMICOLON)  # ';' final opcional

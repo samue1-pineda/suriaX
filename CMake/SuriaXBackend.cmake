@@ -1,5 +1,5 @@
 # =============================================================================
-# SuriaXBackend — el mundo C++ del backend: hoy, el lector del HIR.
+# SuriaXBackend — el mundo C++ del backend: lector del HIR, MIR y VM.
 #
 # Es la segunda ruta de build del repositorio, y existe porque la primera no
 # servia: `SuriaXDiscover` arma modulos de Python (pybind11) y deduce su
@@ -7,14 +7,13 @@
 # Python — es una libreria C++ y un ejecutable — asi que forzarlo por ahi
 # habria significado inventarle un binding que nadie usa.
 #
-# La dependencia nueva es protobuf (libprotobuf + protoc), y es la del
-# esquema: el `.proto` sigue siendo la fuente unica y los stubs C++ se
-# generan EN BUILD, igual que los de Python en `V0/src/HIR/stubs.py`. No se
-# commitean.
+# No tiene dependencias externas: el HIR se lee con un modelo GENERADO desde
+# el `.proto` (backend/tools/gen_hir_cpp.py), igual que Python y el target web
+# lo leen con su propio decodificador. Antes enlazaba libprotobuf, que en
+# Windows no se consigue facil y dejaba el backend sin construir.
 #
-# El backend es OPCIONAL: sin protobuf de C++ se desactiva con un aviso y el
-# resto del repositorio (frontend, interprete, target web) sigue compilando y
-# pasando su suite. El frontend en Python no depende de este lado.
+# Sigue siendo OPCIONAL (SURIAX_BUILD_BACKEND=OFF): el resto del repositorio
+# (frontend, interprete, target web) no depende de este lado.
 # =============================================================================
 
 include_guard(GLOBAL)
@@ -35,52 +34,17 @@ function(suriax_add_backend)
         return()
     endif()
 
-    # protobuf del lado C++. Se busca en modo CONFIG primero porque desde la
-    # v22 es como upstream lo distribuye (y trae los targets con sus
-    # dependencias de abseil ya resueltas).
-    find_package(Protobuf CONFIG QUIET)
-    if(NOT Protobuf_FOUND)
-        find_package(Protobuf QUIET)
+    # El modelo del HIR (backend/include/suriax/hir/hir_modelo.hpp) se GENERA
+    # desde el .proto con backend/tools/gen_hir_cpp.py y se guarda en el
+    # repositorio: construir no necesita ni protoc ni Python. Si el .proto es
+    # mas nuevo que el modelo, se avisa (la prueba 'test_modelo_hir_cpp' lo
+    # comprueba de verdad, byte a byte).
+    set(modelo "${ARG_ROOT}/include/suriax/hir/hir_modelo.hpp")
+    if("${ARG_PROTO}" IS_NEWER_THAN "${modelo}")
+        message(WARNING
+            "suriaX: ${ARG_PROTO} es mas nuevo que el modelo C++ del HIR. "
+            "Regeneralo: python backend/tools/gen_hir_cpp.py")
     endif()
-    if(NOT Protobuf_FOUND)
-        message(STATUS
-            "suriaX: backend C++ omitido — no se encontro protobuf para C++.\n"
-            "        -> instalalo con tu gestor de paquetes (apt: "
-            "libprotobuf-dev protobuf-compiler; pacman: protobuf; brew: protobuf)")
-        return()
-    endif()
-
-    # protoc: el ejecutable puede venir como target importado o como ruta.
-    if(TARGET protobuf::protoc)
-        set(protoc_exe "$<TARGET_FILE:protobuf::protoc>")
-    elseif(Protobuf_PROTOC_EXECUTABLE)
-        set(protoc_exe "${Protobuf_PROTOC_EXECUTABLE}")
-    else()
-        message(STATUS "suriaX: backend C++ omitido — no se encontro 'protoc'")
-        return()
-    endif()
-
-    get_filename_component(proto_dir "${ARG_PROTO}" DIRECTORY)
-    get_filename_component(proto_name "${ARG_PROTO}" NAME_WE)
-    set(generated_dir "${CMAKE_BINARY_DIR}/generated/hir")
-    set(generated_sources
-        "${generated_dir}/${proto_name}.pb.cc"
-        "${generated_dir}/${proto_name}.pb.h")
-
-    # Los stubs se regeneran cuando el .proto cambia, no en cada build: el
-    # esquema es la fuente unica y esta es su otra salida.
-    add_custom_command(
-        OUTPUT ${generated_sources}
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${generated_dir}"
-        COMMAND "${protoc_exe}"
-                "--proto_path=${proto_dir}"
-                "--cpp_out=${generated_dir}"
-                "${ARG_PROTO}"
-        DEPENDS "${ARG_PROTO}"
-        COMMENT "suriaX: generando los stubs C++ del HIR desde ${proto_name}.proto"
-        VERBATIM
-    )
-    add_custom_target(suriax_hir_proto DEPENDS ${generated_sources})
 
     add_library(suriax_hir STATIC
         "${ARG_ROOT}/src/loader.cpp"
@@ -89,35 +53,49 @@ function(suriax_add_backend)
         "${ARG_ROOT}/src/mir.cpp"
         "${ARG_ROOT}/src/vm.cpp"
         "${ARG_ROOT}/src/verify.cpp"
-        "${generated_dir}/${proto_name}.pb.cc"
+        "${ARG_ROOT}/src/externo.cpp"
+        "${ARG_ROOT}/src/rutas.cpp"
     )
-    add_dependencies(suriax_hir suriax_hir_proto)
-    target_include_directories(suriax_hir PUBLIC
-        "${ARG_ROOT}/include"
-        "${generated_dir}"
-    )
+    target_include_directories(suriax_hir PUBLIC "${ARG_ROOT}/include")
     target_compile_features(suriax_hir PUBLIC cxx_std_${SURIAX_CXX_STANDARD})
-    target_link_libraries(suriax_hir PUBLIC protobuf::libprotobuf)
+    # '#extern cpp' compila el C++ del programa con el MISMO estandar que el
+    # resto del proyecto (version.py), y carga la biblioteca con dlopen
+    target_compile_definitions(suriax_hir PRIVATE
+        SURIAX_CXX_ESTANDAR="${SURIAX_CXX_STANDARD}")
+    target_link_libraries(suriax_hir PUBLIC ${CMAKE_DL_LIBS})
 
     # Avisos como los del resto del proyecto: un warning es informacion, no
-    # ruido que apagar. Solo sobre NUESTRAS fuentes — el .pb.cc generado no
-    # es codigo del proyecto y sus avisos no los puede arreglar nadie aqui.
-    if(NOT MSVC)
-        set_source_files_properties(
-            "${ARG_ROOT}/src/loader.cpp" "${ARG_ROOT}/src/view.cpp"
-            "${ARG_ROOT}/src/resolve.cpp"
-        "${ARG_ROOT}/src/mir.cpp" "${ARG_ROOT}/src/vm.cpp"
-            "${ARG_ROOT}/src/verify.cpp"
-            "${ARG_ROOT}/tools/suriax_hir.cpp"
-            PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Wswitch"
-        )
+    # ruido que apagar. GCC/Clang: -Wall -Wextra; MSVC: /W4, y /utf-8 porque
+    # las fuentes tienen comentarios en espanol (sin el, MSVC las lee en la
+    # pagina de codigos del sistema y avisa C4819).
+    if(MSVC)
+        target_compile_options(suriax_hir PUBLIC /W4 /utf-8 /permissive-)
+    else()
+        target_compile_options(suriax_hir PRIVATE -Wall -Wextra -Wswitch)
     endif()
 
     add_executable(suriax-hir "${ARG_ROOT}/tools/suriax_hir.cpp")
     target_link_libraries(suriax-hir PRIVATE suriax_hir)
+    # La VM ejecuta cada llamada de suriaX como una llamada de C++, y su tope
+    # es de 4096 marcos (kMaxDepth en vm.cpp). La pila por defecto de Windows
+    # es de 1 MB y se agotaba a unos 790: el proceso moria con 0xC00000FD en
+    # vez de dar el error controlado. Con 16 MB el tope de la VM llega antes
+    # que el del sistema (en Linux la pila principal ya es de 8 MB).
+    if(MSVC)
+        target_link_options(suriax-hir PRIVATE /STACK:16777216)
+    elseif(WIN32 AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        # clang con el ABI de MSVC (--target=*-windows-msvc) enlaza con
+        # link.exe o lld-link: la opcion es la de MSVC, no la de GNU ld
+        target_link_options(suriax-hir PRIVATE "LINKER:/STACK:16777216")
+    elseif(WIN32)
+        # MinGW (GNU ld)
+        target_link_options(suriax-hir PRIVATE -Wl,--stack,16777216)
+    endif()
     set_target_properties(suriax-hir PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    # build de diagnostico: -DSURIAX_SANITIZE=address (ver SuriaXOptions)
+    suriax_aplicar_sanitizadores(suriax_hir suriax-hir)
 
-    message(STATUS "suriaX: backend C++ (lector del HIR) -> ${CMAKE_BINARY_DIR}/bin/suriax-hir")
+    message(STATUS "suriaX: backend C++ (HIR, MIR, VM) -> ${CMAKE_BINARY_DIR}/bin/suriax-hir")
     set(SURIAX_BACKEND_ENABLED TRUE PARENT_SCOPE)
 endfunction()

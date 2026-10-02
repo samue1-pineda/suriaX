@@ -1,0 +1,61 @@
+/- Excepciones 11: 'throw' cede lo que lanza, sin escribir 'move'.
+
+ Igual que 'return r;', un 'throw r;' es lo ULTIMO que se hace con 'r' en
+ ese camino: la variable no puede volver a usarse. Por eso no hace falta
+ escribir 'move' -no le diria nada nuevo a quien lee el codigo-: el
+ compilador lo pone por ti, y se ve en el HIR ('--emit-stage hir' muestra
+ 'throw move r').
+
+ Cada valor se destruye UNA vez, en el catch que lo atrapa. Funciona con una
+ variable local, con un parametro por valor y con un campo de un local.
+ En un 'if', solo la rama que lanza cede el valor: por la otra, 'r' sigue
+ siendo tuyo. (Un argumento de funcion SI pide 'move': despues de la
+ llamada la variable podria seguir usandose.)
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"  libera {r.que}"); }
+
+struct { Recurso dentro; int n; } Caja;
+
+fn local() -> void {
+    var Recurso r = Recurso{ que: "local" };
+    throw r;
+}
+
+fn parametro(Recurso r) -> void { throw r; }
+
+fn campo() -> void {
+    var Caja c = Caja{ dentro: Recurso{ que: "campo" }, n: 1 };
+    throw c.dentro;
+}
+
+fn solo_si(bool lanza) -> void {
+    var Recurso r = Recurso{ que: f"rama (lanza={lanza})" };
+    if (lanza) { throw r; };
+    stdp.println(f"  no lanzo, sigo usando {r.que}");
+}
+
+fn main() -> int {
+    stdp.println("-- una variable local");
+    try { local(); } catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- un parametro por valor");
+    try { parametro(Recurso{ que: "parametro" }); }
+    catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- un campo de un local (el resto se destruye igual)");
+    try { campo(); } catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- solo la rama que lanza cede el valor");
+    try { solo_si(false); solo_si(true); }
+    catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- escribir 'move' sigue siendo valido");
+    try {
+        var Recurso r = Recurso{ que: "con move explicito" };
+        throw move r;
+    } catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+    return 0;
+}

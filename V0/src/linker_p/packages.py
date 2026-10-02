@@ -62,15 +62,28 @@ def load_package(pkg_name: str, dir_path: str, parent_path: str, config,
         sub = cache.get(sub_path)
         if sub is None:
             if cache.has_failed(sub_path):
-                continue  # roto y ya reportado: no se reparsea ni se duplica
+                # roto y ya reportado: no se reparsea ni se duplica
+                package.fallidos[entry[: -len(LIBSRX_EXT)]] = []
+                continue
             # el alias REAL lo declara su '#export'; el stem solo localiza en
             # disco, asi que no se valida contra el nombre de archivo.
             stem = entry[: -len(LIBSRX_EXT)]
-            sub = parse_and_collect(stem, sub_path, config, errors, notes,
-                                    ln, col, expect_package=False)
+            # marcado como 'cargando': si un hermano lo importa mientras
+            # tanto y el ciclo vuelve a el, se detecta (ver '_hermano').
+            cache.mark_loading(sub_path)
+            propios: List = []
+            try:
+                sub = parse_and_collect(stem, sub_path, config, propios, notes,
+                                        ln, col, expect_package=False)
+            finally:
+                cache.unmark_loading(sub_path)
             if sub is None:
+                # sus errores quedan PENDIENTES: se reportan si alguien lo
+                # importa, en la línea de ese import
                 cache.mark_failed(sub_path)
-                continue  # error ya reportado; el resto del paquete sigue
+                package.fallidos[stem] = propios
+                continue
+            errors.extend(propios)
             cache.put(sub_path, sub)
         # el submodulo es una UNIDAD del programa: se identifica calificado
         # por su paquete ('IO.stdp'), no por su alias suelto ('stdp'), para

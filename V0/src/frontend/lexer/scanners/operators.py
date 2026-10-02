@@ -36,7 +36,10 @@ _SINGLE = {
     ",": TokenType.COMMA,
     ";": TokenType.SEMICOLON,
     ":": TokenType.COLON,
-    "&": TokenType.ADDRESS,
+    "&": TokenType.ADDRESS,     # prefijo: direccion; infijo: 'y' de bits
+    "|": TokenType.PIPE,
+    "^": TokenType.CARET,
+    "~": TokenType.TILDE,
     "?": TokenType.NULLABLE,
     "=": TokenType.ASSIGN,
     "<": TokenType.LESS,
@@ -60,6 +63,10 @@ _DOUBLE = {
     ("*", "="): TokenType.STAR_ASSIGN,
     ("/", "="): TokenType.SLASH_ASSIGN,
     ("%", "="): TokenType.PERCENT_ASSIGN,
+    ("&", "="): TokenType.AMP_ASSIGN,
+    ("|", "="): TokenType.PIPE_ASSIGN,
+    ("^", "="): TokenType.CARET_ASSIGN,
+    ("<", "<"): TokenType.SHIFT_LEFT,
     ("+", "+"): TokenType.INCREMENT,
     ("-", "-"): TokenType.DECREMENT,
 }
@@ -71,6 +78,11 @@ def scan(lx) -> Token:
     start_col = lx.col
     ch = src[pos]
     nxt = src[pos + 1] if pos + 1 < lx.length else ""
+
+    # '<<=' es el unico de tres caracteres
+    if ch == "<" and nxt == "<" and pos + 2 < lx.length and src[pos + 2] == "=":
+        lx.jump_to(pos + 3)
+        return Token(TokenType.SHIFT_LEFT_ASSIGN, "<<=", "<<=", lx.ln, start_col)
 
     # intentar primero el operador de dos caracteres
     two = _DOUBLE.get((ch, nxt))

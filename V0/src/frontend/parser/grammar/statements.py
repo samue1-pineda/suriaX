@@ -1,5 +1,5 @@
 """``statement`` dispatch + ``var_decl`` + ``type_decl`` + ``expr_stmt``
-(EBNF secc. 2).
+(EBNF).
 
 ::
     statement = var_decl | type_decl | region_stmt | if_stmt | while_stmt
@@ -98,6 +98,11 @@ def _dispatch_statement(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
     if handler is not None:
         return handler(cursor, ctx)
     return parse_expr_stmt(cursor, ctx)
+
+
+def _with(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
+    from .with_stmt import parse_with_stmt  # import diferido: with -> block -> statements
+    return parse_with_stmt(cursor, ctx)
 
 
 def _looks_like_typed_decl(cursor: Cursor) -> bool:
@@ -269,9 +274,13 @@ def _decl_de_contenedor(start_tok, qualifier, elemento, contenedor, name_tok,
                 f"('{name_tok.lexeme}[8]') o inicializalo con '='",
                 line=ln, column=col)
         value = _llamada_al_constructor(contenedor, elemento, capacidad, ln, col)
+        azucar = (f"'{name_tok.lexeme}[...]': la reserva llama al constructor "
+                  "de la libreria (make)")
+    else:
+        azucar = ""
     return ast.VarDecl(ln=start_tok.ln, col=start_tok.col, qualifier=qualifier,
                        type=tipo, name=name_tok.lexeme, value=value,
-                       capacity=capacidad)
+                       capacity=capacidad, azucar=azucar)
 
 
 def _instanciar(contenedor, elemento):
@@ -302,7 +311,7 @@ def _texto_de_tipo(t) -> str:
 
 def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
                     qualifier=None) -> ast.TypeDecl:
-    """``[qualifier] "type" IDENTIFIER [ "=" expression ] ";"`` (EBNF secc. 4).
+    """``[qualifier] "type" IDENTIFIER [ "=" expression ] ";"`` (EBNF).
 
     Declara un tipo nominal OPACO (ver ``ast_nodes.TypeDecl``). Se alcanza
     por dos vias: desde ``parse_var_decl`` cuando hay qualifier
@@ -413,6 +422,7 @@ def _parse_ptr_prefix_misuse(cursor: Cursor, ctx: ParserContext) -> ast.Statemen
 
 
 _STATEMENT_DISPATCH: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Statement]] = {
+    TokenType.WITH: lambda c, x: _with(c, x),
     TokenType.CONST: parse_var_decl,
     TokenType.VAR: parse_var_decl,
     TokenType.TYPE: parse_type_decl,  # 'type X;' sin qualifier
@@ -423,6 +433,7 @@ _STATEMENT_DISPATCH: Dict[TokenType, Callable[[Cursor, ParserContext], ast.State
     TokenType.FLOAT: parse_var_decl,
     TokenType.CHAR: parse_var_decl,
     TokenType.STR: parse_var_decl,
+    TokenType.BYTE: parse_var_decl,
     TokenType.ERRORTYPE: parse_var_decl,  # 'error int n = ...;' (tipo union)
     TokenType.THROW: parse_throw_stmt,
     TokenType.TRY: parse_try_stmt,

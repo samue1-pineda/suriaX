@@ -1,0 +1,8 @@
+#import geo.punto as pt
+#import calc
+
+public fn distancia(pt.Punto ptr a, pt.Punto ptr b) -> int {
+    return calc.suma(a.x, b.x);
+}
+
+#export as dist

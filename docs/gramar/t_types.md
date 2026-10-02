@@ -20,6 +20,7 @@ en [`grammar.ebnf`](grammar.ebnf).
 | `char` | `CHAR` | Un único code point Unicode.         |
 | `str`  | `STR`  | Cadena Unicode (con interpolación).  |
 | `void` | `VOID` | Ausencia de valor (retorno de fn).   |
+| `byte` | `BYTE` | Entero SIN signo de 8 bits (0..255). |
 
 > **Palabra clave de tipo ≠ literal.** El token de *tipo* es distinto del token
 > del *literal* correspondiente, para que el parser nunca los confunda (p. ej.
@@ -50,6 +51,12 @@ null definition:   <type>? <name> = null;                 // int? x = null;
 true/false:        bool <name> = true;  bool <name> = false;
 ```
 
+| Token   | Lexema  |
+|---------|---------|
+| `TRUE`  | `true`  |
+| `FALSE` | `false` |
+| `NULL`  | `null`  |
+
 ---
 
 ## 2. Tipos compuestos / definidos por el usuario
@@ -78,7 +85,18 @@ enum definition:
 
 // ejemplo:
 enum Color { Rojo, Verde, Azul };
+enum Forma { Circulo(float), Rect(float, float), Nada };   // con payload
 ```
+
+Un `struct` puede ser **genérico**: sus parámetros van con el nombre
+(`struct { T valor; } Caja<T>;`) y se usa con sus argumentos
+(`Caja<int>`, `Caja<int>{ valor: 7 }`). Una `fn` también (`fn make<T>(...)`).
+
+| Token    | Lexema   |
+|----------|----------|
+| `STRUCT` | `struct` |
+| `ENUM`   | `enum`   |
+| `TYPE`   | `type`   |
 
 ### type (tipo nominal opaco + metatipo)
 
@@ -177,6 +195,12 @@ implicit definition:   <type> <name> = <expr>;         // int z = 30;        (= 
 `const` produce un binding inmutable; `var` uno mutable; **sin cualificador
 equivale a `var`** (estilo C). El `;` final es **obligatorio**.
 
+| Token     | Lexema    |
+|-----------|-----------|
+| `CONST`   | `const`   |
+| `VAR`     | `var`     |
+| `MUTABLE` | `mutable` |
+
 > **`mutable` ya NO califica variables** (cambio de diseño): quedó
 > reservado para los tipos puntero — `T ptr mutable` permite escribir a
 > través del puntero, `T ptr` es de solo lectura a través de él (ver
@@ -258,6 +282,15 @@ dunder fn __next__(Lista ptr self) -> int? { ... }            // el metodo real
 ```
 
 `self` en un prototipo de trait es el tipo que hará `@impl` (no es keyword).
+
+Un bloque `@impl Tipo { ... }` (sin argumentos) declara MÉTODOS de nombre
+llano, con el receptor explícito como primer parámetro:
+
+```
+@impl Vector<T> {
+    fn push(Vector<T> ptr mutable self, T x) -> void { ... }   // v.push(x)
+}
+```
 Los **decoradores** se generalizaron: admiten argumentos (`@impl(iterable)`),
 aplican a `fn`/`struct`/`enum`, y van **antes** de la visibilidad/especificador
 (`@impl(x) public struct ...`). Ver `grammar.ebnf` (`decorator_decl`,
@@ -285,6 +318,23 @@ continue definition:   continue;
 | `CASE`     | `case`     |
 | `BREAK`    | `break`    |
 | `CONTINUE` | `continue` |
+
+### Excepciones y `with`
+
+```
+throw definition:     throw <expr>;
+try definition:       try { <block> } catch ( [<type>] <name> ) { <block> } ... [ finally { <block> } ]
+with definition:      with ( <recurso o valor> ) { <block> }    // RAII: se destruye al salir
+```
+
+| Token       | Lexema    | Uso                                                      |
+|-------------|-----------|----------------------------------------------------------|
+| `THROW`     | `throw`   | Lanza un valor (cede su propiedad).                      |
+| `TRY`       | `try`     | Bloque protegido.                                        |
+| `CATCH`     | `catch`   | Rama que atrapa (con tipo, solo ese tipo).               |
+| `FINALLY`   | `finally` | Corre al salir del `try` por cualquier camino.           |
+| `ERRORTYPE` | `error`   | Tipo `error T`: un valor o un error.                     |
+| `WITH`      | `with`    | Recurso, guardián o receptor con ámbito (`.campo`).      |
 
 ---
 
@@ -337,18 +387,27 @@ usarán la misma regla.
 ## 8. Operadores
 
 ```
-arithmetic:   <expr> ( + | - | * | / ) <expr>
+arithmetic:   <expr> ( + | - | * | / | % ) <expr>
+bits:         <expr> ( & | | | ^ | << | >> ) <expr>   |   ~ <expr>
 comparison:   <expr> ( == | != | < | <= | > | >= ) <expr>
 logical:      <expr> ( and | or ) <expr>   |   not <expr>
-assign:       <name> = <expr>;
+assign:       <name> ( = | += | -= | *= | /= | %= | &= | |= | ^= | <<= | >>= ) <expr>;
+step:         <name>++;   <name>--;
 ```
 
 | Categoría   | Tokens                                                        |
 |-------------|---------------------------------------------------------------|
-| Aritméticos | `PLUS +` `MINUS -` `MULTIPLY *` `DIVIDE /`                     |
+| Aritméticos | `PLUS +` `MINUS -` `MULTIPLY *` `DIVIDE /` `MODULO %`          |
+| Bits        | `ADDRESS &` `PIPE \|` `CARET ^` `TILDE ~` `SHIFT_LEFT <<` `SHIFT_RIGHT >>` |
 | Comparación | `EQUAL ==` `NOT_EQUAL !=` `LESS <` `LESS_EQUAL <=` `GREATER >` `GREATER_EQUAL >=` |
 | Lógicos     | `AND and` `OR or` `NOT not`                                    |
-| Asignación  | `ASSIGN =`                                                    |
+| Asignación  | `ASSIGN =` `PLUS_ASSIGN +=` `MINUS_ASSIGN -=` `STAR_ASSIGN *=` `SLASH_ASSIGN /=` `PERCENT_ASSIGN %=` `AMP_ASSIGN &=` `PIPE_ASSIGN \|=` `CARET_ASSIGN ^=` `SHIFT_LEFT_ASSIGN <<=` `SHIFT_RIGHT_ASSIGN >>=` |
+| Paso        | `INCREMENT ++` `DECREMENT --` (solo como sentencia: `i++;`)    |
+
+`&` es a la vez la dirección (`&x`, prefijo) y el y de bits (`a & b`, infijo).
+La precedencia, de menor a mayor: asignación, `or`, `and`, igualdad,
+comparación, `|`, `^`, `&`, desplazamientos, suma, producto; los unarios y
+los sufijos (`.`, `()`, `[]`) ligan más fuerte (ver `grammar.ebnf`).
 
 ---
 
@@ -424,13 +483,11 @@ extern definition:    #extern cpp{ <c++ crudo> };         // RAW_BLOCK, no se to
 
 ## Estado de implementación
 
-Todos los tokens de este documento **ya los produce el lexer** (verificable
-con `#test lexer`), incluido `DUNDER`. El **parser** (descenso recursivo +
-Pratt) y la construcción del **AST**/**AST-tipado** están implementados
-(`#test parser` / `#test ast`, ver `V0/src/frontend/parser/ARQUITECTURA.md`).
-La fase **Semántica** tiene su tabla de símbolos y el registro de *hooks* de
-tipo implementados (`#test sem`); el resto de sus pasadas (resolución de
-símbolos/scopes, verificación de memoria) está pendiente — ver
-`V0/src/frontend/semantic/ARQUITECTURA.md`.
+Todos los tokens de este documento **los produce el lexer** (verificable con
+`#test lexer`), y todas las construcciones las implementa el compilador de
+punta a punta: parser, AST-tipado, Semántica (símbolos, tipos, propiedad,
+hooks, genéricos, excepciones) y HIR. El compilador escrito en suriaX
+(`src/`) reproduce el mismo lexer y el mismo parser. Lo que todavía falla está
+en [c_errorstfix.md](../../c_errorstfix.md).
 
 observe [how_to_run.md](../../how_to_run.md) para probar.

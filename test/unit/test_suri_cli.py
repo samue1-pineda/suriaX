@@ -25,7 +25,8 @@ def _run(args, cwd=None, env=None):
     entorno["PYTHONPATH"] = _REPO
     entorno.update(env or {})
     return subprocess.run([sys.executable, "-m", "suri", *args],
-                          capture_output=True, text=True, timeout=120,
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=120,
                           cwd=cwd or _REPO, env=entorno)
 
 
@@ -51,7 +52,7 @@ def test_la_ayuda_es_la_del_compilador():
     propia = _run(["--help"])
     del_compilador = subprocess.run(
         [sys.executable, os.path.join(_REPO, "V0", "main.py"), "--help"],
-        capture_output=True, text=True, timeout=120, cwd=_REPO)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, cwd=_REPO)
     assert propia.returncode == 0, propia.stderr
     # el 'prog' difiere (lo pone argparse con el nombre del proceso); lo que
     # tiene que coincidir es la lista de banderas.
@@ -123,7 +124,7 @@ def test_la_raiz_del_entorno_manda():
     """'SURIAX_ROOT' va primero: apuntar a un árbol concreto sin instalar."""
     with tempfile.TemporaryDirectory(prefix="suriax-suri-") as tmp:
         os.makedirs(os.path.join(tmp, "V0"))
-        with open(os.path.join(tmp, "V0", "main.py"), "w") as fh:
+        with open(os.path.join(tmp, "V0", "main.py"), "w", encoding="utf-8") as fh:
             fh.write("")
         previo = os.environ.get(command.ENV_ROOT)
         os.environ[command.ENV_ROOT] = tmp
@@ -151,19 +152,49 @@ def test_compila_de_verdad_desde_otro_directorio():
 # empaquetado
 # --------------------------------------------------------------------------- #
 
-def test_el_pyproject_declara_la_version_del_proyecto():
-    """El metadato de un paquete no puede ejecutarse, así que la versión se
-    escribe; esta prueba es lo que impide que se separe de version.py."""
-    from version import VERSION
+def _pyproject() -> dict:
+    """``pyproject.toml`` ya parseado. ``tomllib`` llega con Python 3.11; en
+    3.10 la prueba se omite con aviso en vez de fingir que leyó el archivo."""
+    from helpers import omitir
+    try:
+        import tomllib
+    except ImportError:
+        omitir("tomllib no existe en Python "
+               f"{sys.version_info.major}.{sys.version_info.minor} (llega en 3.11)")
     ruta = os.path.join(_REPO, "pyproject.toml")
-    with open(ruta, encoding="utf-8") as fh:
-        contenido = fh.read()
-    assert f'version = "{VERSION}"' in contenido, (
-        f"pyproject.toml no declara la version {VERSION} de version.py")
+    assert os.path.isfile(ruta), f"falta {ruta}: sin él 'pip install -e .' no funciona"
+    with open(ruta, "rb") as fh:
+        return tomllib.load(fh)
+
+
+def test_el_pyproject_lee_la_version_de_version_py():
+    """La versión NO se escribe en pyproject.toml: se lee de version.py, su
+    fuente única. Un número escrito a mano aquí sería otro que desincronizar,
+    que es justo lo que version.py vino a acabar."""
+    datos = _pyproject()
+    proyecto = datos["project"]
+    assert "version" not in proyecto, (
+        f"pyproject.toml escribe la versión a mano ({proyecto['version']!r}); "
+        "tiene que ser dinámica, leída de version.py")
+    assert "version" in proyecto.get("dynamic", []), (
+        "pyproject.toml no declara 'version' en [project].dynamic")
+    fuente = datos["tool"]["setuptools"]["dynamic"]["version"]
+    assert fuente == {"attr": "version.VERSION"}, (
+        f"la versión dinámica apunta a {fuente!r}, no a version.VERSION")
+    import version
+    assert isinstance(version.VERSION, str) and version.VERSION.count(".") == 2, (
+        f"version.VERSION = {version.VERSION!r} no tiene la forma MAYOR.MENOR.PARCHE")
 
 
 def test_el_pyproject_expone_el_comando():
-    ruta = os.path.join(_REPO, "pyproject.toml")
-    with open(ruta, encoding="utf-8") as fh:
-        contenido = fh.read()
-    assert 'suri = "suri.command:main"' in contenido
+    scripts = _pyproject()["project"].get("scripts", {})
+    assert scripts.get("suri") == "suri.command:main", (
+        f"[project.scripts] no expone 'suri = suri.command:main': {scripts!r}")
+
+
+def test_el_run_va_antes_de_los_argumentos_del_programa():
+    """Lo que va tras '--' es del programa: el '--run' implicito va antes, y
+    un 'compiler' o '--run' del programa no cuenta como del compilador."""
+    assert command.forward(["a.srcx", "--", "x"]) == ["a.srcx", "--run", "--", "x"]
+    assert command.forward(["a.srcx", "--run", "compiler"]) == ["a.srcx", "--run", "compiler"]
+    assert command.forward(["a.srcx", "--", "--run"]) == ["a.srcx", "--run", "--", "--run"]

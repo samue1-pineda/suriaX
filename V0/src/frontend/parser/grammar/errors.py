@@ -1,8 +1,9 @@
-"""Manejo de errores por EXCEPCIONES: ``throw``, ``try``/``catch`` (EBNF secc. 2).
+"""Manejo de errores por EXCEPCIONES: ``throw``, ``try``/``catch`` (EBNF).
 
 ::
     throw_stmt = "throw" expression ";"
-    try_stmt   = "try" block "catch" "(" IDENTIFIER ")" block
+    try_stmt   = "try" block { catch_clause } [ "finally" block ]
+                 (al menos un catch o el finally)
 
 ``throw`` inicia la propagacion de un valor por la pila de llamadas; el
 ``try`` mas cercano en el camino la intercepta, liga el valor al nombre del
@@ -39,12 +40,24 @@ def parse_throw_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ThrowStmt:
 def parse_try_stmt(cursor: Cursor, ctx: ParserContext) -> ast.TryStmt:
     tok = cursor.expect(TokenType.TRY)
     try_block = parse_block(cursor, ctx)
-    catches = [_parse_catch(cursor, ctx)]
+    catches = []
     while cursor.check(TokenType.CATCH):
         catches.append(_parse_catch(cursor, ctx))
+    finally_block = None
+    if cursor.check(TokenType.FINALLY):
+        cursor.expect(TokenType.FINALLY)
+        ctx.finally_loops.append(ctx.loop_depth)
+        try:
+            finally_block = parse_block(cursor, ctx)
+        finally:
+            ctx.finally_loops.pop()
+    if not catches and finally_block is None:
+        # un 'try' solo no hace nada: el mensaje es el de siempre (se
+        # esperaba el 'catch')
+        cursor.expect(TokenType.CATCH)
     cursor.match(TokenType.SEMICOLON)  # ';' opcional tras el 'try' completo
     return ast.TryStmt(ln=tok.ln, col=tok.col, try_block=try_block,
-                       catches=catches)
+                       catches=catches, finally_block=finally_block)
 
 
 def _parse_catch(cursor: Cursor, ctx: ParserContext) -> ast.CatchClause:

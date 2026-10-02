@@ -14,7 +14,8 @@ from typing import Any, List
 
 class ParserContext:
     __slots__ = ("loop_depth", "region_depth", "pending_decorators", "errors",
-                 "no_struct_literal")
+                 "no_struct_literal", "finally_loops", "with_receivers",
+                 "with_count")
 
     def __init__(self) -> None:
         self.loop_depth = 0
@@ -30,6 +31,22 @@ class ParserContext:
         # Es la misma tecnica que usan los lenguajes con literales de struct
         # y condiciones sin parentesis (Rust: 'no_struct_literal').
         self.no_struct_literal = False
+        # la profundidad de bucle al ENTRAR a cada 'finally' que se esta
+        # leyendo: un 'break' que salga de un bucle de afuera abandonaria el
+        # 'finally' a medias (PAR027); uno de un bucle de adentro, no.
+        self.finally_loops: List[int] = []
+        # el receptor de '.campo' de cada 'with' abierto (None = el 'with'
+        # tiene varios valores y '.campo' no diria de cual); y cuantos
+        # guardianes sin nombre van, para darles uno que nadie puede escribir
+        self.with_receivers: List[Any] = []
+        self.with_count = 0
+
+    def in_finally(self) -> bool:
+        return bool(self.finally_loops)
+
+    def jump_leaves_finally(self) -> bool:
+        """¿Un 'break'/'continue' aqui saltaria FUERA del 'finally'?"""
+        return bool(self.finally_loops) and self.loop_depth == self.finally_loops[-1]
 
     def enter_loop(self) -> None:
         self.loop_depth += 1

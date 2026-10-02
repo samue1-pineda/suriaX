@@ -1,70 +1,70 @@
 # Structs, enums y control de flujo
 
-Ejemplos de tipos compuestos (`struct`, `enum`) y del control de flujo
-(`if`/`else`, `while`, `match`/`case`). Válidos a nivel léxico usando  (`#test lexer`) ejecutables cuando el compilador esté completo.
+Tipos compuestos (`struct`, `enum`) y control de flujo (`if`/`else`, `while`,
+`match`/`case`). El programa del final se ejecuta tal cual con
+`python main.py archivo.srcx`; los bloques anteriores son las piezas que lo
+forman.
 
-## struct 
+## struct
 
-El nombre del `struct` va **después** de las llaves; cada campo es `<tipo> <nombre>;`.
+El nombre del `struct` va **después** de las llaves; cada campo es
+`<tipo> <nombre>;`. Un valor se construye nombrando sus campos:
 
 ```srcx
 struct {
     int x;
     int y;
-} punto;
+} Punto;
 
-fn distancia_origen(Punto ptr p) -> int {
-    // (simplificado: suma de magnitudes)
-    var int dx = punto.x;
-    var int dy = punto.y;
-    if (dx < 0) { dx = 0 - dx; }
-    if (dy < 0) { dy = 0 - dy; }
-    return dx + dy;
-};
+var Punto p = Punto{ x: 3, y: 0 };
+p.x = 0;              // acceso y escritura de campos con '.'
 ```
 
-## enum 
+Un `struct` es un **valor**: `var Punto q = p;` copia, y cambiar `q` no toca
+`p`. Para que una función lea o modifique el original sin copiarlo se le pasa
+un **préstamo**: `Punto ptr` (solo lectura) o `Punto ptr mutable` (escritura),
+con `&p` en la llamada.
+
+## enum
 
 ```srcx
-enum Estado {
-    Inactivo,
-    Activo,
-    Pausado
-};
+enum Cuadrante { ORIGEN, EJE, INTERIOR };
+
+var Cuadrante c = Cuadrante.EJE;     // los valores se nombran con el tipo
 ```
 
 ## match / case
 
-```srcx
-const IO = #import IO;
+Cada rama nombra un valor y lleva su bloque. Si un `match` sobre un `enum` no
+cubre todas las variantes, el compilador avisa (`SEM030`).
 
-fn describir(Estado s) -> void {
-    match (s) {
-        case Inactivo: IO.printf("inactivo\n");
-        case Activo:   IO.printf("activo\n");
-        case Pausado:  IO.printf("pausado\n");
-    };
+```srcx
+fn describir(Cuadrante c) -> str {
+    match (c) {
+        case Cuadrante.ORIGEN: { return "origen"; }
+        case Cuadrante.EJE: { return "sobre un eje"; }
+        case Cuadrante.INTERIOR: { return "interior"; }
+    }
+    return "?";
 };
 ```
 
 ## if / else y while
 
 ```srcx
-const IO = #import IO;
-
 fn fizzbuzz(int n) -> void {
     var int i = 1;
     while (i <= n) {
-        if (i / 3 * 3 == i and i / 5 * 5 == i) {
-            IO.printf("FizzBuzz\n");
-        }; else {
-            if (i / 3 * 3 == i) {
-                IO.printf("Fizz\n");
-            }; else {
-                if (i / 5 * 5 == i) {
-                    IO.printf("Buzz\n");
-                }; else {
-                    IO.printf(f"{i}\n");
+        if (i % 15 == 0) {
+            stdp.println("FizzBuzz");
+        } else {
+            if (i % 3 == 0) {
+                stdp.println("Fizz");
+            } else {
+                if (i % 5 == 0) {
+                    stdp.println("Buzz");
+                } else {
+                    stdp.println(f"{i}");
                 };
             };
         };
@@ -76,41 +76,69 @@ fn fizzbuzz(int n) -> void {
 ## Programa que junta todo
 
 ```srcx
-const IO = #import IO;
+#from io #import stdp
 
 struct {
     int x;
     int y;
 } Punto;
 
-enum Cuadrante { Origen, Eje, Interior };
+enum Cuadrante { ORIGEN, EJE, INTERIOR };
 
 fn clasificar(Punto ptr p) -> Cuadrante {
     if (p.x == 0 and p.y == 0) {
-        return Origen;
+        return Cuadrante.ORIGEN;
     };
     if (p.x == 0 or p.y == 0) {
-        return Eje;
+        return Cuadrante.EJE;
     };
-    return Interior;
+    return Cuadrante.INTERIOR;
 };
 
-fn main() -> void {
-    Punto ptr mutable p = crear_punto();
-    p.x = 3;
-    p.y = 0;
-
-    Cuadrante c = clasificar(p);
+fn describir(Cuadrante c) -> str {
     match (c) {
-        case Origen {IO.printf("origen\n");};
-        case Eje {IO.printf("sobre un eje\n");};
-        case Interior{ IO.printf("interior\n");};
+        case Cuadrante.ORIGEN: { return "origen"; }
+        case Cuadrante.EJE: { return "sobre un eje"; }
+        case Cuadrante.INTERIOR: { return "interior"; }
+    }
+    return "?";
+};
+
+fn fizzbuzz(int n) -> void {
+    var int i = 1;
+    while (i <= n) {
+        if (i % 15 == 0) {
+            stdp.println("FizzBuzz");
+        } else {
+            if (i % 3 == 0) {
+                stdp.println("Fizz");
+            } else {
+                if (i % 5 == 0) {
+                    stdp.println("Buzz");
+                } else {
+                    stdp.println(f"{i}");
+                };
+            };
+        };
+        i = i + 1;
     };
-};   // 'p' sale de ámbito: se destruye aquí
+};
+
+fn main() -> int {
+    var Punto p = Punto{ x: 3, y: 0 };
+    stdp.println(describir(clasificar(&p)));   // sobre un eje
+    p.x = 0;
+    stdp.println(describir(clasificar(&p)));   // origen
+    fizzbuzz(5);                               // 1 2 Fizz 4 Buzz
+    return 0;
+};
 ```
 
 ## Notas
 
-- Los tipos de usuario (`Punto`, `Estado`) son **nominales**: la identidad viene
-  del nombre declarado.
-- `printf` viene de la librería `IO` (libsrX): `IO.printf(...)`.
+- Los tipos de usuario (`Punto`, `Cuadrante`) son **nominales**: la identidad
+  viene del nombre declarado, no de la forma.
+- `println` viene de la librería `IO` (libsrX), no del lenguaje: ver
+  [helloworld.md](helloworld.md).
+- Para ver qué hace el compilador con este programa, `--hir-pretty` deja en
+  `dumps/` el HIR legible, con los tipos resueltos de cada expresión.

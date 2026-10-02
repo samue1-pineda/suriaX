@@ -132,8 +132,9 @@ def test_el_tooling_si_puede_conocer_al_compilador():
     dirección exista es lo que hace que la frontera valga la pena.
     """
     ruta = os.path.join(_REPO, "playground", "server.py")
-    if not os.path.isfile(ruta):
-        return
+    assert os.path.isfile(ruta), (
+        f"no existe {ruta}: si el playground se movió, esta prueba tiene que "
+        "apuntar a su nueva ubicación (o a otro consumidor real del driver)")
     with open(ruta, encoding="utf-8") as fh:
         fuente = fh.read()
     assert "artifacts" in fuente, (

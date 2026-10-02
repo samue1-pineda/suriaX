@@ -216,8 +216,13 @@ function encodeExpr(expr: Expr, w: Writer): void {
       w.message(11, (i) => {
         for (const part of node.parts) {
           i.message(1, (p) => {
-            if (part.case === "text") p.rawString(1, part.text);
-            else p.message(2, (e) => encodeExpr(part.expr, e));
+            if (part.case === "text") {
+              p.rawString(1, part.text);
+            } else {
+              p.message(2, (e) => encodeExpr(part.expr, e));
+              if (part.repr) p.bool(3, true);
+              if (part.spec) p.rawString(4, part.spec);
+            }
           });
         }
       });
@@ -408,6 +413,9 @@ function encodeStmt(stmt: Stmt, w: Writer): void {
             c.message(2, (b) => encodeBlock(rama.block, b));
             if (rama.type !== null) c.message(3, (ty) => encodeType(rama.type!, ty));
           });
+        }
+        if (node.finallyBlock !== null) {
+          t.message(5, (b) => encodeBlock(node.finallyBlock!, b));
         }
       });
       return;

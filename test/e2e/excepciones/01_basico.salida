@@ -1,0 +1,10 @@
+-- mismo bloque
+  antes del throw
+  atrapado 42
+-- sin throw, el catch no corre
+  10 / 2 = 5
+-- desde una funcion, atravesando otra
+  atrapado: division entre cero
+-- desde el fondo de una recursion de 200 marcos
+  atrapado 0
+-- la ejecucion sigue despues del try

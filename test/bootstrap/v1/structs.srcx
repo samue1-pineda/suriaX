@@ -1,0 +1,20 @@
+struct { int x; float y; } Punto;
+struct { Punto a; Punto b; str nombre; } Segmento;
+
+fn largo(Punto ptr p) -> int {
+    return p.x;
+}
+
+fn mueve(Punto ptr mutable p, int dx) -> void {
+    p.x = p.x + dx;
+}
+
+fn main() -> int {
+    var Punto p = Punto{ x: 1, y: 2.5 };
+    const Punto q = Punto{ x: 3, y: 0.0 };
+    var Segmento s = Segmento{ a: p, b: q, nombre: "seg" };
+    mueve(&p, 4);
+    s.a.x = largo(&q);
+    var Punto ptr r = &s.b;
+    return p.x + s.a.x + r.x;
+}

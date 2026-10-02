@@ -1,0 +1,12 @@
+/- Banco de la VM: el programa VACIO.
+
+ No calcula nada. Su tiempo es el costo FIJO de cada motor —arrancar el
+ proceso, leer el .phir y sus librerias, ligar la imagen— y se resta de los
+ demas para comparar solo la ejecucion.
+-/
+#from io #import stdp
+
+fn main() -> int {
+    stdp.println("listo");
+    return 0;
+}

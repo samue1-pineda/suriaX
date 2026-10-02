@@ -320,23 +320,6 @@ class IncompleteStructLiteralError(SemanticError):
         super().__init__(message, code="SEM028", **kwargs)
 
 
-class UnsupportedPayloadError(SemanticError):
-    """Una variante de ``enum`` que lleva un valor con destructor.
-
-    Destruir un enum suma exige saber QUE variante es en ejecucion para
-    destruir lo que esa variante lleva, y el drop de hoy trabaja sobre rutas
-    estaticas de campos. Se rechaza en vez de filtrarse: un payload con
-    ``__free__`` que nadie libera es una fuga silenciosa, y el silencio es
-    justo lo que el modelo de memoria promete no hacer.
-    """
-
-    severity = Severity.PANIC
-
-    def __init__(self, message: Any = "payload de variante no soportado",
-                 **kwargs: Any):
-        super().__init__(message, code="SEM029", **kwargs)
-
-
 class NonExhaustiveMatchError(SemanticError):
     """Un ``match`` sobre un ``enum`` que deja variantes sin cubrir.
 
@@ -427,6 +410,87 @@ class ContainerOverflowError(SemanticError):
         super().__init__(message, code="SEM033", **kwargs)
 
 
+class ThrowInDestructorError(SemanticError):
+    """Un ``throw`` dentro de un ``__free__``: un destructor no puede fallar.
+
+    Un ``__free__`` corre cuando un valor muere, y un valor también muere
+    mientras un ``throw`` sube por las llamadas (el desenrollado). Si ahí el
+    destructor lanzara otro, habría dos excepciones a la vez y una se
+    perdería. Por eso la regla es la de C++: un destructor nunca lanza. Si
+    liberar puede fallar, el fallo se registra (se imprime, se cuenta) y el
+    destructor termina normalmente.
+
+    La Semántica ve el ``throw`` escrito; si el ``__free__`` llama a algo que
+    lanza, lo detecta la ejecución (``RT021``).
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM034", **kwargs)
+
+
+class LiteralDivisionByZeroError(SemanticError):
+    """``x / 0`` o ``x % 0`` con un cero ENTERO escrito en el fuente.
+
+    Es la parte de la división por cero que se ve sin ejecutar: el texto ya
+    dice que la operación no tiene resultado, y ningún ``try`` lo arregla.
+    Cuando el divisor solo vale cero al ejecutar, es una excepción del
+    programa (``EXC001``) que se puede atrapar como
+    ``excepciones.DivisionPorCero``.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM035", **kwargs)
+
+
+class MoveOutOfBorrowError(SemanticError):
+    """Ceder (``move``, ``return``, ``throw``) algo con destructor a lo que se
+    llega a través de un puntero.
+
+    Un puntero es un PRÉSTAMO: lo que hay detrás es de otro, que lo destruirá
+    cuando le toque. Cederlo dejaría dos dueños y el valor se destruiría dos
+    veces. Para leerlo se usa el puntero (``&c.dentro``); para quitárselo a su
+    dueño, lo cede el dueño.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM036", **kwargs)
+
+
+class DanglingAddressError(SemanticError):
+    """``return &x`` con ``x`` una variable (o un parámetro por valor) de la
+    función que devuelve, o un campo de una.
+
+    ``x`` muere al salir: el llamador recibiría una dirección a algo que ya no
+    existe. El intérprete lo toleraba (sus celdas las recoge Python) y la VM
+    lo detecta al usarlo (RT003); el error es del texto, y se dice aquí. Para
+    devolver algo que sobreviva, se devuelve el VALOR, o se reserva con
+    ``mem``, o se guarda en una arena y se devuelve su índice.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM037", **kwargs)
+
+
+class GenericOwnerCopyError(SemanticError):
+    """Un GENÉRICO que copia su ``T``, instanciado con un tipo con destructor.
+
+    ``Vector<T>.get`` devuelve una COPIA del elemento. Con ``T = int`` es lo
+    correcto; con ``T = R`` (``R`` con ``__free__``) la copia y el elemento
+    serían dos dueños del mismo recurso, y su destructor correría dos veces.
+    El cuerpo del genérico no está mal —no sabe con qué se instanciará—: lo
+    que está mal es ESTA instancia, y por eso el error sale en la llamada y
+    dice dónde copia el genérico.
+
+    La salida es una operación que PRESTE (un puntero: ``v.at(i)``) o que
+    SAQUE el valor (``v.take(i)``, ``move``). Es la regla de C++ (un
+    ``std::vector<std::unique_ptr<T>>`` no se copia) y la de Rust (``T:
+    Clone``), dicha en el sitio de la instancia.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM038", **kwargs)
+
+
 class MissingHandlerError(SemanticError):
     """Un nodo del AST llegó a una pasada que no sabe recorrerlo.
 
@@ -454,7 +518,6 @@ __all__ = [
     "InfiniteSizeTypeError",
     "TypeArityError",
     "IncompleteStructLiteralError",
-    "UnsupportedPayloadError",
     "NonExhaustiveMatchError",
     "NotIndexableError",
     "ImplicitOwnershipCopyError",

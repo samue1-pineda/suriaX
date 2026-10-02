@@ -34,7 +34,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
 def resolve_type_expr(type_expr: ast.TypeExpr) -> Type:
     """``TypeExpr`` sintactico -> ``Type`` resuelto.
 
-    Puramente estructural: cada forma del EBNF (seccion 4) tiene una unica
+    Puramente estructural: cada forma del EBNF (``type``) tiene una unica
     traduccion, sin ambiguedad ni busqueda de simbolos.
     """
     if isinstance(type_expr, ast.PrimitiveTypeExpr):
@@ -77,6 +77,10 @@ def resolve_types(program: ast.Program) -> ast.Program:
 
 
 def _resolve_var_like(node) -> None:  # Parameter | VarDecl | Field
+    # el guardian sin nombre de un 'with' no tiene tipo escrito: se lo da la
+    # Semantica a partir de su valor
+    if getattr(node, "inferido", False):
+        return
     node.restype = resolve_type_expr(node.type)
 
 

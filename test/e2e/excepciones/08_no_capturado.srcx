@@ -1,0 +1,28 @@
+/- Excepciones 8: un throw que nadie atrapa.
+
+ Si ningun 'catch' acepta el valor, el programa termina con RT020 (codigo
+ de salida 70) diciendo QUE se lanzo y DONDE. Antes de terminar se
+ destruyen igual los valores de cada marco que el throw abandona.
+
+ codigo: 70 RT020
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"libera {r.que}"); }
+
+struct { str msg; int cod; } Error;
+
+fn profundo() -> void {
+    var Recurso r = Recurso{ que: "local de profundo" };
+    throw Error{ msg: "nadie me atrapa", cod: 3 };
+}
+
+fn main() -> int {
+    var Recurso g = Recurso{ que: "local de main" };
+    stdp.println("antes");
+    try { profundo(); }
+    catch (int e) { stdp.println("no se ve: no es int"); };
+    stdp.println("despues (no se ve)");
+    return 0;
+}

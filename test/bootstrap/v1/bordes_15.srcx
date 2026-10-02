@@ -1,0 +1,76 @@
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+
+struct { R dentro; int n; } Caja;
+enum Color { ROJO, VERDE };
+enum Figura { Circulo(float), Punto };
+
+fn consume(R r) -> int {
+    return 1;
+}
+
+fn lee(R ptr r) -> str {
+    return r.que;
+}
+
+fn primero(int ptr bloque) -> int {
+    return bloque[0];
+}
+
+fn mide(Figura f) -> float {
+    match (f) {
+        case Circulo(radio): {
+            const float ptr p = &radio;
+            return radio;
+        }
+        case Punto: { return 0.0; }
+    }
+    return 0.0;
+}
+
+fn busca(int limite) -> int {
+    var int i = 0;
+    var int hallado = -1;
+    while (i < limite) {
+        i = i + 1;
+        if (i % 2 == 0) { continue; };
+        var R temporal = R{ que: "t" };
+        if (i > 5) {
+            hallado = i;
+            break;
+        };
+    };
+    return hallado;
+}
+
+fn anidado(bool x) -> int {
+    var R a = R{ que: "a" };
+    if (x) {
+        var R b = R{ que: "b" };
+        if (not x) {
+            return 1;
+        } else {
+            var R c = R{ que: "c" };
+            return 2;
+        };
+    };
+    return 0;
+}
+
+fn main() -> int {
+    var Color c = ROJO;
+    var str n = ROJO.name;
+    const Figura f = Circulo(1.5);
+    var Caja caja = Caja{ dentro: R{ que: "x" }, n: 1 };
+    caja.dentro = R{ que: "y" };
+    var int total = consume(R{ que: "z" });
+    var int dato = 7;
+    total = total + primero(&dato);
+    var str s = lee(&caja.dentro);
+    match (total) {
+        case 0: { total = 1; }
+        case 2: { total = 3; }
+    }
+    if (c == VERDE) { total = total + 1; };
+    return total + busca(10) + anidado(true) + cast<int>(mide(f));
+}

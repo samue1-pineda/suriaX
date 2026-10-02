@@ -14,7 +14,7 @@ Además compara el tercer ejecutor, el backend de JS puro (``--run-js``), que
 sale del MISMO WIR que el WebAssembly: si difieren, el fallo está en un emisor
 y no en el lowering.
 
-Se salta (con aviso) si falta node o protobuf: el compilador no depende del
+Se OMITE (``helpers.omitir``) si falta node: el compilador no depende del
 target web y su CI no puede quedar roja por eso.
 """
 
@@ -26,6 +26,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# helpers.omitir: la única forma de saltarse una prueba (el runner la cuenta
+# como OMITIDA, nunca como pasada).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from helpers import omitir  # noqa: E402
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _WEB_MAIN = os.path.join(_REPO_ROOT, "web", "main.ts")
@@ -233,6 +238,7 @@ def _node_major() -> int | None:
         return None
     try:
         out = subprocess.run([node, "--version"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace",
                              timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -240,10 +246,6 @@ def _node_major() -> int | None:
         return int(out.stdout.strip().lstrip("v").split(".", 1)[0])
     except ValueError:
         return None
-
-
-def _skip(reason: str) -> None:
-    print(f"      (omitido: {reason})", file=sys.stderr)
 
 
 def _node_cmd(major: int, *args: str) -> list[str]:
@@ -269,7 +271,8 @@ def _ejecutar_interprete(source_path: str) -> tuple[str, int]:
     """Compila y ejecuta con el intérprete. Devuelve (salida, retorno)."""
     result = subprocess.run(
         [sys.executable, _COMPILER, source_path, "--run"],
-        capture_output=True, text=True, timeout=180, cwd=_REPO_ROOT,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=180, cwd=_REPO_ROOT,
     )
     return _salida_del_programa(result.stdout), result.returncode
 
@@ -284,7 +287,8 @@ def _ejecutar_web(major: int, phir_path: str, *, backend: str) -> tuple[str, int
     flag = "--run" if backend == "wasm" else "--run-js"
     result = subprocess.run(
         _node_cmd(major, phir_path, flag),
-        capture_output=True, text=True, timeout=180, cwd=_REPO_ROOT,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=180, cwd=_REPO_ROOT,
     )
     # Por stderr solo debería salir la marca '[wasm] main() -> N'. Cualquier
     # otra cosa es un fallo del ejecutor que NO puede confundirse con "el
@@ -301,8 +305,7 @@ def _ejecutar_web(major: int, phir_path: str, *, backend: str) -> tuple[str, int
 def _para_cada_programa(comprobar) -> None:
     major = _node_major()
     if major is None or major < _MIN_NODE_MAJOR:
-        _skip("node no disponible; no se puede ejecutar el target web")
-        return
+        omitir("node no disponible; no se puede ejecutar el target web")
     # El .srcx tiene que estar donde el linker encuentre ./lib (la raíz del
     # repo), igual que cualquier fuente del proyecto.
     for nombre, fuente in PROGRAMAS.items():
@@ -312,7 +315,8 @@ def _para_cada_programa(comprobar) -> None:
         # propio el .gitignore lo reconoce sin tapar nada mas.
         with tempfile.TemporaryDirectory(dir=_REPO_ROOT,
                                          prefix="suriax-web-") as tmp:
-            os.symlink(os.path.join(_REPO_ROOT, "lib"), os.path.join(tmp, "lib"))
+            from helpers import link_lib
+            link_lib(tmp)
             # El temporal esta DENTRO del repo, asi que la busqueda de
             # configuracion subiria hasta el '.suriaX_config.yaml' del
             # desarrollador. Uno con 'target: interp' hace que '--emit-hir'
@@ -329,12 +333,10 @@ def _para_cada_programa(comprobar) -> None:
             phir = os.path.join(tmp, f"{nombre}.phir")
             emit = subprocess.run(
                 [sys.executable, _COMPILER, src, "--emit-hir", phir],
-                capture_output=True, text=True, timeout=180, cwd=_REPO_ROOT,
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=180, cwd=_REPO_ROOT,
             )
             if emit.returncode != 0 or not os.path.isfile(phir):
-                if "protobuf" in (emit.stdout + emit.stderr).lower():
-                    _skip("protobuf no disponible para emitir el HIR")
-                    return
                 raise AssertionError(
                     f"'{nombre}' no compiló:\n{emit.stdout}\n{emit.stderr}")
 

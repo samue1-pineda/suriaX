@@ -16,13 +16,16 @@ import os
 import time
 from typing import Optional
 
-from .options import EXIT_MISSING_DEPENDENCY, CompileResult
+from error_handler.InternalCompilerError import InternalCompilerError
+
+from .options import CompileResult
 from .reporting import Reporter, SilentReporter
 
 
 def execute(result: CompileResult, *,
             trace_exec: bool = False, trace_memory: bool = False,
-            reporter: Optional[Reporter] = None) -> int:
+            reporter: Optional[Reporter] = None,
+            argumentos: Optional[list] = None) -> int:
     """Ejecuta el ``.phir`` de ``result`` EN PROCESO y devuelve su código.
 
     En proceso —sin subproceso ni reparseo— porque el HIR ya está en memoria
@@ -34,6 +37,15 @@ def execute(result: CompileResult, *,
     if not result.should_run or result.phir_path is None:
         return result.status
 
+    if result.motor == "compiler":
+        if trace_exec or trace_memory:
+            reporter.warn("--trace-exec y --trace-memory son del interprete: "
+                          "se ejecuta en el interprete")
+        else:
+            codigo = _en_la_vm(result, reporter, argumentos)
+            if codigo is not None:
+                return codigo
+
     t = time.perf_counter()
     from runtime.interpreter import interpreter as interp
     from runtime.interpreter import loader as interp_loader
@@ -44,18 +56,93 @@ def execute(result: CompileResult, *,
         icfg["trace_memory"] = True
     if trace_exec:
         icfg["trace_exec"] = True
+    # lo que ve 'sistema.argumento(i)': el 0 es el archivo que se ejecuta
+    icfg["argumentos"] = list(argumentos) if argumentos else [result.path]
     exit_code = result.status
     try:
+        fase = "carga del HIR"
         image = interp_loader.load_image(result.phir_path)
+        fase = "ligado de #extern cpp"
         _ligar_extern_cpp(image, result, reporter)
+        fase = "interprete"
+        # los errores DEL PROGRAMA (RTxxx, throw sin capturar) los atrapa
+        # 'interp.run' y devuelve 70; lo que llegue aquí es del compilador.
         exit_code = interp.run(image, {"interpreter": icfg},
                                events=result.trace_events)
-    except interp_loader.HIRLoadError as exc:
-        reporter.warn(f"error cargando HIR: {exc}")
-        exit_code = EXIT_MISSING_DEPENDENCY
+    except Exception as exc:  # noqa: BLE001 - se reporta como ICE, nunca se traga
+        # Incluye HIRLoadError: el .phir lo acaba de escribir el propio
+        # compilador, así que si su lector lo rechaza el fallo es del emisor
+        # o del lector — no una "dependencia faltante" (exit 3), que es lo
+        # que se decía antes.
+        raise InternalCompilerError.desde(exc, phase=fase,
+                                          file=result.path) from exc
     result.times["interprete"] = time.perf_counter() - t
     result.status = exit_code
     return exit_code
+
+
+def binario_de_la_vm() -> Optional[str]:
+    """``suriax-hir``: el de ``SURIAX_HIR_BIN`` o el de ``build/bin``."""
+    escrito = os.environ.get("SURIAX_HIR_BIN")
+    if escrito:
+        for ruta in (escrito, escrito + ".exe"):
+            if os.path.isfile(ruta):
+                return ruta
+        return None
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    for nombre in ("suriax-hir", "suriax-hir.exe"):
+        ruta = os.path.join(raiz, "build", "bin", nombre)
+        if os.path.isfile(ruta):
+            return ruta
+    return None
+
+
+def _en_la_vm(result: CompileResult, reporter: Reporter,
+              argumentos: Optional[list]) -> Optional[int]:
+    """Ejecuta el ``.phir`` en la VM (``suriax-hir``) y devuelve su codigo.
+
+    ``None`` = no se pudo, y se interpreta: la VM no esta construida o el
+    MIR no cubre el programa. Se AVISA siempre —ejecutar en otro motor del
+    que se pidio no puede pasar en silencio—; la semantica es la misma, y es
+    lo que comprueba el diferencial.
+    """
+    import subprocess
+
+    # los hooks de las extensiones del proyecto (HTIMS) los implementa Python:
+    # solo el interprete puede llamarlos
+    extensiones = result.config.get("_extensions")
+    if extensiones is not None and (extensiones.modules or extensiones.hooks):
+        reporter.info("el proyecto declara extensiones (HTIMS): las ejecuta el "
+                      "interprete")
+        return None
+    binario = binario_de_la_vm()
+    if binario is None:
+        reporter.warn("la VM (suriax-hir) no esta construida: se ejecuta en el "
+                      "interprete. Para compilar: cmake -S . -B build && "
+                      "cmake --build build --target suriax-hir (o --run "
+                      "interpreter para no ver este aviso)")
+        return None
+    comprobacion = subprocess.run([binario, result.phir_path, "--check-mir"],
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+    if comprobacion.returncode != 0:
+        motivo = (comprobacion.stderr.strip().splitlines() or ["?"])[-1].strip()
+        reporter.warn(f"la VM no cubre este programa ({motivo}): se ejecuta en "
+                      "el interprete")
+        return None
+    # lo que el compilador ya escribio sale ANTES que lo del programa: la VM
+    # escribe directo en el descriptor, sin pasar por el buffer de Python
+    import sys
+    sys.stdout.flush()
+    sys.stderr.flush()
+    t = time.perf_counter()
+    orden = [binario, result.phir_path, "--run", "--quiet",
+             "--arg0", (argumentos or [result.path])[0],
+             "--", *(argumentos or [result.path])[1:]]
+    codigo = subprocess.run(orden).returncode
+    result.times["vm"] = time.perf_counter() - t
+    result.status = codigo
+    return codigo
 
 
 def _ligar_extern_cpp(image, result: CompileResult, reporter: Reporter) -> None:

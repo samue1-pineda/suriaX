@@ -1222,8 +1222,19 @@ class Lowering {
     // f-string: sus segmentos, en orden.
     if (value.node.case === "interp") {
       for (const part of value.node.parts) {
-        if (part.case === "text") out.push({ text: part.text });
-        else this.#printItems(part.expr, out);
+        if (part.case === "text") {
+          out.push({ text: part.text });
+        } else if (part.repr || (part.spec ?? "") !== "") {
+          // ignorarlo imprimiría otro texto sin decir nada
+          this.#bag.add(
+            WebCode.CODEGEN_STRING,
+            "el formato de una interpolación ('!r', ':08b', ':.2f'...) todavía " +
+              "no lo tiene el target web v2",
+            part.expr,
+          );
+        } else {
+          this.#printItems(part.expr, out);
+        }
       }
       return;
     }
@@ -1325,6 +1336,9 @@ function describeType(type: Type): string {
   switch (type.kind) {
     case TypeKind.STR: return "str";
     case TypeKind.CHAR: return "char";
+    // 'byte' todavía no baja al WIR (sería un i32 enmascarado): se rechaza
+    // con su nombre, en vez de un "no representable" que no dice qué es
+    case TypeKind.BYTE: return "byte";
     case TypeKind.NOMINAL: return type.name;
     case TypeKind.POINTER: return "puntero";
     case TypeKind.NULLABLE: return "nullable";

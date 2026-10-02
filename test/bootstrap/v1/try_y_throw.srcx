@@ -1,0 +1,46 @@
+#import excepciones as exc
+struct { str msg; int codigo; } Fallo;
+fn divide(int a, int b) -> int {
+    if (b == 0) { throw Fallo{ msg: "cero", codigo: 1 }; };
+    return a / b;
+}
+fn lanza_texto() -> void { throw "texto"; }
+fn intenta(int b) -> int {
+    try {
+        return divide(10, b);
+    } catch (Fallo f) {
+        return f.codigo;
+    } catch (e) {
+        return -1;
+    }
+    return 0;
+}
+fn anidado() -> int {
+    var int n = 0;
+    try {
+        try { lanza_texto(); } catch (Fallo f) { n = 1; }
+    } catch (e) { n = 2; } finally { n = n + 10; }
+    return n;
+}
+fn libreria() -> int {
+    try { throw exc.NoEncontrado{ mensaje: "no" }; }
+    catch (exc.NoEncontrado e) { return len(e.mensaje); }
+    return 0;
+}
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+fn con_dueno() -> int {
+    var R r = R{ que: "x" };
+    try { throw r; } catch (R x) { return len(x.que); }
+    return 0;
+}
+fn en_bucle() -> int {
+    var int i = 0;
+    while (i < 3) {
+        try { if (i == 1) { break; }; } finally { i = i + 1; }
+    };
+    return i;
+}
+fn main() -> int {
+    return intenta(0) + intenta(2) + anidado() + libreria() + con_dueno() + en_bucle();
+}

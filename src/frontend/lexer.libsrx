@@ -1,0 +1,636 @@
+/- frontend.lexer — el análisis léxico de suriaX, escrito en suriaX.
+
+ Es la traducción del lexer de la V0 (`V0/src/frontend/lexer/`), scanner por
+ scanner, con la misma salida: los mismos tokens, en las mismas posiciones,
+ con los mismos códigos de error (LEX001...). Eso lo comprueba una prueba
+ DIFERENCIAL (`test/e2e/test_bootstrap_lexer.py`) que pasa el mismo fuente
+ por los dos lexers y compara token a token.
+
+ Cómo está hecho:
+
+ - un `Cursor` lleva el fuente, la posición, la línea y dónde empezó la
+   línea actual; la columna se calcula cuando hace falta (`col_de`), como
+   en la V0, en vez de actualizarla por cada carácter;
+ - el PRIMER carácter de cada token decide qué scanner lo lee (un nombre,
+   un número, una cadena, un carácter, una directiva, un decorador o un
+   operador);
+ - un error léxico no detiene nada: se anota en `errores` con su código y
+   el scanner devuelve un token `ERROR` con el texto que no entendió. El
+   lexer SIEMPRE avanza, así que un fuente roto no lo cuelga.
+
+ Diferencias conocidas con la V0 (ver el readme de `src/frontend/`):
+ `#extern cpp { ... }` no captura el bloque crudo, y la clase de un
+ carácter Unicode (letra, espacio) es una aproximación: el lenguaje no
+ tiene todavía tablas Unicode.
+-/
+
+#import frontend.tokens as tk
+#import array.vector as vec
+
+struct {
+    str fuente;
+    int largo;
+    int pos;
+    int linea;
+    int inicio;     // índice donde empieza la línea actual
+} Cursor;
+
+// --------------------------------------------------------------------------- //
+// el cursor
+// --------------------------------------------------------------------------- //
+
+fn col_de(Cursor ptr c) -> int {
+    return c.pos - c.inicio + 1;
+}
+
+/- Avanza hasta `hasta`, contando los saltos de línea que cruza. Cada
+   carácter se cruza una sola vez en todo el análisis: el costo total es
+   lineal en el tamaño del fuente. -/
+fn avanza(Cursor ptr mutable c, int hasta) -> void {
+    while (c.pos < hasta) {
+        if (c.fuente[c.pos] == '\n') {
+            c.linea = c.linea + 1;
+            c.inicio = c.pos + 1;
+        }
+        c.pos = c.pos + 1;
+    }
+}
+
+/- El texto entre `desde` y `hasta`. El lenguaje no tiene subcadenas, así
+   que se arma carácter a carácter (ver las falencias en el readme). -/
+fn trozo(str s, int desde, int hasta) -> str {
+    var str r = "";
+    var int i = desde;
+    while (i < hasta) {
+        r = r + cast<str>(s[i]);
+        i = i + 1;
+    }
+    return r;
+}
+
+/- Un error léxico: se anota, el cursor avanza (al menos un carácter, para
+   no quedarse en el mismo sitio) y queda un token ERROR con lo leído. -/
+fn falla(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+         str codigo, str mensaje, int desde, int linea, int col,
+         int hasta) -> tk.Token {
+    avanza(c, hasta);
+    if (c.pos == desde) { avanza(c, desde + 1); }
+    errores.push(f"{linea}:{col} {codigo}: {mensaje}");
+    return tk.token(tk.TType.ERROR, trozo(c.fuente, desde, c.pos), linea, col);
+}
+
+// --------------------------------------------------------------------------- //
+// clases de caracteres
+// --------------------------------------------------------------------------- //
+
+fn es_digito(char ch) -> bool {
+    var int p = cast<int>(ch);
+    return p >= 48 and p <= 57;
+}
+
+/- Los espacios que reconoce `str.isspace()` de Python (el de la V0). -/
+fn es_espacio(char ch) -> bool {
+    var int p = cast<int>(ch);
+    if (p == 32 or (p >= 9 and p <= 13) or (p >= 28 and p <= 31)) { return true; }
+    if (p == 133 or p == 160 or p == 5760 or p == 8232 or p == 8233) { return true; }
+    if (p == 8239 or p == 8287 or p == 12288) { return true; }
+    return p >= 8192 and p <= 8202;
+}
+
+/- Letra ASCII, '_' o cualquier carácter no ASCII que no sea un espacio.
+
+   APROXIMACIÓN: la V0 usa las tablas Unicode de Python (XID_Start), y aquí
+   no hay tablas. `ñ` o `日` salen igual; un símbolo no ASCII como `€` es
+   una letra aquí y un carácter inesperado allí. -/
+fn inicia_nombre(char ch) -> bool {
+    var int p = cast<int>(ch);
+    if (p == 95) { return true; }
+    if ((p >= 65 and p <= 90) or (p >= 97 and p <= 122)) { return true; }
+    return p >= 128 and not es_espacio(ch);
+}
+
+fn continua_nombre(char ch) -> bool {
+    return inicia_nombre(ch) or es_digito(ch);
+}
+
+/- Las letras que pueden seguir a '\' en una cadena o un carácter. -/
+fn es_escape(char ch) -> bool {
+    return ch == 'n' or ch == 't' or ch == 'r' or ch == '0' or ch == '\\'
+        or ch == '"' or ch == '\'';
+}
+
+// --------------------------------------------------------------------------- //
+// comentarios
+// --------------------------------------------------------------------------- //
+
+fn salta_linea(Cursor ptr mutable c) -> void {
+    var int p = c.pos + 2;
+    while (p < c.largo and c.fuente[p] != '\n') { p = p + 1; }
+    avanza(c, p);
+}
+
+// Un comentario de bloque. Sin cerrar es LEX004 y, como en la V0, no deja
+// token. (Este comentario no puede ser de bloque: su cierre lo cortaría.)
+fn salta_bloque(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> void {
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var int p = c.pos + 2;
+    while (p < c.largo - 1) {
+        if (c.fuente[p] == '-' and c.fuente[p + 1] == '/') {
+            avanza(c, p + 2);
+            return;
+        }
+        p = p + 1;
+    }
+    avanza(c, c.largo);
+    errores.push(f"{linea}:{col} LEX004: comentario multilinea sin cerrar");
+}
+
+// --------------------------------------------------------------------------- //
+// scanners
+// --------------------------------------------------------------------------- //
+
+/- Un nombre: identificador, palabra reservada o la forma `__x__`. -/
+fn escanea_nombre(Cursor ptr mutable c) -> tk.Token {
+    var int desde = c.pos;
+    var int col = col_de(c);
+    var int p = desde + 1;
+    while (p < c.largo and continua_nombre(c.fuente[p])) { p = p + 1; }
+    var str lexema = trozo(c.fuente, desde, p);
+    avanza(c, p);
+    var int n = p - desde;
+    if (n > 4 and lexema[0] == '_' and lexema[1] == '_'
+            and lexema[n - 1] == '_' and lexema[n - 2] == '_') {
+        return tk.token(tk.TType.DUNDER, lexema, c.linea, col);
+    }
+    return tk.token(tk.palabra_clave(lexema), lexema, c.linea, col);
+}
+
+/- Entero o flotante en base 10, o entero en base 16, 2 u 8 con prefijo
+   (`0xFF`, `0b1010`, `0o755`). `_` separa dígitos, solo ENTRE dos. Un '.'
+   solo es decimal si le sigue un dígito (`1.foo` es `1` y luego `.`); un
+   segundo punto, un dígito que no es de la base o un `_` suelto son LEX007,
+   con los mensajes de la V0. -/
+fn escanea_numero(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    if (c.fuente[desde] == '0' and desde + 1 < c.largo and es_prefijo(c.fuente[desde + 1])) {
+        return escanea_con_base(c, errores, desde, linea, col);
+    }
+    var int p = desde;
+    var bool punto = false;
+    while (p < c.largo) {
+        var char ch = c.fuente[p];
+        if (es_digito(ch)) {
+            p = p + 1;
+        } else if (ch == '_') {
+            if (not separador_valido(c, p, 10)) {
+                return falla(c, errores, "LEX007",
+                             "un '_' separa digitos: tiene que ir entre dos",
+                             desde, linea, col, fin_del_literal(c, p));
+            }
+            p = p + 1;
+        } else if (ch == '.') {
+            if (punto) {
+                return falla(c, errores, "LEX007",
+                             "el literal numerico tiene mas de un punto decimal",
+                             desde, linea, col, p + 1);
+            }
+            if (p + 1 < c.largo and es_digito(c.fuente[p + 1])) {
+                punto = true;
+                p = p + 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    var str lexema = trozo(c.fuente, desde, p);
+    avanza(c, p);
+    if (punto) { return tk.token(tk.TType.FLOAT_LIT, lexema, c.linea, col); }
+    return tk.token(tk.TType.INT_LIT, lexema, c.linea, col);
+}
+
+fn es_prefijo(char ch) -> bool {
+    return ch == 'x' or ch == 'X' or ch == 'b' or ch == 'B' or ch == 'o' or ch == 'O';
+}
+
+/- ¿`ch` es un dígito de la `base` (16, 10, 8 o 2)? -/
+fn digito_de(char ch, int base) -> bool {
+    var int p = cast<int>(ch);
+    if (base == 2) { return p == 48 or p == 49; }
+    if (base == 8) { return p >= 48 and p <= 55; }
+    if (base == 10) { return es_digito(ch); }
+    return es_digito(ch) or (p >= 97 and p <= 102) or (p >= 65 and p <= 70);
+}
+
+/- Un '_' vale solo ENTRE dos dígitos de la base. -/
+fn separador_valido(Cursor ptr mutable c, int p, int base) -> bool {
+    return p > 0 and digito_de(c.fuente[p - 1], base)
+        and p + 1 < c.largo and digito_de(c.fuente[p + 1], base);
+}
+
+/- Hasta dónde llega lo que PARECE un literal: el error sale una vez y el
+   lexer sigue después. -/
+fn fin_del_literal(Cursor ptr mutable c, int p) -> int {
+    var int q = p;
+    while (q < c.largo and continua_nombre(c.fuente[q])) { q = q + 1; }
+    return q;
+}
+
+/- El valor de un dígito de hasta base 16. -/
+public fn valor_de_digito(char ch) -> int {
+    var int p = cast<int>(ch);
+    if (p >= 97) { return p - 87; }
+    if (p >= 65) { return p - 55; }
+    return p - 48;
+}
+
+/- ¿Los dígitos de `desde` a `hasta` caben en 64 bits? Se cuentan los bits
+   de los dígitos significativos (sin los ceros de delante ni los '_'). -/
+fn cabe_en_64(Cursor ptr mutable c, int desde, int hasta, int base) -> bool {
+    var int por_digito = 4;
+    if (base == 2) { por_digito = 1; }
+    if (base == 8) { por_digito = 3; }
+    var int i = desde;
+    while (i < hasta and (c.fuente[i] == '0' or c.fuente[i] == '_')) { i = i + 1; }
+    if (i == hasta) { return true; }
+    var int primero = valor_de_digito(c.fuente[i]);
+    var int bits = 1;
+    if (primero >= 2) { bits = 2; }
+    if (primero >= 4) { bits = 3; }
+    if (primero >= 8) { bits = 4; }
+    i = i + 1;
+    while (i < hasta) {
+        if (c.fuente[i] != '_') { bits = bits + por_digito; }
+        i = i + 1;
+    }
+    return bits <= 64;
+}
+
+/- Un entero con prefijo: `0x`, `0b` o `0o`. Es un PATRÓN DE BITS: puede
+   usar los 64 (`0xFFFFFFFFFFFFFFFF` vale -1). -/
+fn escanea_con_base(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+                    int desde, int linea, int col) -> tk.Token {
+    var char letra = c.fuente[desde + 1];
+    var int base = 16;
+    var str nombre = "hexadecimal";
+    if (letra == 'b' or letra == 'B') { base = 2; nombre = "binario"; }
+    if (letra == 'o' or letra == 'O') { base = 8; nombre = "octal"; }
+    var int p = desde + 2;
+    while (p < c.largo) {
+        var char ch = c.fuente[p];
+        if (digito_de(ch, base)) {
+            p = p + 1;
+        } else if (ch == '_') {
+            if (not separador_valido(c, p, base)) {
+                return falla(c, errores, "LEX007",
+                             "un '_' separa digitos: tiene que ir entre dos",
+                             desde, linea, col, fin_del_literal(c, p));
+            }
+            p = p + 1;
+        } else if (continua_nombre(ch)) {
+            return falla(c, errores, "LEX007", f"'{ch}' no es un digito {nombre}",
+                         desde, linea, col, fin_del_literal(c, p));
+        } else {
+            break;
+        }
+    }
+    var str lexema = trozo(c.fuente, desde, p);
+    if (p == desde + 2) {
+        return falla(c, errores, "LEX007",
+                     f"el literal {nombre} no tiene digitos despues de '{lexema}'",
+                     desde, linea, col, p);
+    }
+    if (not cabe_en_64(c, desde + 2, p, base)) {
+        return falla(c, errores, "LEX007",
+                     f"el literal {nombre} '{lexema}' no cabe en 64 bits",
+                     desde, linea, col, p);
+    }
+    avanza(c, p);
+    return tk.token(tk.TType.INT_LIT, lexema, c.linea, col);
+}
+
+/- Tras un error DENTRO de una cadena, el lexer sigue después de su comilla
+   de cierre (o al final de la línea): así el resto del literal no se lee
+   como código y no salen errores en cascada. -/
+fn fin_de_cadena(Cursor ptr c, int desde) -> int {
+    var int p = desde;
+    while (p < c.largo and c.fuente[p] != '\n') {
+        if (c.fuente[p] == '\\') {
+            p = p + 2;
+        } else if (c.fuente[p] == '"') {
+            return p + 1;
+        } else {
+            p = p + 1;
+        }
+    }
+    return p;
+}
+
+fn solo_espacios(str s) -> bool {
+    var int i = 0;
+    while (i < len(s)) {
+        if (not es_espacio(s[i])) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+/- `"..."` o, con `interpola`, `f"...{expr}..."`. El token guarda el texto
+   crudo; qué hay dentro de cada `{}` lo decide el parser. -/
+fn escanea_cadena(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+                  int prefijo, bool interpola) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var int p = desde + prefijo + 1;
+    while (p < c.largo) {
+        var char ch = c.fuente[p];
+        if (ch == '"') {
+            avanza(c, p + 1);
+            return tk.token(tk.TType.STRING_LIT, trozo(c.fuente, desde, p + 1),
+                            c.linea, col);
+        }
+        if (ch == '\n') { break; }
+        if (ch == '\\') {
+            p = p + 1;
+            if (p >= c.largo) { break; }
+            if (not es_escape(c.fuente[p])) {
+                return falla(c, errores, "LEX005",
+                             "secuencia de escape no reconocida: '\\"
+                             + cast<str>(c.fuente[p]) + "'",
+                             desde, linea, col, p + 1);
+            }
+            p = p + 1;
+            continue;
+        }
+        if (interpola and ch == '{') {
+            if (p + 1 < c.largo and c.fuente[p + 1] == '{') {
+                p = p + 2;
+                continue;
+            }
+            // la interpolación: hasta su '}' (con anidamiento), en la línea
+            var int j = p + 1;
+            var int prof = 1;
+            while (j < c.largo and c.fuente[j] != '\n') {
+                if (c.fuente[j] == '{') {
+                    prof = prof + 1;
+                } else if (c.fuente[j] == '}') {
+                    prof = prof - 1;
+                    if (prof == 0) { break; }
+                }
+                j = j + 1;
+            }
+            if (j >= c.largo or c.fuente[j] != '}') {
+                return falla(c, errores, "LEX002",
+                             "interpolacion sin cerrar: falta '}'",
+                             desde, linea, col, fin_de_cadena(c, j));
+            }
+            if (solo_espacios(trozo(c.fuente, p + 1, j))) {
+                return falla(c, errores, "LEX002", "interpolacion vacia: '{}'",
+                             desde, linea, col, fin_de_cadena(c, j + 1));
+            }
+            p = j + 1;
+            continue;
+        }
+        if (interpola and ch == '}') {
+            if (p + 1 < c.largo and c.fuente[p + 1] == '}') {
+                p = p + 2;
+                continue;
+            }
+            return falla(c, errores, "LEX002",
+                         "'}' suelto en una f-string; usa '}}' para una llave literal",
+                         desde, linea, col, fin_de_cadena(c, p + 1));
+        }
+        p = p + 1;
+    }
+    return falla(c, errores, "LEX003", "literal sin delimitador de cierre",
+                 desde, linea, col, p);
+}
+
+/- `'x'`: exactamente un code point (o un escape). -/
+fn escanea_caracter(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var int p = desde + 1;
+    var int cuenta = 0;
+    while (p < c.largo) {
+        var char ch = c.fuente[p];
+        if (ch == '\'') {
+            p = p + 1;
+            if (cuenta != 1) {
+                return falla(c, errores, "LEX012",
+                             "un literal de caracter debe contener exactamente un code point",
+                             desde, linea, col, p);
+            }
+            avanza(c, p);
+            return tk.token(tk.TType.CHAR_LIT, trozo(c.fuente, desde, p), c.linea, col);
+        }
+        if (ch == '\n') { break; }
+        if (ch == '\\') {
+            p = p + 1;
+            if (p >= c.largo) { break; }
+            if (not es_escape(c.fuente[p])) {
+                return falla(c, errores, "LEX005",
+                             "secuencia de escape no reconocida: '\\"
+                             + cast<str>(c.fuente[p]) + "'",
+                             desde, linea, col, p + 1);
+            }
+        }
+        cuenta = cuenta + 1;
+        p = p + 1;
+    }
+    return falla(c, errores, "LEX003", "literal sin delimitador de cierre",
+                 desde, linea, col, p);
+}
+
+/- El nombre que sigue a `#` o `@` (vacío si no empieza como un nombre). -/
+fn fin_de_nombre(Cursor ptr c, int desde) -> int {
+    var int p = desde;
+    if (p < c.largo and inicia_nombre(c.fuente[p])) {
+        p = p + 1;
+        while (p < c.largo and continua_nombre(c.fuente[p])) { p = p + 1; }
+    }
+    return p;
+}
+
+fn escanea_directiva(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var int p = fin_de_nombre(c, desde + 1);
+    var str nombre = trozo(c.fuente, desde + 1, p);
+    if (not tk.es_directiva(nombre)) {
+        return falla(c, errores, "LEX010", f"directiva no reconocida: '#{nombre}'",
+                     desde, linea, col, p);
+    }
+    avanza(c, p);
+    return tk.token(tk.TType.DIRECTIVE, trozo(c.fuente, desde, p), c.linea, col);
+}
+
+fn escanea_decorador(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var int p = fin_de_nombre(c, desde + 1);
+    if (p == desde + 1) {
+        return falla(c, errores, "LEX013", "se esperaba un identificador despues de '@'",
+                     desde, linea, col, p);
+    }
+    avanza(c, p);
+    return tk.token(tk.TType.DECORATOR, trozo(c.fuente, desde, p), c.linea, col);
+}
+
+/- Operadores de DOS caracteres; `ERROR` si el par no es uno. -/
+fn operador_doble(char a, char b) -> tk.TType {
+    if (b == '=') {
+        if (a == '=') { return tk.TType.EQUAL; }
+        if (a == '!') { return tk.TType.NOT_EQUAL; }
+        if (a == '<') { return tk.TType.LESS_EQUAL; }
+        if (a == '>') { return tk.TType.GREATER_EQUAL; }
+        if (a == '+') { return tk.TType.PLUS_ASSIGN; }
+        if (a == '-') { return tk.TType.MINUS_ASSIGN; }
+        if (a == '*') { return tk.TType.STAR_ASSIGN; }
+        if (a == '/') { return tk.TType.SLASH_ASSIGN; }
+        if (a == '%') { return tk.TType.PERCENT_ASSIGN; }
+        if (a == '&') { return tk.TType.AMP_ASSIGN; }
+        if (a == '|') { return tk.TType.PIPE_ASSIGN; }
+        if (a == '^') { return tk.TType.CARET_ASSIGN; }
+    }
+    if (a == '<' and b == '<') { return tk.TType.SHIFT_LEFT; }
+    if (a == '-' and b == '>') { return tk.TType.ARROW; }
+    if (a == '+' and b == '+') { return tk.TType.INCREMENT; }
+    if (a == '-' and b == '-') { return tk.TType.DECREMENT; }
+    return tk.TType.ERROR;
+}
+
+fn operador_simple(char a) -> tk.TType {
+    if (a == '+') { return tk.TType.PLUS; }
+    if (a == '-') { return tk.TType.MINUS; }
+    if (a == '*') { return tk.TType.MULTIPLY; }
+    if (a == '/') { return tk.TType.DIVIDE; }
+    if (a == '%') { return tk.TType.MODULO; }
+    if (a == '(') { return tk.TType.L_PAREN; }
+    if (a == ')') { return tk.TType.R_PAREN; }
+    if (a == '{') { return tk.TType.L_BRACE; }
+    if (a == '}') { return tk.TType.R_BRACE; }
+    if (a == '[') { return tk.TType.L_BRACKET; }
+    if (a == ']') { return tk.TType.R_BRACKET; }
+    if (a == '.') { return tk.TType.DOT; }
+    if (a == ',') { return tk.TType.COMMA; }
+    if (a == ';') { return tk.TType.SEMICOLON; }
+    if (a == ':') { return tk.TType.COLON; }
+    if (a == '&') { return tk.TType.ADDRESS; }
+    if (a == '|') { return tk.TType.PIPE; }
+    if (a == '^') { return tk.TType.CARET; }
+    if (a == '~') { return tk.TType.TILDE; }
+    if (a == '?') { return tk.TType.NULLABLE; }
+    if (a == '=') { return tk.TType.ASSIGN; }
+    if (a == '<') { return tk.TType.LESS; }
+    if (a == '>') { return tk.TType.GREATER; }
+    return tk.TType.ERROR;
+}
+
+fn escanea_operador(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var int desde = c.pos;
+    var int linea = c.linea;
+    var int col = col_de(c);
+    var char a = c.fuente[desde];
+    // '<<=' es el unico de tres caracteres
+    if (a == '<' and desde + 2 < c.largo and c.fuente[desde + 1] == '<'
+            and c.fuente[desde + 2] == '=') {
+        avanza(c, desde + 3);
+        return tk.token(tk.TType.SHIFT_LEFT_ASSIGN, "<<=", c.linea, col);
+    }
+    if (desde + 1 < c.largo) {
+        var tk.TType doble = operador_doble(a, c.fuente[desde + 1]);
+        if (doble != tk.TType.ERROR) {
+            avanza(c, desde + 2);
+            return tk.token(doble, trozo(c.fuente, desde, desde + 2), c.linea, col);
+        }
+    }
+    var tk.TType simple = operador_simple(a);
+    if (simple != tk.TType.ERROR) {
+        avanza(c, desde + 1);
+        return tk.token(simple, cast<str>(a), c.linea, col);
+    }
+    return falla(c, errores, "LEX001", "caracter no reconocido: '" + cast<str>(a) + "'",
+                 desde, linea, col, desde + 1);
+}
+
+/- El primer carácter decide el scanner. -/
+fn escanea(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+    var char ch = c.fuente[c.pos];
+    if (ch == 'f' and c.pos + 1 < c.largo and c.fuente[c.pos + 1] == '"') {
+        return escanea_cadena(c, errores, 1, true);
+    }
+    if (inicia_nombre(ch)) { return escanea_nombre(c); }
+    if (es_digito(ch)) { return escanea_numero(c, errores); }
+    if (ch == '"') { return escanea_cadena(c, errores, 0, false); }
+    if (ch == '\'') { return escanea_caracter(c, errores); }
+    if (ch == '#') { return escanea_directiva(c, errores); }
+    if (ch == '@') { return escanea_decorador(c, errores); }
+    return escanea_operador(c, errores);
+}
+
+/- Dos cadenas SEGUIDAS son una sola, como en C y en Python: el token
+   resultante empieza donde la primera y su lexema une los dos con un
+   espacio (lo mismo que hace la V0). -/
+fn agrega(vec.Vector<tk.Token> ptr mutable toks, tk.Token t) -> void {
+    var int n = toks.len();
+    if (t.tipo == tk.TType.STRING_LIT and n > 0) {
+        var tk.Token previo = toks.get(n - 1);
+        if (previo.tipo == tk.TType.STRING_LIT) {
+            var str inicios = previo.inicios;
+            if (inicios == "") { inicios = f"{previo.col}"; }
+            var tk.Token unido = tk.token(tk.TType.STRING_LIT,
+                                          previo.lexema + " " + t.lexema,
+                                          previo.linea, previo.col);
+            unido.inicios = inicios + f";{t.col}";
+            toks[n - 1] = unido;
+            return;
+        }
+    }
+    toks.push(t);
+}
+
+// --------------------------------------------------------------------------- //
+// la entrada
+// --------------------------------------------------------------------------- //
+
+/- `fuente` -> sus tokens, terminados en `EOF`. Los errores léxicos se
+   AÑADEN a `errores` ("linea:col LEXnnn: mensaje"); el análisis sigue
+   después de cada uno. -/
+public fn tokenizar(str fuente, vec.Vector<str> ptr mutable errores) -> vec.Vector<tk.Token> {
+    var Cursor c = Cursor{ fuente: fuente, largo: len(fuente), pos: 0, linea: 1, inicio: 0 };
+    var vec.Vector<tk.Token> toks = vec.dynamic<tk.Token>(16);
+    while (c.pos < c.largo) {
+        var char ch = c.fuente[c.pos];
+        if (es_espacio(ch)) {
+            var int p = c.pos;
+            while (p < c.largo and es_espacio(c.fuente[p])) { p = p + 1; }
+            avanza(&c, p);
+            continue;
+        }
+        if (ch == '/' and c.pos + 1 < c.largo) {
+            var char sig = c.fuente[c.pos + 1];
+            if (sig == '/') {
+                salta_linea(&c);
+                continue;
+            }
+            if (sig == '-') {
+                salta_bloque(&c, errores);
+                continue;
+            }
+        }
+        agrega(&toks, escanea(&c, errores));
+    }
+    toks.push(tk.token(tk.TType.EOF, "", c.linea, col_de(&c)));
+    return toks;
+}
+
+#export as lexer

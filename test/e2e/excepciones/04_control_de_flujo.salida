@@ -1,0 +1,15 @@
+-- break y continue dentro de un try
+  vuelta 1
+  vuelta 3
+  salio con i=4
+-- un throw por vuelta, atrapado en cada una
+  atrapados 3 de 5
+-- un throw corta el bucle entero si el try esta afuera
+  corto en 6
+-- return dentro del try y dentro del catch
+  -8
+  devuelto desde el catch (x)
+-- throw en la condicion del while
+  la condicion lanzo con n=3
+-- lo hecho antes del throw no se deshace
+  s = 11

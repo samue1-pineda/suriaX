@@ -20,12 +20,14 @@ jobs:
   pruebas:
     name: Ejecutar la suite
     runs-on: ubuntu-latest
-    # La suite entera tarda ~2 minutos. Si pasa de esto es que algo se colgó,
-    # y es mejor fallar que dejar el job esperando media hora.
-    timeout-minutes: 20
+    # Las categorias de siempre (sin 'backend' ni 'bootstrap', que tienen su
+    # workflow y corren cuando cambia lo que prueban). Tarda unos minutos. Si pasa de esto es que algo se colgó, y es mejor
+    # fallar que dejar el job esperando media hora.
+    timeout-minutes: 30
     outputs:
       pasados: ${{ steps.suite.outputs.pasados }}
       fallidos: ${{ steps.suite.outputs.fallidos }}
+      omitidas: ${{ steps.suite.outputs.omitidas }}
       total: ${{ steps.suite.outputs.total }}
     steps:
       - name: Checkout
@@ -38,8 +40,8 @@ jobs:
           cache: "pip"
 
       # node ejecuta la suite del backend web (TypeScript, en test/web/). Sin
-      # él esos tests se saltan con aviso en vez de fallar, pero aquí SÍ lo
-      # queremos: es parte de lo que hay que probar.
+      # él esos tests se OMITEN (visibles en el informe, nunca como pasados),
+      # pero aquí SÍ lo queremos: es parte de lo que hay que probar.
       - name: Preparar node
         uses: actions/setup-node@v4
         with:
@@ -51,6 +53,17 @@ jobs:
           sudo apt-get install -y protobuf-compiler
           python -m pip install --upgrade pip
           pip install protobuf pyyaml
+
+      # El backend C++ (HIR -> MIR -> VM). 'main.py prog.srcx' ejecuta en la
+      # VM cuando esta construida (el motor por defecto), asi que las pruebas
+      # e2e corren sobre ella. Las que COMPARAN la VM con el interprete son la
+      # categoria 'backend' y tienen su workflow (backend.yml). Solo necesita
+      # CMake y un compilador de C++20; el estandar lo fija 'version.py'.
+      - name: Construir el backend C++
+        run: |
+          cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target suriax-hir -j
+          ./build/bin/suriax-hir --help > /dev/null
 
       # '--json' escribe el recuento y la lista de fallos. Se re-parsea la
       # salida de consola NUNCA: está pensada para una persona y cambia cuando
@@ -67,6 +80,7 @@ jobs:
           d = json.load(open("resumen.json", encoding="utf-8"))
           print(f"pasados={d['passed']}")
           print(f"fallidos={d['failed']}")
+          print(f"omitidas={d['skipped']}")
           print(f"total={d['total']}")
           print(f"modulos={d['modules']}")
           PY
@@ -86,18 +100,37 @@ jobs:
               print("## Suite de pruebas\n\nLa suite no llegó a terminar: "
                     "no hay resumen que informar. Ver el log del paso anterior.")
               raise SystemExit(0)
-          estado = "todo verde" if not d["failed"] else f"{d['failed']} fallo(s)"
+          if d["failed"]:
+              estado = f"{d['failed']} fallo(s)"
+          elif d["skipped"]:
+              estado = f"sin fallos, {d['skipped']} omitida(s)"
+          else:
+              estado = "todo verde"
           print(f"## Suite de pruebas — {estado}\n")
-          print(f"**{d['passed']} de {d['total']}** pruebas pasadas "
+          print(f"**{d['passed']} de {d['total']}** pruebas pasadas, "
+                f"{d['failed']} fallidas y {d['skipped']} omitidas "
                 f"en {d['modules']} módulos.\n")
           if d["failures"]:
               print("### Qué no pasó\n")
-              print("| Categoría | Módulo | Prueba | Error |")
+              print("| Categoría | Prueba | Dónde | Error |")
               print("|---|---|---|---|")
               for f in d["failures"]:
                   err = f["error"].replace("|", "\\|")
-                  print(f"| `{f['category']}` | `{f['module']}` | `{f['test']}` | {err} |")
+                  print(f"| `{f['category']}` | `{f['module']}::{f['test']}` "
+                        f"| `{f['file']}:{f['line']}` | {err} |")
               print("\nLa traza completa de cada uno está en el log del job.")
+          # Una omitida NO se ejecutó: se lista con su motivo para que nadie
+          # la lea como probada.
+          if d["skips"]:
+              por_motivo = {}
+              for o in d["skips"]:
+                  por_motivo.setdefault(o["reason"], []).append(o["test"])
+              print("\n### Qué no se ejecutó (omitidas)\n")
+              print("| Pruebas | Motivo |")
+              print("|---|---|")
+              for motivo, pruebas in sorted(por_motivo.items(),
+                                            key=lambda kv: -len(kv[1])):
+                  print(f"| {len(pruebas)} | {motivo.replace('|', chr(92) + '|')} |")
           PY
 
       - name: Guardar el resumen
@@ -134,11 +167,16 @@ jobs:
           pasados = int("${{ needs.pruebas.outputs.pasados }}" or 0)
           total = int("${{ needs.pruebas.outputs.total }}" or 0)
           fallidos = int("${{ needs.pruebas.outputs.fallidos }}" or 0)
+          omitidas = int("${{ needs.pruebas.outputs.omitidas }}" or 0)
           if total == 0:
               mensaje, color = "sin datos", "lightgrey"
           else:
+              # 'total' incluye las omitidas: la medalla no suma al verde lo
+              # que no se ejecutó. Sin fallos pero con omitidas es amarillo.
               mensaje = f"{pasados}/{total} pasan"
-              color = "red" if fallidos else "brightgreen"
+              if omitidas:
+                  mensaje += f" · {omitidas} omitidas"
+              color = "red" if fallidos else ("yellow" if omitidas else "brightgreen")
 
           os.makedirs("badges", exist_ok=True)
 

@@ -19,11 +19,15 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from .enviroment.environment import Frame
-from .errors import MissingEntryError, SuriaXRuntimeError
+from .errors import (ExcepcionDelPrograma, MissingEntryError,
+                     SuriaXRuntimeError, UncaughtThrowError)
 from .evaluator import Evaluator, Thrown
 from .loader import Image, Unit
 from .memory.pointer import Cell
 from .values import EnumNamespace, FunctionValue, Namespace, TypeValue, format_value
+
+
+_SK_STRUCT = 2    # espejo de SymbolKind.STRUCT
 
 
 def _build_globals(unit: Unit) -> Frame:
@@ -60,6 +64,13 @@ def _run_module_level(unit: Unit, evaluator: Evaluator) -> None:
         elif which == "from_directive":
             d = decl.from_directive
             name = d.alias or d.name
+            tipo = unit.module.symbols.types.get(name)
+            if tipo is not None and tipo.kind == _SK_STRUCT:
+                # un STRUCT ('#from cosa #import Plano'): no tiene valor en
+                # runtime que ligar; sus usos ya viajan con el nombre
+                # canonico ('cosa.Plano') en el HIR. Un enum si lo tiene (sus
+                # variantes), y se liga como cualquier miembro.
+                continue
             target = evaluator._namespace_member(  # miembro real de la unidad
                 Namespace(d.unit or d.lib), d.name, ln=decl.ln, col=decl.col,
             )
@@ -85,6 +96,9 @@ def run(image: Image, config: Optional[dict] = None,
 
     interp_cfg = ((config or {}).get("interpreter") or {})
     entry_name = interp_cfg.get("entry", "main")
+    # 'sistema.argumento(i)': el 0 es el archivo que se ejecuta (como argv[0])
+    from . import intrinsics
+    intrinsics.fijar_argumentos(interp_cfg.get("argumentos") or [image.main.path])
     evaluator = Evaluator(
         image,
         trace=bool(interp_cfg.get("trace_memory", False)),
@@ -122,8 +136,13 @@ def run(image: Image, config: Optional[dict] = None,
         result = evaluator.call_function(image.main, entry, [])
     except Thrown as thrown:
         # un 'throw' que escapó de todo 'try/catch': error no capturado.
-        print(f"error no capturado — throw {format_value(thrown.value)} "
-              f"({thrown.ln}:{thrown.col})", file=sys.stderr)
+        error = UncaughtThrowError(f"throw {format_value(thrown.value)}",
+                                   ln=thrown.ln, col=thrown.col)
+        print(f"error no capturado — {error}", file=sys.stderr)
+        return 70
+    except ExcepcionDelPrograma as exc:
+        # una excepción del runtime (EXCxxx) que ningún 'catch' atrapó
+        print(f"excepción no capturada — {exc}", file=sys.stderr)
         return 70
     except SuriaXRuntimeError as exc:
         print(f"error de runtime — {exc}", file=sys.stderr)

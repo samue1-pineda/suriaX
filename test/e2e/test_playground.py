@@ -21,6 +21,11 @@ import threading
 import urllib.error
 import urllib.request
 
+# helpers.omitir: la única forma de saltarse una prueba (el runner la cuenta
+# como OMITIDA, nunca como pasada).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from helpers import omitir  # noqa: E402
+
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 for _p in (_REPO_ROOT, os.path.join(_REPO_ROOT, "V0"),
            os.path.join(_REPO_ROOT, "playground")):
@@ -40,10 +45,6 @@ fn main() -> int {
     return 0;
 }
 """
-
-
-def _skip(reason: str) -> None:
-    print(f"      (omitido: {reason})", file=sys.stderr)
 
 
 def _collect(source: str):
@@ -428,8 +429,7 @@ def test_lo_que_el_target_no_soporta_es_un_ERROR_de_compilacion():
     para ese target**. Enseñarlo como un hueco invitaba a pensar que el
     intérprete lo salvaría, y por ese camino no pasa el intérprete."""
     if shutil.which("node") is None:
-        _skip("node no está instalado; el target web no corre")
-        return
+        omitir("node no está instalado; el target web no corre")
     from server import compile_source
 
     datos = compile_source(
@@ -453,8 +453,7 @@ def test_no_soportado_y_no_compilado_se_distinguen():
     definitivo ("el target decidió no ejecutar esto") y un ``WEB1xx`` es
     trabajo pendiente del compilador."""
     if shutil.which("node") is None:
-        _skip("node no está instalado; el target web no corre")
-        return
+        omitir("node no está instalado; el target web no corre")
     from server import compile_source
 
     # un struct: el codegen todavía no llega, pero no está prohibido

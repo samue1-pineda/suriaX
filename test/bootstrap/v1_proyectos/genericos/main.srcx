@@ -1,0 +1,20 @@
+#import caja as cj
+#from mem #import reserve
+#import mem
+
+fn main() -> int {
+    var cj.Bolsa<int> b = cj.nueva<int>(4);
+    b.datos[0] = 5;
+    var int ptr mutable q = mem.reserve<int>(3);
+    var int ptr mutable p = mem.reserve<int>(3);
+    mem.copy<int>(q, p, 3);
+    mem.release<int>(p);
+    var str ptr mutable s = mem.reserve<str>(2);
+    s[0] = "a";
+    var str t = mem.take<str>(s, 0);
+    var cj.Par<int, str> par = cj.junta<int, str>(1, "uno");
+    var cj.Par<bool, cj.Bolsa<int>> otro = cj.junta(true, cj.nueva<int>(1));
+    var int x = cj.primero<int>(&b) + par.a + cj.usa_oculta(2);
+    cj.libera<int>(&b);
+    return x;
+}

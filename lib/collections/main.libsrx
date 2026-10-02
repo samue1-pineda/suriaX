@@ -1,0 +1,22 @@
+/- collections: estructuras de datos sobre 'mem', escritas en suriaX.
+
+ Es un PAQUETE con un submódulo por estructura, para que crecer (un
+ conjunto, una cola) sea añadir un archivo:
+
+     collections.dictionary   Dictionary<K, V>: claves a valores, por hash
+
+     #import collections.dictionary as dic
+
+     fn main() -> int {
+         var dic.Dictionary<str, int> edades = dic.make<str, int>(8);
+         edades.put("ana", 31);
+         edades.put("luis", 28);
+         if (edades.contains("ana")) { ... }
+         return 0;
+     }
+
+ Los nombres del código están en inglés (put, get, keys...) y los
+ comentarios en español: es la convención de las librerías nuevas.
+-/
+
+#export package as collections

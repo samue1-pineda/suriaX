@@ -1,0 +1,188 @@
+/- frontend.arbol — el árbol sintáctico, guardado en una ARENA.
+
+ El lenguaje no tiene tipos recursivos ni memoria dinámica suelta: un nodo
+ no puede contener a sus hijos. Así que todos los nodos viven en UN vector
+ (la arena) y se enlazan por su ÍNDICE: cada nodo sabe cuál es su primer
+ hijo, su último hijo y su siguiente hermano. Es la representación
+ "primer hijo / siguiente hermano" de los libros de estructuras de datos, y
+ con ella un nodo tiene tantos hijos como haga falta sin listas propias.
+
+ Los nodos son UNIFORMES: la clase es el nombre de la clase de la V0
+ (`FunctionDecl`, `BinaryOp`...), y cada hijo sabe en qué CAMPO de su padre
+ cuelga (`body`, `params`). Los valores escalares (un nombre, un operador)
+ se guardan ya escritos en `attrs`, en el orden de los campos de la V0, que
+ es el orden en que los imprime el volcado canónico. Ese volcado es lo que
+ la prueba diferencial compara contra el AST de la V0.
+-/
+
+#from io #import stdp
+#import array.vector as vec
+
+struct {
+    str clase;      // la clase de la V0; "" para un trozo de texto de una f-string
+    str campo;      // el campo del padre donde cuelga ("" para la raíz)
+    str attrs;      // escalares ya escritos: ` name="main" specifier="hook"`
+    str nombre;     // el escalar principal, para la lógica del parser
+    str extra;      // un segundo escalar (la clase de un literal)
+    int linea;
+    int col;
+    int primero;    // primer hijo, -1 si no hay
+    int ultimo;     // último hijo, -1 si no hay
+    int siguiente;  // siguiente hermano, -1 si no hay
+} Nodo;
+
+public fn nuevo(vec.Vector<Nodo> ptr mutable a, str clase, int linea, int col) -> int {
+    a.push(Nodo{ clase: clase, campo: "", attrs: "", nombre: "", extra: "",
+                 linea: linea, col: col, primero: -1, ultimo: -1, siguiente: -1 });
+    return a.len() - 1;
+}
+
+public fn clase_de(vec.Vector<Nodo> ptr a, int n) -> str { return a.get(n).clase; }
+public fn nombre_de(vec.Vector<Nodo> ptr a, int n) -> str { return a.get(n).nombre; }
+public fn extra_de(vec.Vector<Nodo> ptr a, int n) -> str { return a.get(n).extra; }
+public fn linea_de(vec.Vector<Nodo> ptr a, int n) -> int { return a.get(n).linea; }
+public fn col_de(vec.Vector<Nodo> ptr a, int n) -> int { return a.get(n).col; }
+public fn primero_de(vec.Vector<Nodo> ptr a, int n) -> int { return a.get(n).primero; }
+public fn siguiente_de(vec.Vector<Nodo> ptr a, int n) -> int { return a.get(n).siguiente; }
+public fn campo_de(vec.Vector<Nodo> ptr a, int n) -> str { return a.get(n).campo; }
+
+/- Fija el escalar principal (y el secundario) que usa la lógica. -/
+public fn pon_nombre(vec.Vector<Nodo> ptr mutable a, int n, str nombre, str extra) -> void {
+    var Nodo x = a.get(n);
+    x.nombre = nombre;
+    x.extra = extra;
+    a[n] = x;
+}
+
+/- Un escalar de TEXTO: se escribe entre comillas, con sus escapes. -/
+public fn attr_texto(vec.Vector<Nodo> ptr mutable a, int n, str clave, str valor) -> void {
+    attr_crudo(a, n, clave, cita(valor));
+}
+
+/- Un escalar que se escribe tal cual (un número, `true`, una lista). -/
+public fn attr_crudo(vec.Vector<Nodo> ptr mutable a, int n, str clave, str valor) -> void {
+    var Nodo x = a.get(n);
+    x.attrs = x.attrs + " " + clave + "=" + valor;
+    a[n] = x;
+}
+
+/- Cuelga `h` del campo `campo` de `padre`, detrás de los hijos que ya
+   tenga. Un `h` negativo (un hijo que no existe) no hace nada. -/
+public fn hijo(vec.Vector<Nodo> ptr mutable a, int padre, str campo, int h) -> void {
+    if (h < 0) { return; }
+    var Nodo x = a.get(h);
+    x.campo = campo;
+    x.siguiente = -1;
+    a[h] = x;
+    var Nodo p = a.get(padre);
+    if (p.ultimo < 0) {
+        p.primero = h;
+    } else {
+        var Nodo u = a.get(p.ultimo);
+        u.siguiente = h;
+        a[p.ultimo] = u;
+    }
+    p.ultimo = h;
+    a[padre] = p;
+}
+
+/- Los hijos de `n`, en orden (para recorrerlos o moverlos a otro padre). -/
+public fn hijos(vec.Vector<Nodo> ptr a, int n) -> vec.Vector<int> {
+    var vec.Vector<int> r = vec.dynamic<int>(4);
+    var int h = a.get(n).primero;
+    while (h >= 0) {
+        r.push(h);
+        h = a.get(h).siguiente;
+    }
+    return r;
+}
+
+/- El primer hijo de `n` colgado del campo `campo`, o -1. -/
+public fn hijo_llamado(vec.Vector<Nodo> ptr a, int n, str campo) -> int {
+    var int h = a.get(n).primero;
+    while (h >= 0) {
+        if (a.get(h).campo == campo) { return h; }
+        h = a.get(h).siguiente;
+    }
+    return -1;
+}
+
+/- Mueve TODO el subárbol de `n` a una posición: lo que hace la V0 con el
+   árbol de una interpolación, que se analiza aparte y cuenta desde 1:1. -/
+public fn reubica(vec.Vector<Nodo> ptr mutable a, int n, int linea, int col) -> void {
+    var Nodo x = a.get(n);
+    x.linea = linea;
+    x.col = col;
+    a[n] = x;
+    var int h = x.primero;
+    while (h >= 0) {
+        reubica(a, h, linea, col);
+        h = a.get(h).siguiente;
+    }
+}
+
+/- Una copia PROFUNDA de `n` (sin padre): un nodo solo puede colgar de un
+   sitio, y el azúcar (`x += 1`, `int vec.Vector v[8]`) usa algunos dos
+   veces. La V0 comparte el objeto; aquí hace falta copiarlo. -/
+public fn copia(vec.Vector<Nodo> ptr mutable a, int n) -> int {
+    var Nodo x = a.get(n);
+    var int c = nuevo(a, x.clase, x.linea, x.col);
+    var Nodo y = a.get(c);
+    y.attrs = x.attrs;
+    y.nombre = x.nombre;
+    y.extra = x.extra;
+    a[c] = y;
+    var int h = x.primero;
+    while (h >= 0) {
+        hijo(a, c, a.get(h).campo, copia(a, h));
+        h = a.get(h).siguiente;
+    }
+    return c;
+}
+
+/- Un texto entre comillas, con los mismos escapes que el volcado de la
+   prueba en Python: así los dos lados escriben igual el mismo valor. -/
+public fn cita(str s) -> str {
+    var str r = "\"";
+    var int i = 0;
+    while (i < len(s)) {
+        var char c = s[i];
+        if (c == '\\') { r = r + "\\\\"; }
+        else if (c == '"') { r = r + "\\\""; }
+        else if (c == '\n') { r = r + "\\n"; }
+        else if (c == '\t') { r = r + "\\t"; }
+        else if (c == '\r') { r = r + "\\r"; }
+        else if (c == '\0') { r = r + "\\0"; }
+        else { r = r + cast<str>(c); }
+        i = i + 1;
+    }
+    return r + "\"";
+}
+
+/- El volcado canónico: una línea por nodo, sangrada por profundidad.
+
+       campo: Clase linea:col escalar=valor ...
+
+   Un trozo de texto de una f-string (clase "") se escribe solo con su
+   valor. Es el mismo formato que produce la prueba a partir del AST de la
+   V0 (`test/e2e/test_bootstrap_parser.py`). -/
+public fn vuelca(vec.Vector<Nodo> ptr a, int n, int nivel) -> void {
+    var Nodo x = a.get(n);
+    var str sangria = "";
+    var int i = 0;
+    while (i < nivel) { sangria = sangria + "  "; i = i + 1; }
+    var str cabeza = sangria;
+    if (x.campo != "") { cabeza = cabeza + x.campo + ": "; }
+    if (x.clase == "") {
+        stdp.println(cabeza + x.nombre);
+    } else {
+        stdp.println(f"{cabeza}{x.clase} {x.linea}:{x.col}{x.attrs}");
+    }
+    var int h = x.primero;
+    while (h >= 0) {
+        vuelca(a, h, nivel + 1);
+        h = a.get(h).siguiente;
+    }
+}
+
+#export as arbol

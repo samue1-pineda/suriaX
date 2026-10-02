@@ -5,8 +5,8 @@
 # módulo nativo traía el suyo (`runtime/logic_mem/CMakeLists.txt`) con su
 # propio `project()`, su propio `find_package(pybind11)` y su propia copia de
 # las mismas seis líneas de configuración: tres módulos serían tres sitios
-# donde arreglar el mismo bug, y el `runtime/` va a crecer (la VM de
-# bytecode, el lector HIR en C++, el lowering a LLVM).
+# donde arreglar el mismo bug, y el lado nativo va a crecer (la VM del MIR,
+# su JIT; LLVM quedó fuera del plan).
 #
 # La lógica reutilizable vive en `CMake/` como módulos:
 #
@@ -46,11 +46,34 @@ if(NOT CMAKE_MATCH_1)
         "version del proyecto y su formato tiene que ser VERSION = \"X.Y.Z\"")
 endif()
 set(SURIAX_VERSION "${CMAKE_MATCH_1}")
+
+# El estandar de C++ tambien sale de 'version.py' (CXX_STANDARD): es UNO solo
+# para todo el proyecto, incluidos los bloques '#extern cpp' que compila el
+# interprete. Pasar otro con -DSURIAX_CXX_STANDARD es un error, no una
+# opcion: dos estandares en el mismo binario es el tipo de conflicto que
+# compila y falla despues, lejos de su causa.
+string(REGEX MATCH "CXX_STANDARD[ \t]*=[ \t]*\"([0-9]+)\""
+       _suriax_cxx_match "${_suriax_version_py}")
+if(NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR
+        "no se pudo leer CXX_STANDARD de version.py: es la fuente unica del "
+        "estandar de C++ y su formato tiene que ser CXX_STANDARD = \"NN\"")
+endif()
+if(DEFINED CACHE{SURIAX_CXX_STANDARD} AND
+   NOT "$CACHE{SURIAX_CXX_STANDARD}" STREQUAL "${CMAKE_MATCH_1}")
+    message(FATAL_ERROR
+        "SURIAX_CXX_STANDARD=$CACHE{SURIAX_CXX_STANDARD}, pero el proyecto usa "
+        "C++${CMAKE_MATCH_1} en todas partes (version.py, CXX_STANDARD). "
+        "Mezclar estandares rompe el enlace con '#extern cpp' y los modulos "
+        "nativos. Borra la cache (rm -rf build) o cambia version.py si de "
+        "verdad hay que migrar TODO el proyecto.")
+endif()
+set(SURIAX_CXX_STANDARD "${CMAKE_MATCH_1}")
 unset(_suriax_version_py)
 
 project(suriaX
     VERSION ${SURIAX_VERSION}
-    DESCRIPTION "Lado nativo de suriaX: backend de memoria y futuros consumidores del HIR"
+    DESCRIPTION "Lado nativo de suriaX: backend de memoria y backend C++ (HIR, MIR, VM)"
     LANGUAGES CXX
 )
 
@@ -84,7 +107,7 @@ if(suriax_native_targets)
 endif()
 
 # ---------------------------------------------------------------------------
-# backend C++: el lector del HIR, entrada del futuro lowering a MIR
+# backend C++: lector del HIR, lowering a MIR, verificación y VM
 # ---------------------------------------------------------------------------
 suriax_add_backend(
     ROOT  "${CMAKE_CURRENT_SOURCE_DIR}/backend"

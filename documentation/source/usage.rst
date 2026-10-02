@@ -6,10 +6,11 @@
 Requisitos
 -----------
 
-El frontend de suriaX es Python puro; el resto son opcionales y solo hacen
-falta para la fase que los usa.
+El compilador de suriaX es Python puro: el frontend, el HIR (que se serializa
+con un codec propio) y el intérprete corren solo con la biblioteca estándar.
+El resto es opcional y solo hace falta para el componente que lo usa.
 
-.. list-table:: Dependencias por fase
+.. list-table:: Dependencias por componente
    :header-rows: 1
    :widths: 25 35 40
 
@@ -17,27 +18,28 @@ falta para la fase que los usa.
      - Necesario para
      - Cómo se instala
    * - Python 3.10+
-     - lexer, parser, semántica
+     - compilar, emitir el HIR y ejecutar (``--run``)
      - ``python --version``
    * - ``pyyaml``
-     - leer ``.suriaX_config.yaml``
+     - leer un ``.suriaX_config.yaml`` propio y ``--init-config``
      - ``pip install pyyaml``
-   * - ``protobuf``
-     - emitir el HIR (``--emit-hir``)
-     - ``pip install protobuf``
-   * - ``protoc``
-     - generar los stubs del HIR
-     - ``apt install protobuf-compiler``
    * - ``pybind11`` + CMake
-     - memoria nativa del runtime
+     - memoria nativa del intérprete (opcional: sin ella corre en Python)
      - ``pip install pybind11``
+   * - compilador de C++ (``g++``/``clang++``)
+     - ejecutar programas con ``#extern cpp{}``
+     - el del sistema
+   * - CMake 3.20+ y un compilador de C++20
+     - la VM ``suriax-hir`` (MIR y VM); no usa protobuf
+     - el del sistema; en Windows, MSVC (ver ``how_to_run.md``)
    * - Node 22+
      - target web (WebAssembly)
      - gestor de paquetes del sistema
-   * - LLVM 22
-     - nada del pipeline actual (``--check`` lo reporta, pero el target
-       nativo es la VM/JIT y no pasa por LLVM)
-     - ``llvm-config --version``
+   * - ``protobuf`` (pip) + ``protoc``
+     - solo la prueba cruzada del codec del HIR
+     - ``pip install protobuf``
+
+LLVM no se usa ni se detecta: el target nativo es una VM, no LLVM.
 
 Para comprobar qué hay disponible en la máquina actual:
 
@@ -57,7 +59,9 @@ Desde el repositorio
 
    $ git clone https://github.com/samue1-pineda/suriaX.git
    $ cd suriaX
-   $ pip install -r requirements.txt
+   $ pip install -r requirements.txt    # opcional: nada de esto hace falta para compilar
+   $ pip install -e .                   # opcional: instala el comando 'suri'
+   $ suri hola.srcx                     # = python main.py hola.srcx (compila y ejecuta)
 
 Desde un *release*
 ~~~~~~~~~~~~~~~~~~~
@@ -110,9 +114,12 @@ Y ejecútalo:
      unidad 'IO': 145 bytes -> dumps/IO.phir
    hola, suriaX
 
-``--run`` emite el HIR y se lo entrega al intérprete **en el mismo proceso**.
-El valor que devuelve ``main`` es el código de salida del compilador, así que
-``echo $?`` lo muestra.
+``--run`` emite el HIR y lo ejecuta en el motor que pide el ``target`` del
+``.suriaX_config.yaml``: ``native`` (el defecto) es la VM compilada
+(``suriax-hir``) e ``interp`` el intérprete; ``--run compiler`` y
+``--run interpreter`` lo fuerzan. Si la VM no está construida, se ejecuta en
+el intérprete con un aviso. El valor que devuelve ``main`` es el código de
+salida del compilador, así que ``echo $?`` lo muestra.
 
 .. important::
    El fuente tiene que estar donde el linker de librerías pueda encontrar
@@ -134,6 +141,13 @@ Desde la línea de comandos con ``--emit-stage``:
    $ python V0/main.py hola.srcx --emit-stage ast
    $ python V0/main.py hola.srcx --emit-stage sem
    $ python V0/main.py hola.srcx --emit-stage hir
+   $ python V0/main.py hola.srcx --emit-stage desugar
+
+``desugar`` es el HIR legible con el AZÚCAR señalado: encima de cada
+sentencia, la línea del fuente como se escribió, y en cada construcción que
+el compilador reescribe (``x += v``, ``x++``, ``with``, ``.campo``, la
+declaración de un vector, el ``move`` de un ``throw``, el ``cast`` de un
+literal) en qué la convirtió.
 
 Desde el propio archivo, con la directiva ``#test`` en la primera línea: el
 compilador vuelca esa fase y termina, sin seguir el pipeline.
@@ -194,7 +208,7 @@ Ejecución
    ====================  ===================================================================
    Opción                Efecto
    ====================  ===================================================================
-   ``--run``             Emite el HIR y lo ejecuta con el intérprete.
+   ``--run``             Emite el HIR y lo ejecuta (en la VM o en el intérprete, según el ``target``).
    ``--trace-exec``      Traza llamadas y retornos anidados durante la ejecución.
    ``--trace-memory``    Traza las instrucciones de memoria (``&``, ``move``, ``free``).
    ``--time``            Tiempo de cada fase, en milisegundos.
@@ -216,13 +230,21 @@ Integración con editores
      - Todos los diagnósticos en JSON (código, mensaje, línea, columna, rango,
        fase). Sale con código 0 aunque haya errores: el cliente los lee del
        JSON, no del *exit code*.
+   * - ``--emit-index``
+     - Los diagnósticos **más** el índice del archivo: cada símbolo con su
+       tipo, su firma (con los nombres de los parámetros), su posición, el
+       comentario de encima y, si es de una librería, su archivo; cada uso de
+       cada símbolo; y qué va después de un ``.`` en cada tipo. Es lo que
+       necesita un editor para *hover*, ir a la definición y completar.
    * - ``--stdin``
      - Lee el fuente de la entrada estándar; el argumento de archivo sigue
        anclando la resolución de librerías. Permite analizar un buffer sin
        guardar.
    * - ``--emit-lang-info``
      - La especificación del lenguaje en JSON: palabras clave por categoría,
-       tokens, directivas, hooks y códigos de error. Trae también
+       tokens, directivas, hooks, códigos de error, la sintaxis para
+       colorear (comentarios, escapes, literales, formato de los f-strings)
+       y los *snippets* de cada construcción. Trae también
        ``compiler_version``, para que el cliente sepa contra qué compilador
        está hablando y no atribuya a un error suyo un vocabulario viejo.
    * - ``--emit-extensions``

@@ -52,8 +52,9 @@ dice qué se puede usar hoy, para que la referencia no prometa de más.
    Punteros de solo lectura vs ``mutable``    completo   ``SEM015``
    Qué tipos tienen que destruirse            completo   sistema de tipos
    Drop automático al cerrar el ámbito        completo   semántica + ejecución
+   Destruir por tipo (genéricos, bloques)     completo   semántica + ejecución
    Arenas como tipo de librería               pendiente  —
-   Préstamos verificados al compilar          pendiente  MIR (fase 6)
+   Préstamos verificados al compilar          parcial    MIR (fase 6)
    Recuento de referencias                    futuro     —
    =========================================  =========  ==========================
 
@@ -91,6 +92,40 @@ Volver a asignar un nombre lo **revive**: un valor nuevo no está movido.
    consumir(move b);
    b = crear_buffer(128);      // válido: 'b' vuelve a tener dueño
    usar(b);
+
+Pasar un valor a una función
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Un parámetro **por valor** es el **dueño** de lo que recibe: si al terminar la
+función no lo transfirió a otro sitio (``move``, ``return``), lo destruye. Por
+eso pasar por valor algo con destructor exige ``move`` en la llamada —la misma
+regla que un ``var``, y el mismo código, ``SEM032``—. Para solo leer o
+modificar el valor sin quedárselo, el parámetro se declara ``ptr`` y se pasa
+``&x``:
+
+.. code-block:: srcx
+   :class: fragmento
+
+   fn consumir(Buffer b) -> void { ... }      // dueño: lo destruye al salir
+   fn leer(Buffer ptr b) -> int { ... }       // préstamo: no destruye nada
+
+   consumir(move buf);      // cede la propiedad
+   consumir(buf);           // SEM032: dejaría dos dueños del mismo recurso
+   leer(&buf);              // presta: 'buf' sigue siendo del llamador
+   consumir(crear(64));     // un temporal no necesita 'move': nadie más lo tiene
+
+Hay tres excepciones, porque ahí nadie puede escribir ``move``. En los tres
+casos el parámetro recibe una copia prestada y **no** la destruye:
+
+- los **hooks** que invoca el compilador (``cast<T>(x)`` → ``__cast__``,
+  ``v[i] = x`` → ``__index_set__``);
+- el **receptor** de un método (``x.metodo()``);
+- un parámetro declarado con un **parámetro de tipo** (``T``) en una función
+  genérica. Los drops se deciden por declaración, no por instancia: es un
+  límite conocido.
+
+Antes de la 0.3.1, pasar por nombre dejaba al llamador como dueño y
+``consumir(move b)`` no dejaba a nadie: el recurso no se destruía nunca.
 
 En ejecución, el intérprete hace cumplir lo mismo sobre las celdas: leer una
 celda movida es ``RT001`` y volver a moverla ``RT002``. Los dos niveles
@@ -187,6 +222,44 @@ bajando a esos campos, uno por uno. La regla que decide es de quién es la
 responsabilidad: si el tipo declara ``__free__``, **ese** destructor se hace
 cargo de todo lo suyo y el compilador no toca sus campos; si no lo declara, el
 compilador destruye los campos que poseen.
+
+Destruir por tipo
+~~~~~~~~~~~~~~~~~
+
+Hay valores cuyo tipo el compilador no conoce en el punto donde decide qué
+destruir: el ``T`` de un genérico (``fn toma<T>(T x)`` se escribe una vez y se
+usa con ``int`` y con ``Buffer``), lo atrapado por un ``catch (e)`` sin tipo,
+y los elementos de un bloque de ``mem``. Esos se destruyen **por su tipo
+concreto**, con la misma regla de arriba aplicada donde el tipo se conoce (en
+ejecución, o al monomorfizar): si declara ``__free__``, ese; si no, sus campos
+que poseen, del último al primero.
+
+Con eso, un **contenedor es dueño de sus elementos**:
+
+- un bloque de ``mem`` posee sus celdas no vacías, y soltarlo
+  (``mem.release``) las destruye. Para sacar un valor sin destruirlo están
+  ``mem.take`` (una celda) y ``mem.transfer`` (un tramo): la celda queda
+  vacía y el valor, con un solo dueño;
+- un campo ``R ptr`` de un struct es su bloque y **posee si** ``R`` **posee**:
+  ``Vector<Buffer>`` destruye sus buffers al morir y ``Vector<int>`` no tiene
+  nada que destruir (y se sigue copiando sin ``move``);
+- reasignar un dueño destruye el valor que tenía: ``v.set(0, move b)`` o
+  ``a = Buffer{...}``.
+
+Lo que **copiaría** un elemento —``v.get(0)``, ``v[0]``— no se puede con un
+elemento que tiene destructor: la copia y el elemento serían dos dueños. El
+error (``SEM038``) sale en la llamada y dice dónde copia el genérico. Para
+leerlo sin copiarlo, ``v.at(0)`` lo **presta** (un puntero); para quedárselo,
+``v.take(0)`` lo **saca**:
+
+.. code-block:: srcx
+   :class: fragmento
+
+   var vec.Vector<Buffer> v = vec.dynamic<Buffer>(4);
+   v.push(crear_buffer(64));          // el vector es el dueño
+   usar(v.at(0));                     // prestado: sigue en el vector
+   var Buffer b = v.take(0);          // sacado: ahora es de 'b'
+   // al cerrar el ámbito: 'b' se destruye, y el vector con lo que tenga
 
 Liberar antes de tiempo
 ~~~~~~~~~~~~~~~~~~~~~~~~

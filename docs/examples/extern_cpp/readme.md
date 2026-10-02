@@ -9,6 +9,9 @@ suri docs/examples/extern_cpp/consola.srcx
 SURIAX_CPP_FLAGS="-lX11" suri docs/examples/extern_cpp/ventana.srcx
 ```
 
+La VM hace lo mismo: `suriax-hir programa.phir --run` construye el C++ junto
+al `.phir` y liga los prototipos (ver [backend/README.md](../../../backend/README.md)).
+
 | archivo | qué demuestra |
 |---|---|
 | `consola.srcx` | `std::cout` escribiendo, un `long long` volviendo a suriaX, y una `str` cruzando como `const char*` |

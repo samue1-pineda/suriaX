@@ -53,12 +53,19 @@ def _load():
     return module
 
 
+#: Por qué NO cargó el módulo nativo (``None`` si cargó). La caída a Python
+#: puro es deliberada, pero el motivo no se tira: sin él, "no cargó" podía ser
+#: que nadie lo construyó, que se construyó para otra versión de Python o que
+#: el ``.so`` está roto, y cada caso se arregla distinto.
+LOAD_ERROR: Optional[str] = None
+
 try:
     _MODULE = _load()
     AVAILABLE = True
-except Exception:  # pragma: no cover - entorno sin el .so compilado
+except Exception as exc:  # noqa: BLE001 - se recupera, pero conserva la causa
     _MODULE = None
     AVAILABLE = False
+    LOAD_ERROR = f"{type(exc).__name__}: {exc}"
 
 _manager = None
 
@@ -132,4 +139,4 @@ class NativeCell:
         return cls(f"'{self.name}' {_MSG[cls]} (backend nativo)", ln=ln, col=col)
 
 
-__all__ = ["NativeCell", "AVAILABLE", "manager", "reset", "stats"]
+__all__ = ["NativeCell", "AVAILABLE", "LOAD_ERROR", "manager", "reset", "stats"]

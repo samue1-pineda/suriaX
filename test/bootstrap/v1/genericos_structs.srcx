@@ -1,0 +1,29 @@
+struct { T valor; int n; } Caja<T>;
+struct { A primero; B segundo; } Par<A, B>;
+struct { T ptr mutable datos; int len; } Lista<T>;
+struct { int x; int y; } Punto;
+
+fn valor_de(Caja<int> c) -> int { return c.valor; }
+fn segundo_de(Par<int, str> p) -> str { return p.segundo; }
+fn anidado(Caja<Caja<float>> c) -> float { return c.valor.valor; }
+fn por_puntero(Caja<str> ptr c) -> str { return c.valor; }
+fn mutable_(Caja<int> ptr mutable c) -> void { c.valor = c.valor + 1; }
+fn indice(Lista<int> l, int i) -> int { return l.datos[i]; }
+fn escribe(Lista<str> l) -> void { l.datos[0] = "z"; }
+
+fn main() -> int {
+    var Caja<int> a = Caja<int>{ valor: 7, n: 1 };
+    var Caja<str> b = Caja<str>{ valor: "hola", n: 2 };
+    var Par<int, str> p = Par<int, str>{ primero: 1, segundo: "dos" };
+    var Caja<Caja<float>> cc = Caja<Caja<float>>{ valor: Caja<float>{ valor: 1.5, n: 0 }, n: 3 };
+    var Caja<Punto> cp = Caja<Punto>{ valor: Punto{ x: 1, y: 2 }, n: 4 };
+    var Par<Caja<int>, Par<bool, char>> raro = Par<Caja<int>, Par<bool, char>>{
+        primero: a, segundo: Par<bool, char>{ primero: true, segundo: 'c' } };
+    a.valor = a.valor + cp.valor.x;
+    mutable_(&a);
+    var str s = por_puntero(&b) + segundo_de(p);
+    var int k = valor_de(a) + p.primero + cast<int>(anidado(cc)) + raro.primero.n;
+    if (a.n < b.n) { k = k + 1; };
+    if (raro.segundo.primero) { k = k + 2; };
+    return k;
+}

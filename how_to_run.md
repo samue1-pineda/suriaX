@@ -1,17 +1,41 @@
-# Cómo ejecutar un archivo
+# Cómo usar suriaX: los comandos
 
-Guía de cómo se ejecuta un archivo `.srcx`(Pre-Alpha) y cómo se
-ejecutará a futuro. Para la arquitectura interna ver
-[ARCHITECTURE.md](ARCHITECTURE.md).
+Guía de uso de los comandos de suriaX: compilar y ejecutar un archivo,
+inspeccionar cada fase, correr las pruebas, construir la VM, usar el
+compilador escrito en suriaX (la V1) y construir la documentación. La
+referencia COMPLETA de cada bandera está en [FLAGS.md](FLAGS.md); la
+arquitectura interna, en [ARCHITECTURE.md](ARCHITECTURE.md).
+
+Todos los comandos se escriben desde la raíz del repositorio.
 
 ---
 
-## 1. Estado actual (Pre-Alpha)
+## 0. Los comandos de un vistazo
+
+| Para... | Comando | Más |
+|---|---|---|
+| compilar (y ver los errores) | `python V0/main.py archivo.srcx` | §1 |
+| compilar y ejecutar | `python V0/main.py archivo.srcx --run` (o `suri archivo.srcx`) | §1 |
+| ver una fase (tokens, AST, HIR) | `--emit-tokens`, `--emit-ast-json`, `--emit-hir --hir-pretty` | §1 |
+| un reporte para un bug | `python V0/main.py archivo.srcx --run --debug` | §1 |
+| ejecutar un `.phir` ya emitido | `python runtime/interpreter/main.py dumps/x.phir --exec` | §1.b |
+| las pruebas | `python test/main.py` (todas: `--todo`) | §1.c |
+| construir la VM | `cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF` y `cmake --build build --target suriax-hir` | §1.d |
+| ejecutar en la VM | `build/bin/suriax-hir dumps/x.phir --run` | §1.d |
+| compilar con la V1 | `suriax-hir dumps/main.srcx.phir --run -- prog.srcx salida/prog.phir --stdlib lib` | §1.e |
+| el punto fijo | `python test/main.py bootstrap` | §1.e |
+| construir la documentación | `sphinx-build -b html documentation/source documentation/build/html` | §1.f |
+| comprobar el entorno | `python V0/main.py --check` | §3 |
+| generar la configuración | `python V0/main.py --init-config` | §2 |
+
+---
+
+## 1. Compilar y ejecutar
 
 El pipeline **compila y EJECUTA**: `.srcx` → lexer → parser → AST-tipado →
-Semántica → **HIR (protobuf)** → intérprete tree-walk. El backend C++ (MIR →
-VM/JIT) es
-lo que falta (ver [ROADMAP.md](ROADMAP.md)).
+Semántica → **HIR (`.phir`)** → la VM (`suriax-hir`, si está construida) o el
+intérprete tree-walk. Lo que todavía no existe (un ejecutable propio, el JIT)
+está en la §2.
 
 > **`fn main` es OPCIONAL.** Las sentencias en el nivel superior del archivo
 > se ejecutan tal cual (modo script): `__write__("hola\n");` a solas es un
@@ -24,13 +48,14 @@ lo que falta (ver [ROADMAP.md](ROADMAP.md)).
 
 ### Requisitos
 
-- **Python 3.10+**
-- Para **todo el frontend** (lexer → Semántica, con sus diagnósticos en
-  consola) **NO** hace falta ninguna dependencia externa: solo la librería
-  estándar. Ni LLVM, ni protobuf, ni pyyaml.
-- Para **emitir el HIR o ejecutar** (`--emit-hir`, `--run`) hace falta
-  `protobuf` (Python) y `protoc`. Si falta, el compilador aborta con un
-  mensaje que dice qué instalar — no revienta.
+- **Python 3.10+**, y nada más para compilar y ejecutar: el frontend, el
+  **HIR** (`--emit-hir`, que se serializa con un codec propio) y el
+  **intérprete** corren solo con la librería estándar. Ni protobuf, ni
+  `protoc`, ni pyyaml, ni LLVM. La VM (`suriax-hir`, más rápida) es opcional:
+  hay que construirla con CMake (sección 3).
+- `pyyaml` solo hace falta para leer un `.suriaX_config.yaml` propio (sin él
+  se usan los valores por defecto y se avisa) y para `--init-config`.
+- Lo demás es opcional y por componente: ver la sección 3.
 
 ### Entrypoint: `V0/main.py`
 
@@ -38,7 +63,9 @@ lo que falta (ver [ROADMAP.md](ROADMAP.md)).
 # compilar (frontend completo: reporta errores y símbolos)
 python V0/main.py archivo.srcx
 
-# compilar Y EJECUTAR con el intérprete
+# compilar Y EJECUTAR: en la VM si está construida ('target: native', el
+# defecto), si no en el intérprete con un aviso; '--run interpreter' o
+# '--run compiler' fuerzan el motor
 python V0/main.py archivo.srcx --run
 
 # verificar dependencias / generar el .suriaX_config.yaml
@@ -59,8 +86,12 @@ python V0/main.py --version
 4. reporta diagnósticos en **consola** y en `./log/<fuente>.log` (+ los
    JSONL estructurados `errors.jsonl` / `notes.jsonl`).
 
-Códigos de salida: `0` ok · `1` errores de compilación · `2` archivo no
-encontrado · `3` dependencia faltante · `70` error de ejecución (runtime).
+Códigos de salida: `0` ok · `1` errores de compilación (el programa tiene
+errores) · `2` archivo no encontrado · `3` dependencia faltante · `4` error
+de extensiones (`EXT`) · `5` configuración inválida (`CFG`) · `6` error
+**interno** del compilador (`ICE000`: falló el compilador, no el programa) ·
+`70` error de ejecución (runtime). La tabla completa está en
+[FLAGS.md](FLAGS.md).
 
 ### Volcados y depuración
 
@@ -78,8 +109,9 @@ Todo artefacto de inspección va a `./dumps` (configurable con
 | `--time` | tiempos por fase, a consola |
 | `--trace-exec` | traza de ejecución (llamadas/retornos anidados) |
 | `--trace-memory` | traza de memoria (`&`, `move`, `free`, `catch`) |
-| `--emit-lang-info` | imprime la especificación del lenguaje en JSON (keywords, tokens, directivas, hooks, códigos de error) y termina — fuente del LSP/extensión; no necesita un fuente |
+| `--emit-lang-info` | imprime la especificación del lenguaje en JSON (keywords, tokens, directivas, hooks, códigos de error, sintaxis para colorear, snippets) y termina — fuente del LSP/extensión; no necesita un fuente |
 | `--emit-diagnostics` | JSON con TODOS los diagnósticos (código/mensaje/línea/columna/fase) a stdout, sin tocar disco; exit 0 aunque haya diagnósticos — canal en vivo del LSP |
+| `--emit-index` | los diagnósticos más el índice del archivo (símbolos con tipo, firma y comentario, sus usos, los miembros de cada tipo) — canal del LSP para hover, ir a la definición y completar |
 
 **`--debug` es el atajo para reportar un bug**: reúne en un solo `.txt` el
 entorno, el estado de dependencias, métricas, tokens, AST-tipado, tabla de
@@ -161,8 +193,10 @@ Cada `.libsrx` importada emite **su propio `.phir`** junto al principal; el
 ## 1.c. La suite de pruebas
 
 ```bash
-python test/main.py                    # todas las categorías
+python test/main.py                    # las categorías de siempre
 python test/main.py unit negative_tests  # solo algunas
+python test/main.py backend bootstrap  # a pedido: las que comparan implementaciones
+python test/main.py --todo             # todas
 python test/main.py --json resumen.json  # + resumen legible por máquina (CI)
 SURIAX_UPDATE_GOLDEN=1 python test/main.py snapshot   # regenerar golden
 ```
@@ -176,12 +210,23 @@ ejecutan, comparando salida — incluye librerías/paquetes, `try`/`catch` y
 memoria) y `fuzz` (entradas adversariales y de escala). El runner es propio,
 sin framework externo.
 
+Cada prueba termina **pasada** (`✓`), **fallida** (`✗`) u **omitida** (`○`).
+Una omitida es una que NO se ejecutó porque falta algo en la máquina (node, el
+binario C++, el módulo `memory_c`, pyyaml...): se lista al final con su
+motivo, va en el `--json` y en el informe de la CI, y **nunca cuenta como
+pasada**. No hace fallar la corrida: el código de salida depende solo de los
+fallos. Un fallo se muestra como en Python —traceback desde la prueba, la
+línea del `assert` y, si la aserción no trae mensaje, las variables locales
+con las que falló—. El runner se relanza solo en el modo UTF-8 de Python, así
+que la salida no depende de la codificación de la máquina (en Windows antes
+se caía).
+
 **Todas** las pruebas del repositorio viven bajo `test/`. Además de las seis
 categorías hay dos carpetas que no lo son:
 
 | Carpeta | Qué es |
 |---|---|
-| `test/web/` | La suite del backend web (TypeScript). La engancha `test/unit/test_web_backend.py`, que la corre con `node --test`, así que `python test/main.py` sigue siendo el único comando. Sin node se salta con aviso |
+| `test/web/` | La suite del backend web (TypeScript). La engancha `test/unit/test_web_backend.py`, que la corre con `node --test`, así que `python test/main.py` sigue siendo el único comando. Sin node se OMITE (visible en el resumen) |
 | `test/manual/` | Utilidades que se corren a mano (p. ej. el volcado del lexer), no en cada corrida |
 
 Los tests de `grammar` existen para **localizar** un fallo sin leer el resto
@@ -190,40 +235,125 @@ y falla el de ejecución, está en el HIR o en el intérprete.
 
 ---
 
-## 2. Cómo se ejecutará a futuro (compilador completo)
+## 1.d. La VM (`suriax-hir`): construir y usar
 
-A futuro, `V0/main.py` (o el binario distribuido `suriaX`) orquestará el
-pipeline completo descrito en [ARCHITECTURE.md](ARCHITECTURE.md)
-
-### Selección de target
-
-El backend C++ consulta `compilerconfig` y emite el artefacto según la
-plataforma/flag:
-
-| Flag        | Target | Artefacto | Paso final |
-|-------------|--------|-----------|------------|
-| `IS_WEB`    | wasm   | `.wasm`   | (playground) |
-| `IS_WIN32`  | native | `.exe`    | linker      |
-| `IS_LINUX`  | native | `.o`      | **linker** → ejecutable |
-
-> En Linux el backend produce un `.o`; un paso de **linker** (etapa final dentro
-> del backend C++) lo enlaza para generar el ejecutable. `compilerconfig` aporta
-> las rutas/flags del linker.
-
-### Forma de invocación prevista
+La VM es el backend nativo en C++: lee el `.phir`, lo baja a MIR y lo
+ejecuta, con la misma salida que el intérprete y mucho más rápido. Solo
+necesita **CMake 3.20+ y un compilador de C++20**: no tiene dependencias (lee
+el `.phir` con su propio decodificador, sin protobuf).
 
 ```bash
-# compilar a nativo (según plataforma)
-suriaX build archivo.srcx -o programa
-
-# compilar a WebAssembly (playground / target web)
-suriaX build archivo.srcx --target wasm
-
-# visualizar la salida de una etapa concreta (objetivo educativo del lenguaje)
-suriaX inspect archivo.srcx --stage hir
+# Linux / macOS
+cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF
+cmake --build build --target suriax-hir
+./build/bin/suriax-hir --help
 ```
 
-*(La CLI definitiva puede cambiar; esto refleja la intención de diseño.)*
+```bat
+:: Windows: MSVC + Ninja, desde un entorno de Visual Studio (cl.exe no está
+:: en el PATH de una terminal normal)
+call "C:\Program Files\Microsoft Visual Studio\<versión>\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=cl -DCMAKE_BUILD_TYPE=Release -DSURIAX_BUILD_NATIVE=OFF
+cmake --build build --target suriax-hir
+build\bin\suriax-hir.exe --help
+```
+
+`SURIAX_BUILD_NATIVE=OFF` deja fuera la memoria nativa del intérprete
+(`memory_c`), que además pide pybind11. Las trampas de Windows, las opciones
+de CMake, los builds con sanitizadores y cómo añadir un binario nuevo están en
+[CMake/README.md](CMake/README.md).
+
+Con la VM construida, `python V0/main.py archivo.srcx --run` ya la usa (el
+`target` por defecto es `native`). Para usarla directamente sobre un `.phir`:
+
+```bash
+build/bin/suriax-hir dumps/x.phir --run                 # ejecuta (imprime '[vm] main() -> N')
+build/bin/suriax-hir dumps/x.phir --run --quiet         # solo la salida del programa
+build/bin/suriax-hir dumps/x.phir --run -- a b c        # argumentos del programa
+build/bin/suriax-hir dumps/x.phir --run --memoria       # + objetos, cadenas y bytes al terminar
+build/bin/suriax-hir dumps/x.phir --run --pasos 0 --memoria-max 512M   # sin límite de pasos, 512 MB
+build/bin/suriax-hir dumps/x.phir --pretty              # el HIR legible
+build/bin/suriax-hir dumps/x.phir --mir                 # el MIR + la verificación de propiedad
+```
+
+`--pasos N` (por defecto 100 millones; `0` = sin límite) y `--memoria-max`
+(la memoria del PROGRAMA, en bytes o con `K`/`M`/`G`) son para máquinas
+modestas: cortan con un error que dice dónde (`RT010`, `RT023`) en vez de que
+el sistema mate el proceso. Las pruebas buscan la VM en `build/bin` y en los
+`build-*/bin`; `SURIAX_HIR_BIN` fija otra.
+
+---
+
+## 1.e. La V1: el compilador escrito en suriaX
+
+`src/` es el compilador reescrito en suriaX. La V0 lo compila y la VM lo
+ejecuta. Su `.phir` es idéntico, byte a byte, al de la V0, y se compila a sí
+mismo (el punto fijo). Lo detallado está en [src/readme.md](src/readme.md).
+
+La V1 importa sus paquetes como librerías, así que se arma un proyecto con
+ellos dentro de su `lib/` (así lo hace la prueba):
+
+```bash
+mkdir v1 && cp -r lib v1/lib
+cp -r src/frontend src/semantica src/hir v1/lib/
+cp src/main.srcx v1/
+printf 'version: 1\ntarget: native\n' > v1/.suriaX_config.yaml
+cd v1
+
+python ../V0/main.py main.srcx --emit-hir          # la V0 compila la V1 -> dumps/main.srcx.phir
+
+# la V1 compila un programa: escribe su .phir y uno por librería, en la
+# misma carpeta (que tiene que existir: la V1 no la crea)
+mkdir -p salida
+../build/bin/suriax-hir dumps/main.srcx.phir --run --quiet -- \
+    programa.srcx salida/programa.phir --stdlib ../lib
+
+# la V1 se compila a sí misma (pasa del límite de pasos por defecto)
+mkdir -p etapa2
+../build/bin/suriax-hir dumps/main.srcx.phir --run --quiet --pasos 0 -- \
+    main.srcx etapa2/main.srcx.phir --stdlib ../lib
+```
+
+La stdlib le llega con `--stdlib` o con `SURIAX_STDLIB` (la V1 es un `.phir`
+y no sabe dónde está instalada). Acepta `-O0` (el defecto); `-O1`/`-O2` son un
+error: la V1 no optimiza, las optimizaciones llegan con la V3. Todo esto lo
+comprueban `python test/main.py bootstrap` (los programas de
+`test/bootstrap/v1*/` y el punto fijo en tres etapas).
+
+---
+
+## 1.f. La documentación
+
+El sitio (Sphinx) se construye igual que en la CI
+([docs.yml](.github/workflows/docs.yml)):
+
+```bash
+pip install -r documentation/requirements.txt
+sphinx-build -b html -W --keep-going documentation/source documentation/build/html
+```
+
+Los ejemplos de código de la documentación se compilan y se ejecutan para
+comprobar que hacen lo que dice el texto:
+
+```bash
+python test/docs_examples.py
+```
+
+Un bloque que no es un programa completo se marca `:class: fragmento` y no se
+verifica.
+
+---
+
+## 2. Configuración y lo que todavía no existe
+
+### Lo que todavía no existe
+
+- **Un ejecutable propio** (`.exe`, `.o`): la VM interpreta el MIR. El JIT y
+  los artefactos nativos son el siguiente gran paso (ver
+  [ROADMAP.md](ROADMAP.md)).
+- **Un comando de build de proyectos**: hoy se compila un archivo por vez
+  (`V0/main.py` o `suri`); las librerías se resuelven solas desde los
+  `#import`.
 
 ### Configuración de compilación: `.suriaX_config.yaml`
 
@@ -232,23 +362,23 @@ para compilar de verdad. Genéralo con `python V0/main.py --init-config`. Esquem
 actual:
 
 ```yaml
-version: 1
+version: 2
 target: native              # native | wasm | interp
-                            #   native/wasm -> HIR -> backend C++ (VM/JIT)
                             #   interp      -> HIR -> intérprete tree-walk (Python)
+                            #   native/wasm -> HIR -> backend C++ / target web
 platform: linux             # win32 | linux | macos
 optimization: O0            # O0 | O1 | O2 | O3
 
-toolchain:                  # rutas que el backend C++ usa para compilar/enlazar
-  llvm_required_major: 22
-  llvm_path: ""             # o la env var LLVM_PATH
-  llvm_config: ""           # detectado vía 'llvm-config'
-  llvm_include: ""          # headers de LLVM
-  linker: ""                # ld.lld / lld / link ... (detectado)
+toolchain:                  # compiladores que usa '#extern cpp{}' (y el futuro backend)
+  linker: ""                # detectado
   sysroot: ""               # o la env var SURIAX_SYSROOT
-  cpp_flags: []             # banderas extra para los bloques '#extern cpp'
+  cxx_compiler: ""          # detectado: $CXX, g++ o clang++
+  c_compiler: ""            # detectado: $CC, gcc, clang o cc
+  include_c_paths: []
+  cxx_flags: []             # banderas extra para los bloques '#extern cpp'
                             #   (p. ej. ["-lX11"]). Tambien SURIAX_CPP_FLAGS:
-                            #   son de la MAQUINA, no del proyecto
+                            #   esas son de la MAQUINA, no del proyecto
+  c_flags: []
 
 codegen:                    # target detallado
   triple: x86_64-unknown-linux-gnu
@@ -260,7 +390,7 @@ codegen:                    # target detallado
     export_all: false
 
 output:                     # salidas del compilador (cada tipo en su carpeta)
-  dumps_dir: ./dumps        # volcados: AST .json (--emit-ast-json), tokens .txt (--emit-tokens)
+  dumps_dir: ./dumps        # .phir, .ast.json, .tokens.txt, .debug.txt...
   build_dir: ./build
 logging:
   dir: ./log                # <fuente>.log (uno por archivo) + notes.jsonl / errors.jsonl
@@ -273,16 +403,21 @@ interpreter:                # target 'interp': consume el HIR (runtime/interpret
   entry: main               # función de entrada a ejecutar
   trace_memory: false       # traza celdas/move/free en runtime (educativo)
   max_steps: 0              # 0 = sin límite; guarda contra bucles infinitos
+                            #   (cuenta pasos, no profundidad de recursión)
 
 visualization:              # objetivo educativo: qué etapas volcar
-  stages: []                # tokens | ast | hir | mir | llvm-ir
+  stages: []
   format: text              # text | json | dot
 
 libraries:                  # búsqueda de .libsrx y bindings C++
   libsrx_paths: ["./lib"]   # RELATIVAS a la raíz del proyecto (donde vive este yaml);
-                            # el usuario añade las suyas. El dir del .srcx se busca primero.
+                            # el dir del .srcx se busca primero y la stdlib
+                            # del compilador al final (o SURIAX_STDLIB)
   extern_cpp_include: []
   bindings: []
+
+project: ""                 # nombre del proyecto (HTIMS)
+extensions: []              # extensiones declaradas (HTIMS, ver htims/readme.md)
 
 paths:
   input: ""
@@ -291,7 +426,7 @@ flags:
   is_web: false
 ```
 
-> Muchos campos (`llvm_config`, `llvm_include`, `linker`, `triple`, `arch`) se
+> Muchos campos (`linker`, `cxx_compiler`, `c_compiler`, `triple`, `arch`) se
 > **autodetectan** al generar el archivo; puedes sobreescribirlos a mano.
 
 ---
@@ -303,21 +438,26 @@ Importan al construir/ejecutar el compilador desde el código:
 
 | Dependencia | Uso | ¿Cuándo hace falta? | Instalación |
 |-------------|----------|---|-------------|
-| *(ninguna)* | **frontend completo**: lexer → parser → AST-tipado → Semántica, con diagnósticos en consola | siempre disponible: solo librería estándar de Python | — |
-| **protobuf** + `protoc` | serialización del HIR (`.phir`) y ejecución | `--emit-hir`, `--run`, `#test hir` | `pip install protobuf` + `protoc` del sistema |
-| **pyyaml** | leer/generar `.suriaX_config.yaml` | `--init-config` (sin él se usan los defaults) | `pip install pyyaml` |
-| **LLVM-22** | *nada del pipeline actual*: se detecta y se reporta en `--check`, pero el target nativo es la VM/JIT y no pasa por LLVM | opcional | gestor del sistema o `LLVM_PATH`; se detecta con `llvm-config` |
-| **pybind11** | bindings C++ (incl. `#extern cpp{}`) | fase futura (backend C++) | `pip install pybind11` |
+| *(ninguna)* | **el compilador entero**: frontend, HIR (`.phir`, codec propio) e intérprete (`--run`) | siempre: solo la librería estándar de Python | — |
+| **pyyaml** | leer/generar `.suriaX_config.yaml` | `--init-config`, o para que se aplique un yaml propio (sin él se usan los valores por defecto y se avisa) | `pip install pyyaml` |
+| **pybind11** + CMake | memoria nativa del intérprete (`memory_c`, `runtime/logic_mem`) | opcional: sin ella la memoria corre en Python con la misma semántica | `pip install pybind11` y `cmake --build build --target suriax-native` |
+| un compilador de C++ (`g++`/`clang++`) | ejecutar programas con `#extern cpp{}` en el intérprete | solo si el programa trae ese bloque | el del sistema (o `$CXX`) |
+| CMake 3.20+ y un compilador de C++20 | la VM `suriax-hir` (MIR y VM) | solo para construir `backend/` (sin más dependencias: no usa protobuf) | el del sistema; en Windows, MSVC (§1.d) |
+| **node 22+** | target web (WebAssembly) y el panel `.wat` del playground: `node web/main.ts dumps/x.phir --run` (ver [web/README.md](web/README.md)) | solo para ese target | gestor del sistema |
+| **Sphinx** | construir el sitio de documentación (§1.f) | solo para la documentación | `pip install -r documentation/requirements.txt` |
+| **protobuf** (Python) + `protoc` | la prueba cruzada del codec del HIR contra `google.protobuf` | solo para esa prueba (sin ellos se OMITE, visible) | `pip install protobuf` + `protoc` del sistema |
+| LLVM | **nada**: no forma parte del plan (el target nativo es la VM) | nunca | — |
 
-> **El frontend no depende de nada externo.** Compilar, validar y ver los
-> diagnósticos en consola funciona con una instalación pelada de Python; solo
-> la fase HIR (y por tanto la ejecución) exige `protobuf`. Está verificado en
-> la suite y se puede comprobar bloqueando los módulos a mano.
+> **El compilador no depende de nada externo.** Compilar, emitir el HIR y
+> ejecutar funciona con una instalación pelada de Python. La CI lo comprueba
+> en cada push bloqueando `yaml` y `google.protobuf` a nivel de importación
+> ([ci.yml](.github/workflows/ci.yml)).
 
-Instalación conjunta:
+Instalación conjunta (desarrollo):
 
 ```bash
-pip install -r V0/requirements.txt
+pip install -r requirements.txt
+pip install -e .          # opcional: instala el comando 'suri'
 ```
 
 Verificación:
@@ -329,12 +469,10 @@ python -m config.compilerconfig
 ```
 
 Si falta una dependencia **necesaria para la operación solicitada**, el
-compilador aborta con un mensaje que indica qué falta y cómo instalarlo. Las
-fases que no la necesitan siguen funcionando: el frontend entero corre solo
-con la librería estándar de Python.
+compilador aborta con un mensaje que indica qué falta y cómo instalarlo (código
+`3`). Hoy la única operación que la exige es `--init-config` (pyyaml).
 
-> **Nota sobre LLVM:** `--check` sigue detectando `llvm-config` y avisando si
-> la versión no es la 22, pero **nada del pipeline usa LLVM**. El target
-> nativo es una VM de bytecode con JIT; LLVM quedó fuera del plan en la
-> v0.2.0 (ver [docs/llvm_backend.md](docs/llvm_backend.md)). No hace falta
-> instalarlo para nada de lo que hoy funciona.
+> **Nota sobre `--check`:** marca `protobuf` y `pybind11` como `[FALTA]`
+> aunque son opcionales (ver [c_errorstfix.md](c_errorstfix.md)). **LLVM no se
+> detecta**: quedó fuera del plan en la v0.2.0 (ver
+> [docs/llvm_backend.md](docs/llvm_backend.md)).

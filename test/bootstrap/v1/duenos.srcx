@@ -1,0 +1,36 @@
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+
+struct { int n; R dentro; str nota; R otro; } Caja;
+struct { R ptr bloque; int largo; } Arreglo;
+enum Resultado { Ok(R), Falla(str), Vacio };
+
+fn hace() -> Caja {
+    return Caja{ n: 1, dentro: R{ que: "x" }, nota: "n", otro: R{ que: "y" } };
+}
+
+fn resultado() -> Resultado {
+    return Resultado.Ok(R{ que: "z" });
+}
+
+fn usa(Caja ptr c) -> int {
+    return c.n;
+}
+
+fn main() -> int {
+    var Caja c = hace();
+    var Resultado e = resultado();
+    var R suelto = R{ que: "s" };
+    var Arreglo a = Arreglo{ bloque: &suelto, largo: 0 };
+    hace();
+    resultado();
+    if (usa(&c) > 0) {
+        var R local = R{ que: "l" };
+        var str s = "a" + local.que + "b";
+    };
+    while (false) {
+        var Caja otra = hace();
+    };
+    free &a;
+    return usa(&c);
+}

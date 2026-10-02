@@ -33,8 +33,10 @@ python playground/server.py          # http://localhost:8000
 PORT=3000 python playground/server.py
 ```
 
-En **Railway** el puerto lo pone la plataforma en `PORT`; el `Procfile` de la
-raíz declara el comando. Los volcados del backend web van a `.web/`, que es su
+En **Railway** el puerto lo pone la plataforma en `PORT`. El despliegue usaba
+un `Procfile` en la raíz con el comando, que **se perdió en el rescate de la
+0.3.0** (ver [c_errorstfix.md](../c_errorstfix.md)): hasta reponerlo, el
+comando es `python playground/server.py`. Los volcados del backend web van a `.web/`, que es su
 carpeta de artefactos generados (ignorada por git, como `dumps/`).
 
 ### Configuración
@@ -95,8 +97,7 @@ parezca un artefacto válido.
 ## Los errores
 
 "La compilación falló" no dice nada. Un diagnóstico se enseña **en la pestaña
-de su fase**, con las cuatro cosas que [`audit/restrictions.md`](../audit/restrictions.md)
-exige de un error:
+de su fase**, con las cuatro cosas que el proyecto exige de un error:
 
 - **qué falló** — el mensaje del compilador;
 - **dónde** — la línea del fuente, con una marca bajo la columna exacta;

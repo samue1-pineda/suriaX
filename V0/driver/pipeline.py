@@ -33,6 +33,8 @@ from .options import (EXIT_COMPILE_ERROR, EXIT_CONFIG_ERROR,
                       CompileResult)
 from .reporting import Reporter, SilentReporter
 from error_handler.error import blocks
+from error_handler.InternalCompilerError import InternalCompilerError
+from error_handler.lex_error import InvalidUnicodeCharacterError
 
 #: dependencias que TODA compilación necesita (ninguna: el frontend completo
 #: corre con la librería estándar, y la fase HIR tampoco: desde que el
@@ -49,12 +51,12 @@ def load_config(source_path: Optional[str]) -> dict:
     genera la configuracion por defecto 
     """
     start = os.path.dirname(os.path.abspath(source_path)) if source_path else None
-    try:
-        return compilerconfig.reload_config(start_dir=start)
-    except Exception:
-        config = compilerconfig.default_config()
-        config["_root"] = start or os.getcwd()
-        return config
+    # Aquí había un 'except Exception' que tragaba cualquier fallo y compilaba
+    # con la configuración por defecto sin decir nada. Los errores esperables
+    # de un yaml ya viajan como diagnósticos CFG ('errors_of'), así que lo
+    # único que ese except escondía eran fallos del propio compilador: ahora
+    # suben y 'compile_source' los reporta como error interno (ICE000).
+    return compilerconfig.reload_config(start_dir=start)
 
 
 def build_library_units(libraries: dict, config: dict, *,
@@ -128,7 +130,15 @@ def build_library_units(libraries: dict, config: dict, *,
             if sub_alias not in done:
                 pending[sub_alias] = sub_path
 
-        if lib_lexer.errors or lib_parser.ctx.errors or lib_errors:
+        diagnosticos = [*lib_lexer.errors, *lib_parser.ctx.errors, *lib_errors]
+        if diagnosticos:
+            # Se dicen CUALES: antes solo salía "la unidad tiene errores", y
+            # como el consumidor ya había compilado sin quejas, no había
+            # forma de saber qué fallaba ni dónde.
+            reporter.diagnostics(f"errores de la unidad '{alias}' ({lib_path})",
+                                 diagnosticos)
+            if log is not None:
+                log.error_batch(diagnosticos, source_file=lib_path)
             failed = f"la unidad '{alias}' tiene errores; su .phir no se emitió"
             reporter.warn(f"  {failed}")
             continue
@@ -152,7 +162,8 @@ def build_library_units(libraries: dict, config: dict, *,
 
 def emit_library_units(libraries: dict, config: dict, log,
                        times: dict, *, hir_text: bool = False,
-                       reporter: Optional[Reporter] = None) -> Optional[str]:
+                       reporter: Optional[Reporter] = None,
+                       destino: Optional[str] = None) -> Optional[str]:
     """Escribe un ``<alias>.phir`` (+ ``.txt``) por unidad ``.libsrx`` cargada.
 
     Los ``.phir`` quedan junto al del módulo principal, así el module-linker
@@ -162,7 +173,10 @@ def emit_library_units(libraries: dict, config: dict, log,
     Devuelve un mensaje de error (str) si alguna unidad no pudo generarse.
     """
     reporter = reporter or SilentReporter()
-    dumps_dir = compilerconfig.dumps_dir(config)
+    # JUNTO al .phir principal (su carpeta real), no en 'dumps/' a secas: con
+    # '--emit-hir otro/sitio.phir' las unidades quedaban en 'dumps/' y el
+    # principal no se podia cargar (con 'target: native' era un ICE000).
+    dumps_dir = destino or compilerconfig.dumps_dir(config)
     unidades, failed = build_library_units(
         libraries, config, hir_text=hir_text, reporter=reporter, log=log)
     for alias, (data, text, lib_path) in unidades.items():
@@ -184,9 +198,40 @@ def _titulo(fase: str, diagnosticos) -> str:
     return f"{'errores' if blocks(diagnosticos) else 'avisos'} {fase}"
 
 
+class _Fase:
+    """La fase en curso: lo que un error interno necesita para decir DÓNDE
+    estaba el compilador cuando falló."""
+
+    __slots__ = ("actual",)
+
+    def __init__(self) -> None:
+        self.actual = "inicio"
+
+
 def compile_source(path: str, options: Optional[CompileOptions] = None, *,
                    reporter: Optional[Reporter] = None) -> CompileResult:
     """Compila ``path`` y devuelve lo que salió, sin imprimir nada por su cuenta.
+
+    Un error del PROGRAMA viaja en ``CompileResult.diagnostics``. Un error del
+    COMPILADOR —una excepción que ninguna fase esperaba— se lanza como
+    :class:`InternalCompilerError` (ICE000), con la fase en la que ocurrió y
+    la excepción original encadenada. Es una excepción y no un resultado
+    porque el llamador no debe poder confundirla con "el programa tiene
+    errores": la CLI la muestra al estilo de Python y sale con
+    ``EXIT_INTERNAL_ERROR`` (6).
+    """
+    fase = _Fase()
+    try:
+        return _compilar(path, options, reporter=reporter, fase=fase)
+    except InternalCompilerError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - se reporta como ICE, nunca se traga
+        raise InternalCompilerError.desde(exc, phase=fase.actual, file=path) from exc
+
+
+def _compilar(path: str, options: Optional[CompileOptions], *,
+              reporter: Optional[Reporter], fase: _Fase) -> CompileResult:
+    """El cuerpo de :func:`compile_source`; anota en ``fase`` dónde va.
 
     Es el cuerpo del antiguo ``V0/main.py::_run_source``, con dos cambios de
     fondo: lo que se contaba por ``print`` ahora va por el ``reporter`` (la
@@ -230,6 +275,7 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
             hir_pretty = ""
 
     #configuracion + dependencias de la fase actual
+    fase.actual = "configuracion"
     config = load_config(path)
     result.config = config
     # Una configuracion mal escrita se descartaba en SILENCIO y el sintoma
@@ -255,14 +301,21 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
     # el vocabulario del lenguaje depende de esto, asi que compilar contra un
     # conjunto de extensiones a medias reportaria errores en el .srcx que en
     # realidad son del manifiesto.
+    fase.actual = "htims"
     t = time.perf_counter()
     _extensions, ext_errors = htims.discover(config)
     times["htims"] = time.perf_counter() - t
 
-    # ¿el target pide ejecutar? ('interp' en el yaml, o --run que lo fuerza)
+    # ¿se ejecuta, y en que motor? '--run' lo pide (con un motor o sin el);
+    # sin '--run', solo el target 'interp' ejecuta. El motor por defecto sale
+    # del target: 'native' es la VM (compilado) y 'interp' el interprete; el
+    # web no corre aqui, y se interpreta.
     target = ((config.get("compilation") or {}).get("target")
               or config.get("target") or "")
-    run = run or target in ("interp", "interpreter")
+    pedido = "" if run is True else (None if run is False else run)
+    run = pedido is not None or target in ("interp", "interpreter")
+    if run:
+        result.motor = pedido or ("compiler" if target == "native" else "interpreter")
     if run and emit_hir is None:
         emit_hir = ""
     # la vista legible se construye desde el MISMO Module que el .phir
@@ -295,11 +348,31 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
     times["config+deps"] = time.perf_counter() - t0 - times["htims"]
 
     #decodificacion UTF-8 -> str
+    fase.actual = "lectura del fuente"
     t = time.perf_counter()
-    source = source_reader.read_file(path)
+    try:
+        source = source_reader.read_file(path)
+    except InvalidUnicodeCharacterError as err:
+        # Un fuente que no es UTF-8 es un error DEL PROGRAMA (LEX008), no un
+        # fallo del compilador: antes salía como traceback crudo.
+        reporter.diagnostics("errores lexicos", [err])
+        log.error_batch([err], source_file=path)
+        result.diagnostics.append(err)
+        result.lexer_errors = [err]
+        result.log_file = log.flush()
+        result.status = EXIT_COMPILE_ERROR
+        return result
+    except OSError as exc:
+        # existe (se comprobó arriba) pero no se puede leer: permisos, es un
+        # directorio... Es del entorno, no del compilador.
+        reporter.warn(f"no se pudo leer el fuente {path}: "
+                      f"{type(exc).__name__}: {exc}")
+        result.status = EXIT_FILE_NOT_FOUND
+        return result
     times["source_reader"] = time.perf_counter() - t
 
     #lexer -> list[Token]
+    fase.actual = "lexer"
     t = time.perf_counter()
     lexer = Lexer(source, file=path)
     tokens = lexer.tokenize()
@@ -316,6 +389,7 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
     #parser: ¿directiva '#test <fase>'? -> volcado de esa fase y fin
     #uso principal de la directiva `#test`? debug, fuera de eso 
     #la directiva no cuenta con otro proposito 
+    fase.actual = "directiva #test"
     parser = Parser(tokens)
     executed = parser.run_test_directive(source_path=path)
 
@@ -331,14 +405,17 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
         from src.frontend.parser.typed_ast import resolve_types
         from src.frontend.semantic import analyze
 
+        fase.actual = "parser"
         t = time.perf_counter()
         program = parser.parse()
         times["parser"] = time.perf_counter() - t
 
+        fase.actual = "ast-tipado"
         t = time.perf_counter()
         resolve_types(program)
         times["ast-tipado"] = time.perf_counter() - t
 
+        fase.actual = "semantica"
         t = time.perf_counter()
         notes: list = []
         libraries: dict = {}
@@ -397,6 +474,7 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
             report.diagnostics("ERRORES DE SINTAXIS", parser.ctx.errors)
             report.diagnostics("ERRORES SEMANTICOS", sem_errors)
 
+        fase.actual = "volcados"
         #volcado opcional del AST-tipado (ya anotado) a JSON
         #NOTE: el wASM no deberia usar el JSON del AST normal al menos que
         #explicitamente se indique "--use-ntypeAST"(boton) en la version web
@@ -427,6 +505,7 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
         # Se escribe el binario .phir Y su vista de texto .phir.txt (facilita debug), junto a 
         # .phir POR unidad .libsrx importada (Module.libraries las referencia).
         if emit_hir is not None:
+            fase.actual = "hir"
             if exit_code != 0 or lexer.errors:
                 reporter.warn("HIR no emitido: hay errores previos")
             else:
@@ -483,10 +562,13 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
                 times["hir-emit"] = time.perf_counter() - t
 
                 if libraries and exit_code == 0:
+                    fase.actual = "hir de librerias"
                     t = time.perf_counter()
                     failed = emit_library_units(libraries, config, log, times,
                                                 hir_text=hir_text,
-                                                reporter=reporter)
+                                                reporter=reporter,
+                                                destino=os.path.dirname(
+                                                    os.path.abspath(phir_path)))
                     times["hir-libs"] = time.perf_counter() - t
                     if failed and run:
                         reporter.warn(f"no se ejecuta: {failed}")
@@ -501,6 +583,7 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
         exit_code = EXIT_COMPILE_ERROR
 
     #un solo flush de logs por compilacion (cero I/O por evento)
+    fase.actual = "log"
     result.log_file = log.flush()
 
     result.status = exit_code

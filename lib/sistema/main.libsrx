@@ -1,0 +1,40 @@
+/- sistema: lo que un programa le pide al sistema en el que corre.
+
+ Es un PAQUETE con un submódulo por área, para que crecer (tiempo, entorno,
+ procesos hijos) sea añadir un archivo y no reescribir este:
+
+     sistema.archivos   leer, escribir, existe, listar
+     sistema.proceso    argumentos, argumento, escribir_error, salir
+
+     #import sistema.archivos as arch
+     #import sistema.proceso as proc
+     #import excepciones as exc
+
+     fn main() -> int {
+         if (proc.argumentos() < 2) {
+             proc.escribir_error("uso: prog <archivo>\n");
+             return 2;
+         };
+         try {
+             arch.escribir("copia.txt", arch.leer(proc.argumento(1)));
+         } catch (exc.ErrorDeArchivo e) {
+             proc.escribir_error(f"{e.mensaje}\n");
+             return 1;
+         };
+         return 0;
+     }
+
+ Los argumentos llegan después de '--' (el 0 es el archivo que se ejecuta,
+ como en C y en Python):
+
+     suri prog.srcx -- entrada.txt
+     suriax-hir prog.phir --run -- entrada.txt
+
+ Debajo hay llamadas al HOST, no syscalls: cada motor las cumple con su
+ propia plataforma y con el MISMO contrato (intérprete:
+ runtime/interpreter/intrinsics.py; VM: 'llamada_al_sistema' en
+ backend/src/vm.cpp). El target web no las tiene: no hay archivos en un
+ navegador.
+-/
+
+#export package as sistema

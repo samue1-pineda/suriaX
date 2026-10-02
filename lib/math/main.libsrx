@@ -1,1 +1,12 @@
+/- math: la aritmética de la librería estándar, un submódulo por área.
+
+     math.basic       operaciones sobre float (add, min, max, abs...)
+     math.constants   PI, E
+
+ Extenderla es añadir un archivo a esta carpeta con su '#export as <area>'
+ (por ejemplo 'enteros.libsrx' o, cuando existan los operadores de bits,
+ 'bits.libsrx'): la carpeta lo descubre sola y nada de lo que existe cambia.
+ El padre no importa a sus submódulos (crearía unidades sueltas).
+-/
+
 #export package as math

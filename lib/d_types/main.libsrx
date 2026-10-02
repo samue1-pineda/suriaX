@@ -1,3 +1,7 @@
-const dt_variables =#import dt_variables;
+/- d_types: tipos numéricos de ANCHO FIJO (int8, float32...) publicados por
+ librería, con su tamaño y su rango como hooks. Ver dt_variables.libsrx.
 
+ El padre NO importa a su submódulo: la carpeta lo descubre sola, y un
+ import aquí creaba además una unidad suelta "dt_variables".
+-/
 #export package as d_types

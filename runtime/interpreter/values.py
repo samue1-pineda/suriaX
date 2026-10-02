@@ -77,10 +77,29 @@ def copy_on_bind(value: Any) -> Any:
     if isinstance(value, StructValue):
         return StructValue(
             value.type_name,
-            {name: Cell(copy_on_bind(cell.value), name=name)
+            {name: Cell(_copia_de_campo(cell.value), name=name)
              for name, cell in value.fields.items()},
         )
     return value
+
+
+def _copia_de_campo(value: Any) -> Any:
+    """La copia de lo que guarda un CAMPO de un struct que se copia.
+
+    Un bloque de ``mem`` en un campo (el almacenamiento de un ``Vector``) es
+    DEL struct, como el buffer de un ``std::vector``: copiar el struct copia
+    el bloque, celda a celda y en profundidad. Antes los dos structs
+    compartían el mismo bloque y un ``push`` sobre la copia escribía en los
+    datos del original. Un bloque ligado a una variable ``ptr`` NO pasa por
+    aquí: ahí sí es un puntero, y copiarlo sería otra cosa."""
+    from .memory.block import Block
+    if isinstance(value, Block):
+        copia = Block(len(value.cells))
+        for origen, destino in zip(value.cells, copia.cells):
+            destino.value = copy_on_bind(origen.value)
+            destino.state = origen.state
+        return copia
+    return copy_on_bind(value)
 
 
 class TypeValue:

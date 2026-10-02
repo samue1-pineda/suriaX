@@ -445,13 +445,17 @@ function cleanStmt(stmt: Stmt, ctx: CleanCtx): Stmt | null {
         const block = cleanBlock(rama.block, ctx);
         return block === rama.block ? rama : { ...rama, block };
       });
+      const finallyBlock = node.finallyBlock === null
+        ? null
+        : cleanBlock(node.finallyBlock, ctx);
       const igual = tryBlock === node.tryBlock &&
-        catches.every((rama, i) => rama === node.catches[i]);
+        catches.every((rama, i) => rama === node.catches[i]) &&
+        finallyBlock === node.finallyBlock;
       return igual
         ? stmt
         : {
             ln: stmt.ln, col: stmt.col,
-            node: { case: "try", tryBlock, catches },
+            node: { case: "try", tryBlock, catches, finallyBlock },
           };
     }
 

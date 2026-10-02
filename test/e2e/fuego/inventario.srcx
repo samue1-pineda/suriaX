@@ -1,0 +1,206 @@
+/- Ejercicio de fuego 1: inventario de una tienda.
+
+ Combina: structs con metodos (@impl) y hooks, enum con valores y enum con
+ payload (tipo suma), Vector<T> de structs del usuario, ordenamiento por
+ insercion, busqueda binaria, nullables, excepciones con filtro de tipo,
+ cadenas (indexado, len, concatenacion, f-strings), while/break/continue,
+ globales const y mutables y casts.
+-/
+#from io #import stdp
+#import array.vector as vec
+
+const int STOCK_MINIMO = 3;
+var int operaciones = 0;
+
+enum Categoria { COMIDA = 1, LIMPIEZA = 2, PAPELERIA = 3 };
+
+enum Resultado { Ok(int), Falla(str) };
+
+struct {
+    str nombre;
+    int precio;       // en centavos
+    int stock;
+    Categoria cat;
+} Producto;
+
+hook fn __print__(Producto ptr p) -> void {
+    var int centavos = p.precio % 100;
+    var str relleno = "";
+    if (centavos < 10) { relleno = "0"; };
+    stdp.println(f"{p.nombre} ${p.precio / 100}.{relleno}{centavos} x{p.stock}");
+}
+
+hook fn __eq__(Producto ptr a, Producto ptr b) -> bool {
+    return a.nombre == b.nombre;
+}
+
+@impl Producto {
+    fn valor(Producto ptr self) -> int {
+        return self.precio * self.stock;
+    }
+    fn vende(Producto ptr mutable self, int n) -> Resultado {
+        operaciones = operaciones + 1;
+        if (n <= 0) {
+            return Resultado.Falla("cantidad invalida");
+        };
+        if (n > self.stock) {
+            return Resultado.Falla(f"solo quedan {self.stock} de {self.nombre}");
+        };
+        self.stock = self.stock - n;
+        return Resultado.Ok(self.stock);
+    }
+}
+
+fn nombre_categoria(Categoria c) -> str {
+    match (c) {
+        case Categoria.COMIDA: { return "comida"; }
+        case Categoria.LIMPIEZA: { return "limpieza"; }
+        case Categoria.PAPELERIA: { return "papeleria"; }
+    }
+    return "?";
+}
+
+// mayusculas a mano: recorre la cadena por code points
+fn mayusculas(str s) -> str {
+    var str salida = "";
+    var int i = 0;
+    while (i < len(s)) {
+        var int c = cast<int>(s[i]);
+        if (c >= 97 and c <= 122) {
+            c = c - 32;
+        };
+        salida = salida + cast<str>(cast<char>(c));
+        i = i + 1;
+    };
+    return salida;
+}
+
+// ordenamiento por insercion, por precio ascendente
+fn ordenar(vec.Vector<Producto> ptr mutable v) -> void {
+    var int i = 1;
+    while (i < v.len()) {
+        var Producto actual = v.get(i);
+        var int j = i - 1;
+        while (j >= 0) {
+            var Producto previo = v.get(j);
+            if (previo.precio <= actual.precio) {
+                break;
+            };
+            v[j + 1] = previo;
+            j = j - 1;
+        };
+        v[j + 1] = actual;
+        i = i + 1;
+    };
+}
+
+// busqueda binaria por precio exacto; null si no esta
+fn buscar_precio(vec.Vector<Producto> ptr v, int precio) -> Producto? {
+    var int bajo = 0;
+    var int alto = v.len() - 1;
+    while (bajo <= alto) {
+        var int medio = (bajo + alto) / 2;
+        var Producto p = v.get(medio);
+        if (p.precio == precio) {
+            return p;
+        };
+        if (p.precio < precio) {
+            bajo = medio + 1;
+        } else {
+            alto = medio - 1;
+        };
+    };
+    return null;
+}
+
+fn valor_total(vec.Vector<Producto> ptr v) -> int {
+    var int total = 0;
+    var int i = 0;
+    while (i < v.len()) {
+        var Producto p = v.get(i);
+        total = total + p.valor();
+        i = i + 1;
+    };
+    return total;
+}
+
+fn reponer(vec.Vector<Producto> ptr mutable v) -> int {
+    var int repuestos = 0;
+    var int i = 0;
+    while (i < v.len()) {
+        var Producto p = v.get(i);
+        i = i + 1;
+        if (p.stock >= STOCK_MINIMO) {
+            continue;
+        };
+        p.stock = p.stock + 10;
+        v[i - 1] = p;
+        repuestos = repuestos + 1;
+    };
+    return repuestos;
+}
+
+fn main() -> int {
+    var vec.Vector<Producto> inv = vec.dynamic<Producto>(2);
+    inv.push(Producto{ nombre: "arroz", precio: 250, stock: 10, cat: Categoria.COMIDA });
+    inv.push(Producto{ nombre: "jabon", precio: 180, stock: 2, cat: Categoria.LIMPIEZA });
+    inv.push(Producto{ nombre: "cuaderno", precio: 1200, stock: 5, cat: Categoria.PAPELERIA });
+    inv.push(Producto{ nombre: "leche", precio: 99, stock: 1, cat: Categoria.COMIDA });
+
+    ordenar(&inv);
+    stdp.println("-- ordenado por precio");
+    var int i = 0;
+    while (i < inv.len()) {
+        var Producto p = inv.get(i);
+        print(&p);
+        i = i + 1;
+    };
+
+    stdp.println(f"valor total: {valor_total(&inv)}");
+
+    var Producto? hallado = buscar_precio(&inv, 1200);
+    if (hallado != null) {
+        stdp.println(f"precio 1200 -> {mayusculas(hallado.nombre)}");
+    };
+    var Producto? nada = buscar_precio(&inv, 7);
+    if (nada == null) {
+        stdp.println("precio 7 -> no existe");
+    };
+
+    // ventas: el enum con payload se abre con 'match'
+    var Producto jabon = inv.get(1);
+    match (jabon.vende(5)) {
+        case Resultado.Ok(quedan): { stdp.println(f"vendido, quedan {quedan}"); }
+        case Resultado.Falla(motivo): { stdp.println(f"no se pudo: {motivo}"); }
+    }
+    match (jabon.vende(2)) {
+        case Resultado.Ok(quedan): { stdp.println(f"vendido, quedan {quedan}"); }
+        case Resultado.Falla(motivo): { stdp.println(f"no se pudo: {motivo}"); }
+    }
+    inv[1] = jabon;
+
+    stdp.println(f"repuestos: {reponer(&inv)}");
+    var Producto primero = inv.get(0);
+    stdp.println(f"{primero.nombre} ahora tiene {primero.stock} ({nombre_categoria(primero.cat)})");
+
+    // excepciones: el vector fijo lanza al llenarse
+    var vec.Vector<int> fijo = vec.make<int>(1);
+    try {
+        fijo.push(1);
+        fijo.push(2);
+        stdp.println("no deberia llegar aqui");
+    } catch (int codigo) {
+        stdp.println(f"atrapado un int: {codigo}");
+    } catch (str e) {
+        stdp.println(f"atrapado: {e}");
+    };
+
+    var Producto a = inv.get(0);
+    var Producto b = inv.get(0);
+    if (a == b) {
+        stdp.println("__eq__ compara por nombre");
+    };
+
+    stdp.println(f"operaciones: {operaciones}");
+    return 0;
+}

@@ -48,7 +48,8 @@ def _run_without_deps(source: str, *args: str):
         with open(runner, "w", encoding="utf-8") as fh:
             fh.write(f"MAIN = {main_py!r}\n" + _BLOCKER)
         proc = subprocess.run([sys.executable, runner, src, *args],
-                              capture_output=True, text=True, cwd=tmp,
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", cwd=tmp,
                               timeout=120)
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -120,7 +121,7 @@ def test_el_frontend_no_importa_modulos_externos():
         "print('EXTERNOS:', externos)\n"
     )
     proc = subprocess.run([sys.executable, "-c", codigo], capture_output=True,
-                          text=True, timeout=60)
+                          text=True, encoding="utf-8", errors="replace", timeout=60)
     assert proc.returncode == 0, proc.stderr
     assert "EXTERNOS: []" in proc.stdout, (
         f"el frontend importó módulos externos: {proc.stdout}"

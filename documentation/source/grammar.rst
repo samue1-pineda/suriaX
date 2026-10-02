@@ -2,27 +2,21 @@ Gramática (EBNF)
 ================
 
 La gramática de suriaX se mantiene en un único archivo,
-``docs/gramar/grammar.ebnf``, y es la **fuente de verdad sintáctica** del
-lenguaje: el parser (``V0/src/frontend/parser/grammar/``) implementa estas
-reglas, un módulo por grupo.
+``docs/gramar/grammar.ebnf``, y describe el lenguaje que acepta el parser
+(``V0/src/frontend/parser/``, y su réplica en suriaX, ``src/frontend/``).
 
 Cómo leerla
 -----------
 
-Cada regla lleva una marca de **estado**, porque el lenguaje avanza por
-partes y una gramática sin estado engaña:
+Primero van las reglas **sintácticas**, de ``program`` hacia abajo (las
+declaraciones, las sentencias, las expresiones de menor a mayor precedencia
+y los tipos), y después las **léxicas**, agrupadas por categoría de token
+(palabras reservadas, palabras contextuales, operadores, puntuación,
+identificadores, literales, directivas y comentarios).
 
-``[OK]``
-   Implementada de punta a punta: el parser la reconoce, la semántica la
-   valida y viaja en el HIR.
-
-``[HIR-]``
-   El parser la reconoce y la semántica la valida, pero **no cruza al HIR**:
-   el emisor la rechaza con ``HIR005`` en su posición. Se conserva en la
-   gramática porque el lenguaje la define.
-
-``[TBD]``
-   Sintaxis diseñada, aún no implementada.
+Se escribió a partir del parser real, regla por regla, y una prueba
+(``test/unit/test_docs_al_dia.py``) comprueba que no use ninguna regla sin
+definir y que nombre exactamente las palabras reservadas del lexer.
 
 Notación::
 
@@ -31,9 +25,9 @@ Notación::
    ( )      agrupación            "x"  terminal literal
    ?...?    descripción informal de un terminal léxico
 
-Los terminales son **tipos de token**: el vocabulario completo está en
-:doc:`repo/t_types` y en el :doc:`capítulo del lexer <lexical_analysis>`; su
-definición ejecutable, en ``V0/include/t_types.py``.
+Los terminales en MAYÚSCULAS son **tipos de token**: el vocabulario completo
+está en :doc:`repo/t_types` y en el :doc:`capítulo del lexer
+<lexical_analysis>`; su definición ejecutable, en ``V0/include/t_types.py``.
 
 .. tip::
    Los tokens que produce el lexer para un archivo concreto se pueden ver con

@@ -1,0 +1,33 @@
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+
+struct { T valor; int n; } Caja<T>;
+struct { T ptr mutable datos; int len; } Lista<T>;
+enum Quizas { Algo(R), Nada };
+
+fn crea<T>(T x) -> Caja<T> { return Caja<T>{ valor: move x, n: 0 }; }
+fn suelta<T>(T x) -> void { }
+fn guarda<T>(T x) -> T { var T y = move x; return y; }
+fn reemplaza<T>(T ptr mutable p, T x) -> void { p[0] = move x; }
+fn campo<T>(Caja<T> c) -> T { return c.valor; }
+fn otra<T>(T x) -> int { var Caja<T> c = crea<T>(move x); crea<int>(1); return 0; }
+fn lista<T>(Lista<T> l) -> int { return l.len; }
+
+fn main() -> int {
+    var Caja<R> a = crea<R>(R{ que: "a" });
+    var Caja<int> b = crea<int>(1);
+    var Caja<Quizas> q = crea(Quizas.Nada);
+    crea<R>(R{ que: "t" });
+    crea<int>(2);
+    suelta<R>(R{ que: "s" });
+    var R r = guarda(R{ que: "g" });
+    var Caja<Caja<R>> cc = crea(crea<R>(R{ que: "cc" }));
+    var R otro = R{ que: "o" };
+    reemplaza<R>(&otro, R{ que: "p" });
+    a = crea<R>(R{ que: "re" });
+    b = crea<int>(3);
+    if (b.n == 0) {
+        var Caja<R> dentro = crea<R>(R{ que: "d" });
+    };
+    return otra<int>(1) + otra<R>(R{ que: "x" });
+}

@@ -17,13 +17,36 @@ option(SURIAX_NATIVE_OUTPUT_IN_MODULE_DIR
     "Dejar cada .so en runtime/<modulo>/build/, que es donde lo busca cxx_api.py" ON)
 
 option(SURIAX_BUILD_BACKEND
-    "Compilar el backend C++ (lector del HIR); necesita protobuf para C++" ON)
+    "Compilar el backend C++ (HIR, MIR, VM); solo necesita un compilador de C++20" ON)
 
-set(SURIAX_CXX_STANDARD "20" CACHE STRING
-    "Estándar de C++ para los módulos nativos")
+# Sanitizadores para el backend C++: "" (ninguno), "address", "undefined" o
+# "address;undefined". Es un build de DIAGNÓSTICO, no de uso: más lento y
+# con otros límites de pila. Ver suriax_aplicar_sanitizadores().
+set(SURIAX_SANITIZE "" CACHE STRING
+    "Sanitizadores del backend C++: address, undefined o address;undefined")
+
+# UBSan en modo TRAMPA: un comportamiento indefinido detiene el programa con
+# una instruccion ilegal en vez de llamar al runtime de UBSan. No dice QUE
+# regla se rompio (eso lo da el runtime), pero no lo necesita: sirve donde el
+# runtime no existe (clang para Windows x64 sin compiler-rt de UBSan). Solo
+# GCC/Clang. Lo usa 'docs/quality/tools/sanitizers.py'.
+option(SURIAX_SANITIZE_TRAP
+    "UBSan sin runtime (-fsanitize-trap=undefined): detiene en vez de informar" OFF)
+
+# MSVC: /RTC1 (el chequeo de pila de Debug) no convive con /fsanitize=address.
+# Se quita aquí, a nivel de directorio: las banderas por configuración se leen
+# al final del directorio y cambiarlas dentro de una función no llega.
+if(MSVC AND "address" IN_LIST SURIAX_SANITIZE)
+    string(REPLACE "/RTC1" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+endif()
+
+# El estándar de C++ NO es una opción: lo fija 'version.py' (CXX_STANDARD)
+# y lo lee el CMakeLists.txt raíz antes de llegar aquí (SURIAX_CXX_STANDARD).
 
 # --- ajustes comunes --------------------------------------------------------
 
+# Exactamente ese estándar (REQUIRED), sin extensiones del compilador
+# (gnu++20 no es C++20): así GCC, Clang y MSVC compilan el MISMO lenguaje.
 set(CMAKE_CXX_STANDARD ${SURIAX_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -65,6 +88,72 @@ foreach(_cache IN LISTS _suriax_stale_caches)
 endforeach()
 unset(_suriax_stale_caches)
 
+# --- sanitizadores -----------------------------------------------------------
+
+#[[
+  suriax_aplicar_sanitizadores(<objetivo>...)
+
+  Instrumenta los objetivos con lo que pida SURIAX_SANITIZE. Con GCC y Clang:
+  AddressSanitizer (desbordes, uso tras liberar) y UBSan (desborde con signo,
+  corrimientos, conversiones, alineación), y cualquier hallazgo de UBSan
+  ABORTA en vez de seguir (-fno-sanitize-recover): una prueba que pasa con un
+  aviso en stderr no probó nada.
+
+  MSVC trae AddressSanitizer (/fsanitize=address) pero no UBSan: se avisa al
+  configurar en vez de fingir que se instrumentó. Con MSVC, además, ASan no
+  convive con /RTC1 (el chequeo de pila de Debug), así que se quita.
+]]
+function(suriax_aplicar_sanitizadores)
+    if(NOT SURIAX_SANITIZE)
+        return()
+    endif()
+    set(pide_asan FALSE)
+    set(pide_ubsan FALSE)
+    foreach(s IN LISTS SURIAX_SANITIZE)
+        if(s STREQUAL "address")
+            set(pide_asan TRUE)
+        elseif(s STREQUAL "undefined")
+            set(pide_ubsan TRUE)
+        else()
+            message(FATAL_ERROR "SURIAX_SANITIZE: '${s}' no es un sanitizador "
+                                "conocido (address, undefined)")
+        endif()
+    endforeach()
+
+    foreach(objetivo IN LISTS ARGN)
+        if(MSVC)
+            if(pide_asan)
+                target_compile_options(${objetivo} PRIVATE /fsanitize=address /Zi)
+                target_link_options(${objetivo} PRIVATE /INCREMENTAL:NO /DEBUG)
+            endif()
+        else()
+            set(banderas "")
+            if(pide_asan)
+                list(APPEND banderas -fsanitize=address)
+            endif()
+            if(pide_ubsan AND SURIAX_SANITIZE_TRAP)
+                list(APPEND banderas -fsanitize=undefined -fsanitize-trap=undefined)
+            elseif(pide_ubsan)
+                list(APPEND banderas -fsanitize=undefined -fno-sanitize-recover=all)
+            endif()
+            target_compile_options(${objetivo} PRIVATE ${banderas}
+                                   -fno-omit-frame-pointer -g)
+            target_link_options(${objetivo} PRIVATE ${banderas})
+        endif()
+    endforeach()
+
+    if(MSVC)
+        if(pide_ubsan)
+            message(WARNING
+                "suriaX: MSVC no tiene UBSan; 'undefined' se ignora. En un build "
+                "Debug los iteradores verificados de la STL atrapan parte de lo "
+                "mismo (índices fuera de rango en contenedores). Para UBSan "
+                "completo: GCC o Clang con compiler-rt (la CI de Linux).")
+        endif()
+    endif()
+    message(STATUS "suriaX: sanitizadores del backend -> ${SURIAX_SANITIZE}")
+endfunction()
+
 # --- resumen ----------------------------------------------------------------
 
 function(suriax_print_summary targets)
@@ -73,11 +162,11 @@ function(suriax_print_summary targets)
     message(STATUS "  build            : ${CMAKE_BUILD_TYPE}")
     message(STATUS "  C++              : ${SURIAX_CXX_STANDARD}")
     if(TARGET suriax-hir)
-        message(STATUS "  backend C++      : lector del HIR (objetivo 'suriax-hir')")
+        message(STATUS "  backend C++      : HIR, MIR y VM (objetivo 'suriax-hir')")
     elseif(NOT SURIAX_BUILD_BACKEND)
         message(STATUS "  backend C++      : desactivado (SURIAX_BUILD_BACKEND=OFF)")
     else()
-        message(STATUS "  backend C++      : omitido (falta protobuf para C++)")
+        message(STATUS "  backend C++      : omitido (ver los avisos de arriba)")
     endif()
     if(NOT SURIAX_BUILD_NATIVE)
         message(STATUS "  módulos nativos  : desactivados (SURIAX_BUILD_NATIVE=OFF)")

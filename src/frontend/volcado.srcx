@@ -1,0 +1,43 @@
+/- Volcado de tokens: el lexer del bootstrap leyendo un programa de suriaX.
+
+     suri src/frontend/volcado.srcx
+
+ El fuente va escrito aquí para que la demostración no dependa de ningún archivo
+ (dos cadenas seguidas se unen, igual que en C o Python). Cada línea de la
+ salida es `linea:columna CLASE lexema`, y al final los errores léxicos.
+-/
+#from io #import stdp
+#import frontend.tokens as tk
+#import frontend.lexer as lx
+#import array.vector as vec
+
+fn fuente() -> str {
+    return "#from io #import stdp\n"
+        "// un comentario de linea\n"
+        "struct { int n; } Caja;\n"
+        "hook fn __free__(Caja ptr c) -> void { }\n"
+        "fn main() -> int {\n"
+        "    var float x = 3.25;\n"
+        "    var char c = '\\n';\n"
+        "    /- un bloque -/ var str s = f\"n = {x}\" \"!\";\n"
+        "    if (x >= 1.0 and not false) { x += 1.0; };\n"
+        "    return 0 $ 1;\n"
+        "}\n";
+}
+
+fn main() -> int {
+    var vec.Vector<str> errores = vec.dynamic<str>(4);
+    var vec.Vector<tk.Token> toks = lx.tokenizar(fuente(), &errores);
+    var int i = 0;
+    while (i < toks.len()) {
+        var tk.Token t = toks.get(i);
+        stdp.println(f"{t.linea}:{t.col} {tk.nombre_de(t.tipo)} {t.lexema}");
+        i = i + 1;
+    }
+    var int e = 0;
+    while (e < errores.len()) {
+        stdp.println(f"error {errores.get(e)}");
+        e = e + 1;
+    }
+    return 0;
+}

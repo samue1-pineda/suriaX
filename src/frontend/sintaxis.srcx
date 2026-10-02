@@ -1,0 +1,26 @@
+/- Árbol sintáctico: el parser del bootstrap leyendo un programa.
+
+     suri src/frontend/sintaxis.srcx
+
+ Imprime el árbol en el mismo formato canónico que compara la prueba
+ diferencial contra la V0: una línea por nodo, `campo: Clase linea:col`, con
+ sus valores, sangrada por profundidad. Al final van los errores.
+-/
+#import frontend.parser as ps
+
+fn fuente() -> str {
+    return "#from io #import stdp\n"
+        "struct { int n; } Caja;\n"
+        "fn doble(Caja ptr c) -> int { return c.n * 2; }\n"
+        "fn main() -> int {\n"
+        "    var Caja c = Caja{ n: 21 };\n"
+        "    if (doble(&c) == 42) { stdp.println(f\"ok: {c.n}\"); };\n"
+        "    return 0;\n"
+        "}\n"
+        "fn roto( { }\n";
+}
+
+fn main() -> int {
+    ps.analiza(fuente());
+    return 0;
+}

@@ -1,0 +1,15 @@
+-- ordenado por precio
+leche $0.99 x1
+jabon $1.80 x2
+arroz $2.50 x10
+cuaderno $12.00 x5
+valor total: 8959
+precio 1200 -> CUADERNO
+precio 7 -> no existe
+no se pudo: solo quedan 2 de jabon
+vendido, quedan 0
+repuestos: 2
+leche ahora tiene 11 (comida)
+atrapado: push sobre un vector lleno (capacidad fija)
+__eq__ compara por nombre
+operaciones: 2

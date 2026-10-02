@@ -1,0 +1,133 @@
+/- La V1: el compilador de suriaX escrito en suriaX.
+
+     suri src/main.srcx <fuente.srcx> <salida.phir> [-O0] [--stdlib <carpeta>]
+
+ Lee el fuente, lo analiza (lexer, parser, Semántica) y escribe su HIR, y
+ el de cada librería que carga (una unidad por `.phir`, junto al del
+ programa). La meta del bootstrap es que cada `.phir` sea IDÉNTICO, byte a
+ byte, al que produce la V0 (`V0/main.py fuente --emit-hir`).
+
+ La stdlib (`lib/` del compilador) sale de `SURIAX_STDLIB` o de `--stdlib`:
+ la V0 la deduce de dónde está instalada, y la V1 —un `.phir` que corre en
+ la VM— no tiene forma de saberlo.
+
+ Cubre un SUBCONJUNTO del lenguaje (ver `src/readme.md`) y supone un
+ programa válido: los errores de sintaxis y de las librerías se informan y
+ detienen la compilación, los semánticos todavía no se detectan.
+-/
+
+#from io #import stdp
+#import frontend.arbol as ar
+#import semantica.nodos as nd
+#import semantica.resolver as res
+#import semantica.enlazador as enl
+#import hir.emisor as em
+#import sistema.archivos as arch
+#import sistema.proceso as proc
+#import sistema.rutas as rt
+#import array.vector as vec
+#import collections.dictionary as dic
+
+/- El nivel de optimización pedido (`-O0`, `-O1`, `-O2`), o -1 si el
+   argumento no es un nivel. -/
+fn nivel_de(str arg) -> int {
+    if (arg == "-O0") { return 0; };
+    if (arg == "-O1") { return 1; };
+    if (arg == "-O2") { return 2; };
+    return -1;
+}
+
+/- Escribe los errores a la salida de errores; ¿había alguno? -/
+fn informa(vec.Vector<str> ptr errores, str donde) -> bool {
+    var int i = 0;
+    while (i < errores.len()) {
+        proc.escribir_error(f"{donde}: {errores.get(i)}\n");
+        i = i + 1;
+    };
+    return errores.len() > 0;
+}
+
+fn main() -> int {
+    // los argumentos: dos posicionales (fuente y salida), el nivel de
+    // optimización y la stdlib. '-O0' (el defecto) NO optimiza: es el que da
+    // el .phir IDÉNTICO al de la V0, y el único con el que el punto fijo del
+    // bootstrap tiene sentido. La V1 no optimiza: las optimizaciones llegan
+    // con la V3; hasta entonces pedirlas es un error, no un silencio.
+    var vec.Vector<str> posicionales = vec.dynamic<str>(2);
+    var int nivel = 0;
+    var str stdlib = rt.entorno("SURIAX_STDLIB");
+    var int i = 1;
+    while (i < proc.argumentos()) {
+        var str arg = proc.argumento(i);
+        var int n = nivel_de(arg);
+        if (n >= 0) {
+            nivel = n;
+        } else if (arg == "--stdlib" and i + 1 < proc.argumentos()) {
+            stdlib = proc.argumento(i + 1);
+            i = i + 1;
+        } else {
+            posicionales.push(arg);
+        };
+        i = i + 1;
+    };
+    if (posicionales.len() != 2) {
+        proc.escribir_error("uso: main.srcx <fuente.srcx> <salida.phir> [-O0|-O1|-O2] "
+                            + "[--stdlib <carpeta>]\n");
+        return 2;
+    };
+    if (nivel > 0) {
+        proc.escribir_error(f"-O{nivel}: la V1 no optimiza (las optimizaciones llegan con "
+                            + "la V3); usa -O0\n");
+        return 2;
+    };
+    if (stdlib != "") { stdlib = rt.absoluta(stdlib); };
+    var str ruta = posicionales.get(0);
+    var str salida = posicionales.get(1);
+    var str absoluta = rt.absoluta(ruta);
+
+    var enl.Contexto ctx = enl.contexto(enl.raiz_del_proyecto(absoluta), stdlib);
+    var enl.Arbol arbol = enl.lee(ruta);
+    if (informa(&arbol.errores, ruta)) { return 1; };
+    var res.Analisis analisis = res.analiza(&arbol.p.arbol, arbol.raiz, &ctx, absoluta, "");
+    if (informa(&ctx.errores, ruta)) { return 1; };
+    // el programa lleva su ruta como se la pasaron; cada librería, la
+    // absoluta (como la V0)
+    var vec.Vector<byte> bytes = em.emite(&arbol.p.arbol, arbol.raiz, &analisis, ruta);
+    arch.write_bytes(salida, &bytes);
+    stdp.println(f"HIR ({bytes.len()} bytes) -> {salida}");
+
+    // las unidades: las que importa el programa y, de cada una, las que
+    // importa ella; cada una se analiza OTRA VEZ como un programa propio (con
+    // su unidad) y se emite como '<unidad>.phir' junto al del programa
+    var str carpeta = rt.carpeta_de(salida);
+    var vec.Vector<int> pendientes = vec.dynamic<int>(8);
+    i = 0;
+    while (i < analisis.librerias.len()) {
+        pendientes.push(analisis.librerias.get(i));
+        i = i + 1;
+    };
+    var dic.Dictionary<str, bool> hechas = dic.make<str, bool>(8);
+    while (pendientes.len() > 0) {
+        var enl.Libreria info = enl.lib(&ctx, pendientes.pop());
+        if (not hechas.contains(info.unidad)) {
+            hechas.put(info.unidad, true);
+            var enl.Arbol lib = enl.lee(info.archivo);
+            if (informa(&lib.errores, info.archivo)) { return 1; };
+            var vec.Vector<int> items = nd.hijos(&lib.p.arbol, lib.raiz, "items");
+            var str alias = nd.atributo(&lib.p.arbol, items.get(items.len() - 1), "alias");
+            var res.Analisis unidad = res.analiza(&lib.p.arbol, lib.raiz, &ctx, info.archivo,
+                                                  alias);
+            if (informa(&ctx.errores, info.archivo)) { return 1; };
+            var int k = 0;
+            while (k < unidad.librerias.len()) {
+                pendientes.push(unidad.librerias.get(k));
+                k = k + 1;
+            };
+            var vec.Vector<byte> datos = em.emite(&lib.p.arbol, lib.raiz, &unidad, info.archivo);
+            var str destino = rt.une(carpeta, info.unidad + ".phir");
+            arch.write_bytes(destino, &datos);
+            stdp.println(f"  unidad '{info.unidad}': {datos.len()} bytes -> {destino}");
+        };
+    };
+    return 0;
+}

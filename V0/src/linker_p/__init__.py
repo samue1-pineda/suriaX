@@ -53,9 +53,11 @@ except ImportError:  # pragma: no cover - ejecucion directa
 from . import cache
 from .cache import clear_cache
 from .library import LoadedLibrary
-from .loader import NOTE_SRCX_AS_LIB, parse_and_collect, validated_alias
+from .loader import (NOTE_SRCX_AS_LIB, parse_and_collect, reubicar,
+                     validated_alias)
 from .packages import load_package
-from .resolver import Found, find_library, search_paths
+from .resolver import (LIBSRX_EXT, Found, _name_candidates, find_library,
+                       search_paths)
 
 _MAX_DOTTED_PARTS = 2  # '<paquete>.<submodulo>'
 
@@ -102,10 +104,81 @@ def load_library(
             "file": found.path, "line": ln, "column": col,
         })
 
+    # Un submódulo que importa a un HERMANO ('pk/b.libsrx' -> '#import pk.a')
+    # mientras el paquete 'pk' se está cargando: cargar 'pk' otra vez sería un
+    # import circular (lo era: SEM010), pero 'b' no necesita el paquete
+    # entero, solo el archivo del hermano. Un ciclo REAL entre hermanos
+    # ('a' importa 'b' y 'b' importa 'a') se sigue detectando.
+    if dotted and found.kind == "package" and cache.is_loading(found.path):
+        return _hermano(lib, parts, found, config, errors, notes, ln, col)
+
     root = _load_cached(root_name, found, config, errors, notes, ln, col)
-    if root is None or not dotted:
+    if root is None:
+        return root
+    if not dotted:
+        # el paquete ENTERO: también sus submódulos rotos
+        for nombre in sorted(root.fallidos):
+            _reporta_fallido(root, nombre, errors, ln, col)
         return root
     return _descend(lib, parts, root, errors, ln, col)
+
+
+def _reporta_fallido(root: LoadedLibrary, nombre: str, errors: List,
+                     ln: int, col: int) -> None:
+    """Reporta (una vez) los errores de un submódulo que no compiló, con el
+    SEM010 en la línea del import que lo pide."""
+    pendientes = root.fallidos.get(nombre) or []
+    for error in pendientes:
+        if isinstance(error, SemanticError.InvalidLibraryError) and \
+                not getattr(error, "file", None):
+            reubicar(error, ln, col)
+    errors.extend(pendientes)
+    root.fallidos[nombre] = []
+
+
+def _hermano(lib: str, parts: List[str], found: Found, config, errors: List,
+             notes, ln: int, col: int) -> Optional[LoadedLibrary]:
+    """Carga SOLO el submódulo ``parts[1]`` de un paquete que se está cargando."""
+    if len(parts) > _MAX_DOTTED_PARTS:
+        return _descend(lib, parts, LoadedLibrary(alias=parts[0], path=found.path),
+                        errors, ln, col)
+    sub_path = None
+    for nombre in _name_candidates(parts[1]):
+        candidato = os.path.abspath(os.path.join(found.path, nombre + LIBSRX_EXT))
+        if os.path.isfile(candidato):
+            sub_path = candidato
+            break
+    if sub_path is None:
+        errors.append(SemanticError.UnknownLibraryMemberError(
+            f"el paquete '{parts[0]}' no tiene un submódulo '{parts[1]}'",
+            line=ln, column=col,
+        ))
+        return None
+    cached = cache.get(sub_path)
+    if cached is not None:
+        return validated_alias(cached, parts[1], errors, ln, col)
+    if cache.has_failed(sub_path):
+        return None
+    if cache.is_loading(sub_path):
+        errors.append(SemanticError.InvalidLibraryError(
+            f"import circular entre submódulos de '{parts[0]}': '{lib}' ya se "
+            "está cargando (dos submódulos se importan entre sí)",
+            line=ln, column=col,
+        ))
+        return None
+    cache.mark_loading(sub_path)
+    try:
+        sub = parse_and_collect(parts[1], sub_path, config, errors, notes,
+                                ln, col, expect_package=False)
+    finally:
+        cache.unmark_loading(sub_path)
+    if sub is None:
+        cache.mark_failed(sub_path)
+        return None
+    # misma identidad de unidad que le dará 'load_package' al terminar
+    sub.unit = f"{parts[0]}.{sub.alias}"
+    cache.put(sub_path, sub)
+    return validated_alias(sub, parts[1], errors, ln, col)
 
 
 def _descend(lib: str, parts: List[str], root: LoadedLibrary, errors: List,
@@ -119,6 +192,10 @@ def _descend(lib: str, parts: List[str], root: LoadedLibrary, errors: List,
         ))
         return None
     sub = root.subs.get(parts[1])
+    if sub is None and parts[1] in root.fallidos:
+        # existe pero no compiló: sus errores, no un "no tiene un submódulo"
+        _reporta_fallido(root, parts[1], errors, ln, col)
+        return None
     if sub is None:
         errors.append(SemanticError.UnknownLibraryMemberError(
             f"el paquete '{parts[0]}' no tiene un submódulo '{parts[1]}' "

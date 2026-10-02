@@ -55,6 +55,7 @@ DUENO = {
     "--emit-stage": "compilador",
     "--dump-symbols-table": "compilador",
     "--emit-diagnostics": "compilador",   # el canal del editor: son SUS errores
+    "--emit-index": "compilador",
     "--emit-lang-info": "compilador",     # la especificación del lenguaje
     "--emit-extensions": "compilador",    # el vocabulario que el proyecto añade
     "--trace-exec": "compilador",         # traza del intérprete: es su ejecución
@@ -67,6 +68,14 @@ DUENO = {
     "--time": "surinix",            # medir
     "--debug": "surinix",           # contar lo que pasó, en un informe
 }
+
+
+def _motor(valor: str) -> str:
+    """El valor de '--run': vacio (el del yaml), 'compiler' o 'interpreter'."""
+    if valor not in ("", "compiler", "interpreter"):
+        raise argparse.ArgumentTypeError(
+            f"'--run {valor}': el motor es 'compiler' o 'interpreter'")
+    return valor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -110,9 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
              "sin ARCHIVO va a <dumps_dir>/<fuente>.symbols.mmd. ",
     )
     parser.add_argument(
-        "--run", action="store_true",
-        help="fuerza el target 'interp': emite el HIR y lo ejecuta con el "
-             "'target: interp' en .suriaX_config.yaml",
+        "--run", nargs="?", const="", default=None, metavar="MOTOR",
+        type=_motor,
+        help="emite el HIR y lo EJECUTA. Sin valor, en el motor que dice el "
+             "'target' del .suriaX_config.yaml ('native' -> la VM compilada, "
+             "'interp' -> el interprete); 'compiler' o 'interpreter' lo fuerza. "
+             "Sin la VM construida, se interpreta con un aviso",
     )
     parser.add_argument(
         "--time", action="store_true", dest="show_times",
@@ -174,8 +186,17 @@ def build_parser() -> argparse.ArgumentParser:
              "directiva; lo consume el visualizador de la extension.",
     )
     parser.add_argument(
+        "--emit-index", action="store_true", dest="emit_index",
+        help="corre el frontend y emite en stdout un JSON con los diagnosticos "
+             "(como --emit-diagnostics) MAS el indice del archivo: sus simbolos "
+             "(tipo, firma, posicion, comentario, archivo de la libreria), cada "
+             "uso de cada uno y los miembros de cada tipo. Canal del LSP para "
+             "hover, ir a la definicion y completar; exit 0 aunque haya "
+             "diagnosticos.",
+    )
+    parser.add_argument(
         "--stdin", action="store_true", dest="from_stdin",
-        help="con --emit-diagnostics: lee el FUENTE de stdin en vez del disco. "
+        help="con --emit-diagnostics o --emit-index: lee el FUENTE de stdin en vez del disco. "
              "El argumento de archivo sigue siendo obligatorio y sigue anclando "
              "la resolucion de .libsrx, pero no hace falta que exista todavia. "
              "Permite a un editor analizar el buffer sin guardar.",

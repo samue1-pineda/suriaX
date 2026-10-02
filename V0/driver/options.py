@@ -25,6 +25,9 @@ EXIT_FILE_NOT_FOUND = 2
 EXIT_MISSING_DEPENDENCY = 3
 EXIT_EXTENSION_ERROR = 4
 EXIT_CONFIG_ERROR = 5
+#: el COMPILADOR falló (ICE000): un bug suyo, no del programa. Distinto de 1
+#: para que un script, la CI o el LSP no lean "tu programa tiene errores".
+EXIT_INTERNAL_ERROR = 6
 
 
 @dataclass
@@ -42,7 +45,9 @@ class CompileOptions:
     hir_pretty: Optional[str] = None
     dump_symbols: Optional[str] = None
     hir_text: bool = False
-    run: bool = False
+    #: ejecutar: None = no (salvo que el target lo pida), "" = en el motor del
+    #: yaml, "compiler" / "interpreter" = ese. 'True' vale como "".
+    run: Optional[object] = None
     debug: bool = False
     collect_times: bool = False
     trace_exec: bool = False
@@ -63,6 +68,8 @@ class CompileResult:
     config: Dict[str, Any] = field(default_factory=dict)
     phir_path: Optional[str] = None
     should_run: bool = False
+    #: en que motor se ejecuta: "compiler" (la VM) o "interpreter"
+    motor: str = "interpreter"
     times: Dict[str, float] = field(default_factory=dict)
     metrics: Dict[str, int] = field(default_factory=dict)
     artifacts: Dict[str, str] = field(default_factory=dict)
@@ -91,4 +98,5 @@ __all__ = [
     "CompileOptions", "CompileResult",
     "EXIT_OK", "EXIT_COMPILE_ERROR", "EXIT_FILE_NOT_FOUND",
     "EXIT_MISSING_DEPENDENCY", "EXIT_EXTENSION_ERROR", "EXIT_CONFIG_ERROR",
+    "EXIT_INTERNAL_ERROR",
 ]

@@ -1,0 +1,50 @@
+/- Excepciones 3: try anidados y relanzar.
+
+ Un 'try' dentro de otro: el interno atrapa lo suyo y el externo no se
+ entera. Un 'catch' puede volver a lanzar -el mismo valor o uno nuevo, de
+ otro tipo- y eso ya no lo atrapa su propio 'try' sino el de afuera.
+-/
+#from io #import stdp
+
+fn traduce(int codigo) -> int {
+    // convierte un error numerico en uno legible y lo relanza
+    try { throw codigo; }
+    catch (int e) { throw f"error numero {e}"; };
+    return 0;
+}
+
+fn main() -> int {
+    stdp.println("-- el interno atrapa, el externo no se entera");
+    try {
+        try { throw 1; }
+        catch (int e) { stdp.println(f"  interno {e}"); };
+        stdp.println("  sigue dentro del externo");
+    } catch (int e) { stdp.println("  externo (no se ve)"); };
+
+    stdp.println("-- relanzar el mismo valor");
+    try {
+        try { throw 2; }
+        catch (int e) { stdp.println(f"  interno ve {e} y lo relanza"); throw e; };
+    } catch (int e) { stdp.println(f"  externo {e}"); };
+
+    stdp.println("-- relanzar convertido a otro tipo");
+    try { traduce(404); }
+    catch (int e) { stdp.println("  no se ve"); }
+    catch (str e) { stdp.println(f"  {e}"); };
+
+    stdp.println("-- tres niveles: el del medio filtra y relanza");
+    try {
+        try {
+            try { throw 3.5; }
+            catch (int e) { stdp.println("  no se ve"); };
+        } catch (float e) { stdp.println(f"  medio {e}"); throw "sube"; };
+    } catch (str e) { stdp.println(f"  externo {e}"); };
+
+    stdp.println("-- un throw dentro de un catch no lo atrapa su propio try");
+    try {
+        try { throw 1; }
+        catch (int e) { throw 2; }
+        catch (e) { stdp.println("  no se ve: es rama del mismo try"); };
+    } catch (int e) { stdp.println(f"  externo {e}"); };
+    return 0;
+}

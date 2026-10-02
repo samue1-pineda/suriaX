@@ -15,6 +15,7 @@ env/
 
 # --- construccion y empaquetado ---
 build/
+build-*/
 dist/
 *.o
 *.exe
@@ -59,6 +60,12 @@ documentation/web/
 # copias que conf.py hace del repo hacia el sitio (se rehacen en cada build)
 documentation/source/repo/
 
+# --- memoria LOCAL del mantenedor ---
+# 'audit/' guarda las reglas de trabajo y el estado de la auditoria del
+# proyecto para quien lo desarrolla. No es documentacion publica: la de
+# errores es 'c_errorstfix.md' y la de diseno, los .md versionados.
+/audit/
+
 # --- ejercicios LOCALES ---
 # Programas con los que se prueba el compilador a mano, en la raiz. NO son
 # pruebas del compilador (esas viven en 'test/' y no dependen de archivos
@@ -78,3 +85,8 @@ node_modules/
 .web/*
 !.web/readme.md
 .env
+
+# --- calidad (docs/quality) ---
+# las salidas crudas de cada herramienta se regeneran con quality.py; los
+# documentos de docs/quality/cumplimiento/ SI se versionan.
+docs/quality/reports/

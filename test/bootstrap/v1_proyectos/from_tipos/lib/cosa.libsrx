@@ -1,0 +1,10 @@
+#import mem
+
+public struct { int x; } Plano;
+public struct { T valor; } Caja<T>;
+public enum Forma { Circulo(int), Nada };
+public fn id<T>(T x) -> T { return x; }
+public fn caja<T>(T x) -> Caja<T> { return Caja<T>{ valor: x }; }
+public fn bloque<T>(int n) -> T ptr mutable { return mem.reserve<T>(n); }
+
+#export as cosa

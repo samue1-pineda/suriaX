@@ -1,0 +1,331 @@
+/- semantica.simbolos — la tabla de símbolos (`V0/.../semantic/symbol_table.py`).
+
+ Todos los símbolos viven en UN vector (`Tabla.simbolos`) y se nombran por
+ su índice, como los nodos del árbol y los tipos. Encima de ese vector:
+
+ - los dos espacios de nombres GLOBALES de la V0: `valores` (funciones,
+   variables, variantes de enum) y `tipos` (structs, enums). Son lo que viaja
+   en el HIR (`SymbolTable.values` y `.types`);
+ - los MIEMBROS de un struct (sus campos) o de un enum (sus variantes): un
+   tramo seguido de `Tabla.miembros`, en orden de declaración;
+ - los `hook fn`, en orden de declaración (`SymbolTable.hooks`);
+ - los MÉTODOS (`@impl` y `dunder fn`), por `(dueño, nombre)`: una tabla
+   aparte que NO viaja en el HIR (`SymbolTable.dunders` de la V0);
+ - la pila de LOCALES de la función que se analiza. Entrar en un bloque
+   apunta dónde empieza; salir la recorta hasta ahí. Buscar recorre la pila
+   de arriba abajo, así que el nombre más interno tapa al de afuera. Al
+   cerrar un bloque, sus locales —en orden de declaración— son los que
+   deciden qué se destruye (`semantica.propiedad`).
+-/
+
+#import array.vector as vec
+#import collections.dictionary as dic
+
+//: las clases de símbolo, con los MISMOS números que `SymbolKind` del HIR
+public const int FUNCTION = 1;
+public const int STRUCT = 2;
+public const int ENUM = 3;
+public const int ENUM_ITEM = 4;
+public const int PARAM = 5;
+public const int VAR = 6;
+public const int FIELD = 7;
+public const int IMPORT = 8;
+public const int HOOK = 10;
+public const int TYPE = 11;
+public const int DUNDER = 12;   // un método: no viaja al HIR (la V0 no lo emite)
+
+struct {
+    str nombre;
+    int clase;           // una de las constantes de arriba
+    int linea;
+    int col;
+    int tipo;            // en el universo: el retorno de una función, el tipo de una variable
+    bool es_mutable;
+    int params_desde;    // los tipos de los parámetros están en `Tabla.params`
+    int n_params;
+    int miembros_desde;  // los índices de sus miembros están en `Tabla.miembros`
+    int n_miembros;
+    int hook_kind;       // solo HOOK: `HookKind` del HIR (0 = ninguno)
+    str hook_owner;      // solo HOOK: el tipo dueño ("R")
+    str tipo_nombre;     // STRUCT/ENUM: su nombre CANÓNICO ("calc.Par"); "" si no declara un tipo
+    str visibilidad;     // "public", "private", "internal" o "" (sin escribir)
+    int tparams_desde;   // sus PARÁMETROS DE TIPO ('T', 'K'...) están en `Tabla.tparams`
+    int n_tparams;
+} Simbolo;
+
+struct {
+    str nombre;
+    int clase;       // VAR o PARAM
+    int tipo;
+    bool es_mutable;
+} Local;
+
+struct {
+    vec.Vector<Simbolo> simbolos;
+    dic.Dictionary<str, int> valores;   // nombre -> símbolo (SymbolTable.values)
+    dic.Dictionary<str, int> tipos;     // nombre -> símbolo (SymbolTable.types)
+    vec.Vector<int> hooks;              // en orden de declaración
+    vec.Vector<int> dunders;            // los métodos, en orden de registro
+    vec.Vector<int> params;             // los tipos de parámetros, seguidos
+    vec.Vector<int> miembros;           // los índices de miembros, seguidos
+    vec.Vector<str> tparams;            // los parámetros de tipo, seguidos
+    vec.Vector<Local> locales;          // la pila de la función actual
+    vec.Vector<int> marcas;             // dónde empieza cada bloque abierto
+    dic.Dictionary<str, int> canonicos; // nombre CANÓNICO de un tipo -> su símbolo
+    str unidad;                         // la unidad de ESTE módulo ("" = el programa)
+} Tabla;
+
+public fn tabla() -> Tabla {
+    return Tabla{ simbolos: vec.dynamic<Simbolo>(32), valores: dic.make<str, int>(32),
+                  tipos: dic.make<str, int>(16), hooks: vec.dynamic<int>(4),
+                  dunders: vec.dynamic<int>(4),
+                  params: vec.dynamic<int>(16), miembros: vec.dynamic<int>(16),
+                  tparams: vec.dynamic<str>(4),
+                  locales: vec.dynamic<Local>(16), marcas: vec.dynamic<int>(8),
+                  canonicos: dic.make<str, int>(16), unidad: "" };
+}
+
+/- El nombre CANÓNICO de un tipo declarado en esta unidad
+   (`SemanticContext.qualify`): `<unidad>.<nombre>`. Uno que ya viene
+   calificado nombra un tipo de otra unidad y se deja como está. -/
+public fn califica(Tabla ptr t, str nombre) -> str {
+    if (t.unidad == "") { return nombre; };
+    var int i = 0;
+    while (i < len(nombre)) {
+        if (nombre[i] == '.') { return nombre; };
+        i = i + 1;
+    };
+    return t.unidad + "." + nombre;
+}
+
+/- Copia el símbolo `i` de `desde` a `hacia` (con sus parámetros, sus
+   miembros y sus parámetros de tipo, también copiados) y devuelve su índice
+   en `hacia`. Los tipos no se copian: el universo es uno solo para todas las
+   unidades. -/
+public fn copia(Tabla ptr desde, int i, Tabla ptr mutable hacia) -> int {
+    var Simbolo s = desde.simbolos.get(i);
+    var vec.Vector<int> params = vec.dynamic<int>(s.n_params + 1);
+    var int k = 0;
+    while (k < s.n_params) { params.push(param_de(desde, i, k)); k = k + 1; };
+    var vec.Vector<int> miembros = vec.dynamic<int>(s.n_miembros + 1);
+    k = 0;
+    while (k < s.n_miembros) {
+        miembros.push(copia(desde, miembro_de(desde, i, k), hacia));
+        k = k + 1;
+    };
+    var vec.Vector<str> tparams = tparams_de(desde, i);
+    var int nuevo = guarda(hacia, s);
+    pon_params(hacia, nuevo, &params);
+    pon_miembros(hacia, nuevo, &miembros);
+    pon_tparams(hacia, nuevo, &tparams);
+    return nuevo;
+}
+
+/- Un símbolo sin miembros ni hook: lo básico. -/
+public fn simbolo_simple(str nombre, int clase, int linea, int col, int tipo,
+                         bool es_mutable) -> Simbolo {
+    return Simbolo{ nombre: nombre, clase: clase, linea: linea, col: col, tipo: tipo,
+                    es_mutable: es_mutable, params_desde: 0, n_params: 0,
+                    miembros_desde: 0, n_miembros: 0, hook_kind: 0, hook_owner: "",
+                    tipo_nombre: "", visibilidad: "", tparams_desde: 0, n_tparams: 0 };
+}
+
+/- Guarda `s` y devuelve su índice (sin darle nombre global). -/
+public fn guarda(Tabla ptr mutable t, Simbolo s) -> int {
+    t.simbolos.push(s);
+    return t.simbolos.len() - 1;
+}
+
+/- Declara `s` en el espacio de VALORES; -1 si el nombre ya existía. -/
+public fn define_valor(Tabla ptr mutable t, Simbolo s) -> int {
+    if (t.valores.contains(s.nombre)) { return -1; };
+    var int i = guarda(t, s);
+    t.valores.put(s.nombre, i);
+    return i;
+}
+
+/- Declara `s` en el espacio de TIPOS; -1 si el nombre ya existía. -/
+public fn define_tipo(Tabla ptr mutable t, Simbolo s) -> int {
+    if (t.tipos.contains(s.nombre)) { return -1; };
+    var int i = guarda(t, s);
+    t.tipos.put(s.nombre, i);
+    return i;
+}
+
+/- Registra un símbolo ya guardado como `hook fn`. -/
+public fn define_hook(Tabla ptr mutable t, int i) -> void { t.hooks.push(i); }
+
+/- Registra el símbolo ya guardado `i` como el método `(hook_owner,
+   nombre)` (`register_dunder`). El primero con ese par gana: false si ya
+   había uno. -/
+public fn define_dunder(Tabla ptr mutable t, int i) -> bool {
+    var Simbolo s = t.simbolos.get(i);
+    if (busca_dunder(t, s.hook_owner, s.nombre) >= 0) { return false; };
+    t.dunders.push(i);
+    return true;
+}
+
+/- El método `nombre` del tipo `dueno` (`lookup_dunder`), o -1. -/
+public fn busca_dunder(Tabla ptr t, str dueno, str nombre) -> int {
+    var int k = 0;
+    while (k < t.dunders.len()) {
+        var Simbolo s = t.simbolos.get(t.dunders.get(k));
+        if (s.hook_owner == dueno and s.nombre == nombre) { return t.dunders.get(k); };
+        k = k + 1;
+    };
+    return -1;
+}
+
+/- Fija los miembros de `dueno`: los índices `indices`, en ese orden. -/
+public fn pon_miembros(Tabla ptr mutable t, int dueno, vec.Vector<int> ptr indices) -> void {
+    var Simbolo s = t.simbolos.get(dueno);
+    s.miembros_desde = t.miembros.len();
+    s.n_miembros = indices.len();
+    var int i = 0;
+    while (i < indices.len()) {
+        t.miembros.push(indices.get(i));
+        i = i + 1;
+    };
+    t.simbolos[dueno] = s;
+}
+
+/- Fija los tipos de parámetros de `dueno`. -/
+public fn pon_params(Tabla ptr mutable t, int dueno, vec.Vector<int> ptr tipos) -> void {
+    var Simbolo s = t.simbolos.get(dueno);
+    s.params_desde = t.params.len();
+    s.n_params = tipos.len();
+    var int i = 0;
+    while (i < tipos.len()) {
+        t.params.push(tipos.get(i));
+        i = i + 1;
+    };
+    t.simbolos[dueno] = s;
+}
+
+/- Fija los parámetros de tipo de `dueno` (`fn make<T>` -> ["T"]). -/
+public fn pon_tparams(Tabla ptr mutable t, int dueno, vec.Vector<str> ptr nombres) -> void {
+    var Simbolo s = t.simbolos.get(dueno);
+    s.tparams_desde = t.tparams.len();
+    s.n_tparams = nombres.len();
+    var int i = 0;
+    while (i < nombres.len()) {
+        t.tparams.push(nombres.get(i));
+        i = i + 1;
+    };
+    t.simbolos[dueno] = s;
+}
+
+/- Los parámetros de tipo del símbolo `i`, en orden (vacío si no es genérico). -/
+public fn tparams_de(Tabla ptr t, int i) -> vec.Vector<str> {
+    var Simbolo s = t.simbolos.get(i);
+    var vec.Vector<str> r = vec.dynamic<str>(s.n_tparams + 1);
+    var int k = 0;
+    while (k < s.n_tparams) {
+        r.push(t.tparams.get(s.tparams_desde + k));
+        k = k + 1;
+    };
+    return r;
+}
+
+public fn simbolo(Tabla ptr t, int i) -> Simbolo { return t.simbolos.get(i); }
+
+/- El valor global `nombre`, o -1. -/
+public fn busca_valor(Tabla ptr t, str nombre) -> int {
+    if (t.valores.contains(nombre)) { return t.valores.get(nombre); };
+    return -1;
+}
+
+/- El tipo global `nombre`, o -1. -/
+public fn busca_tipo(Tabla ptr t, str nombre) -> int {
+    if (t.tipos.contains(nombre)) { return t.tipos.get(nombre); };
+    // un tipo de otra unidad, por su nombre canónico ('punto.Punto')
+    if (t.canonicos.contains(nombre)) { return t.canonicos.get(nombre); };
+    return -1;
+}
+
+/- El `k`-ésimo tipo de parámetro del símbolo `i`. -/
+public fn param_de(Tabla ptr t, int i, int k) -> int {
+    return t.params.get(t.simbolos.get(i).params_desde + k);
+}
+
+/- El `k`-ésimo miembro (índice de símbolo) del símbolo `i`. -/
+public fn miembro_de(Tabla ptr t, int i, int k) -> int {
+    return t.miembros.get(t.simbolos.get(i).miembros_desde + k);
+}
+
+/- El miembro `nombre` del símbolo `i`, o -1. -/
+public fn busca_miembro(Tabla ptr t, int i, str nombre) -> int {
+    var int k = 0;
+    var int n = t.simbolos.get(i).n_miembros;
+    while (k < n) {
+        var int m = miembro_de(t, i, k);
+        if (t.simbolos.get(m).nombre == nombre) { return m; };
+        k = k + 1;
+    };
+    return -1;
+}
+
+/- El hook de clase `kind` del tipo `dueno` (`lookup_hook`), o -1. -/
+public fn busca_hook(Tabla ptr t, str dueno, int kind) -> int {
+    var int k = 0;
+    while (k < t.hooks.len()) {
+        var Simbolo s = t.simbolos.get(t.hooks.get(k));
+        if (s.hook_owner == dueno and s.hook_kind == kind) { return t.hooks.get(k); };
+        k = k + 1;
+    };
+    return -1;
+}
+
+// ------------------------------------------------------------------------ //
+// locales
+// ------------------------------------------------------------------------ //
+
+public fn abre(Tabla ptr mutable t) -> void { t.marcas.push(t.locales.len()); }
+
+public fn cierra(Tabla ptr mutable t) -> void {
+    var int hasta = t.marcas.pop();
+    while (t.locales.len() > hasta) { t.locales.pop(); };
+}
+
+/- Dónde empiezan los locales del bloque abierto más interno. -/
+public fn inicio_del_bloque(Tabla ptr t) -> int { return t.marcas.get(t.marcas.len() - 1); }
+
+public fn define_local(Tabla ptr mutable t, str nombre, int clase, int tipo,
+                       bool es_mutable) -> void {
+    t.locales.push(Local{ nombre: nombre, clase: clase, tipo: tipo, es_mutable: es_mutable });
+}
+
+public fn local(Tabla ptr t, int i) -> Local { return t.locales.get(i); }
+
+/- El local `nombre` visible desde aquí (el más interno), o -1. -/
+public fn busca_local(Tabla ptr t, str nombre) -> int {
+    var int i = t.locales.len() - 1;
+    while (i >= 0) {
+        if (t.locales.get(i).nombre == nombre) { return i; };
+        i = i - 1;
+    };
+    return -1;
+}
+
+/- El tipo del nombre `nombre` visto desde aquí: primero los locales, después
+   los valores globales. -1 si no existe. -/
+public fn tipo_de_nombre(Tabla ptr t, str nombre) -> int {
+    var int l = busca_local(t, nombre);
+    if (l >= 0) { return t.locales.get(l).tipo; };
+    var int g = busca_valor(t, nombre);
+    if (g >= 0) { return t.simbolos.get(g).tipo; };
+    return -1;
+}
+
+/- ¿El nombre `nombre` es escribible (`var`, un parámetro)? La base de la
+   mutabilidad de `&nombre`. Un nombre que no resuelve cuenta como mutable,
+   como en la V0. -/
+public fn es_mutable(Tabla ptr t, str nombre) -> bool {
+    var int l = busca_local(t, nombre);
+    if (l >= 0) { return t.locales.get(l).es_mutable; };
+    var int g = busca_valor(t, nombre);
+    if (g >= 0) { return t.simbolos.get(g).es_mutable; };
+    return true;
+}
+
+#export as simbolos

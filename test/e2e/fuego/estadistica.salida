@@ -1,0 +1,12 @@
+media = 5.0
+desviacion = 2.0
+max(3.5, 2.0) = 3.5
+area del circulo r=2: 12.566370614359172
+int8 100 -> 100, rango [-128, 127], 1 byte
+int8 de 300 (trunca): 44
+10 / 3 = 3
+atrapado: division por cero
+1 2 3 4 
+2 4 6 8 
+3 6 9 12 
+4 8 12 16 

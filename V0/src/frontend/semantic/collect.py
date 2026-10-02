@@ -107,6 +107,8 @@ def _collect_function(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
             f"la función '{fn.name}' ya está declarada en este scope",
             line=fn.ln, column=fn.col,
         ))
+        return
+    ctx.fn_symbols[id(fn)] = symbol
 
 
 def _owner_of(t: Optional[Type]) -> Optional[str]:
@@ -175,6 +177,8 @@ def _collect_dunder(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
             f"el dunder '{fn.name}' ya está declarado para '{owner}'",
             line=fn.ln, column=fn.col,
         ))
+        return
+    ctx.fn_symbols[id(fn)] = symbol
 
 
 def _collect_trait(trait: ast.TraitDecl, ctx: SemanticContext) -> None:
@@ -280,6 +284,8 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
                 f"ya existe un '__cast__' para '{source!r} -> {target!r}'",
                 line=fn.ln, column=fn.col,
             ))
+            return
+        ctx.fn_symbols[id(fn)] = symbol
         return
 
     if not ctx.table.register_hook(owner, spec.kind, symbol,
@@ -289,6 +295,10 @@ def _collect_hook(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
             f"ya existe un hook {cual} para '{owner}'",
             line=fn.ln, column=fn.col,
         ))
+        return
+    # el Symbol del hook, como el de cualquier funcion: lo que el resolver
+    # sabe de su cuerpo (las copias de un generico) se guarda en el
+    ctx.fn_symbols[id(fn)] = symbol
 
 
 def _literal_devuelto(fn: ast.FunctionDecl) -> Optional[int]:
@@ -613,6 +623,13 @@ def define_import(name: str, source, ctx: SemanticContext, *, mutable: bool,
                     line=source.ln, column=source.col,
                 ))
                 return
+            if member is None and source.name in library.internos:
+                ctx.error(SemanticError.UnknownLibraryMemberError(
+                    f"'{source.lib}' no exporta '{source.name}': existe, pero es "
+                    "'internal' (exclusivo de su archivo)",
+                    line=source.ln, column=source.col,
+                ))
+                return
             if member is None:
                 ctx.error(SemanticError.UnknownLibraryMemberError(
                     f"'{source.lib}' no exporta '{source.name}'",
@@ -620,12 +637,26 @@ def define_import(name: str, source, ctx: SemanticContext, *, mutable: bool,
                 ))
             else:
                 # '#from lib #import x [as y]': el simbolo importado ES el
-                # export (misma firma), expuesto bajo el nombre local.
+                # export (misma firma), expuesto bajo el nombre local. Lleva
+                # sus PARAMETROS DE TIPO: sin ellos 'reserve<int>(3)' no
+                # sustituia nada y devolvia un 'T ptr mutable'.
                 imported = Symbol(
                     name=name, kind=member.kind, ln=source.ln, col=source.col,
                     type=member.type, param_types=member.param_types,
                     members=member.members, mutable=mutable, visibility=visibility,
+                    type_name=member.type_name, type_params=member.type_params,
                 )
+                if member.kind in (SymbolKind.STRUCT, SymbolKind.ENUM):
+                    # un TIPO entra al namespace de TIPOS, como uno propio:
+                    # bajo el nombre local y bajo el canonico ('cosa.Plano'),
+                    # que es el que llevan los tipos ya resueltos. En el de
+                    # valores no se podia escribir 'Plano p' ni 'Plano{...}'.
+                    if not _registrar_tipo(imported, ctx):
+                        ctx.error(SemanticError.DuplicateSymbolError(
+                            f"'{name}' ya está declarado en este scope",
+                            line=source.ln, column=source.col,
+                        ))
+                    return
                 if not ctx.scope.define_value(imported):
                     ctx.error(SemanticError.DuplicateSymbolError(
                         f"'{name}' ya está declarado en este scope",
@@ -635,9 +666,15 @@ def define_import(name: str, source, ctx: SemanticContext, *, mutable: bool,
         else:
             members = _visible_members(library.all_members(), same_pkg)
 
+    ocultos: Optional[Dict[str, str]] = None
+    if library is not None and members is not None:
+        ocultos = dict(library.internos)
+        ocultos.update({n: "private" for n, s in library.all_members().items()
+                        if n not in members and s.visibility == "private"})
     symbol = Symbol(
         name=name, kind=SymbolKind.IMPORT, ln=source.ln, col=source.col,
         type=sym_type, mutable=mutable, members=members, visibility=visibility,
+        ocultos=ocultos,
     )
     if not ctx.scope.define_value(symbol):
         # reimportar la MISMA libreria bajo el mismo nombre es idempotente

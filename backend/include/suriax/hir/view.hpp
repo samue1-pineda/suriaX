@@ -71,6 +71,8 @@ struct ExternBlock {
     std::string raw;     // el C++ tal cual lo capturo el lexer
     std::uint32_t line = 0;
     std::uint32_t col = 0;
+    // lo que su 'requires(...)' pide para compilar y enlazar ('-lX11')
+    std::vector<std::string> banderas;
 };
 
 // Recoge los bloques '#extern' de TODAS las unidades de la imagen, en el

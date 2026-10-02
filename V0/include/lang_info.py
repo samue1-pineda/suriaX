@@ -22,7 +22,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     from t_types import DIRECTIVES, KEYWORDS, TokenType  # type: ignore
 
 #: versión del esquema de esta salida (súbela si cambia la FORMA del JSON).
-LANG_INFO_VERSION = 3
+LANG_INFO_VERSION = 4
 
 
 def _compiler_version() -> str:
@@ -50,7 +50,8 @@ _CATEGORY_TOKENS: Dict[str, frozenset] = {
     "visibility": frozenset({TokenType.PUBLIC, TokenType.PRIVATE, TokenType.INTERNAL}),
     "specifier": frozenset({TokenType.HOOK, TokenType.DUNDER_KW}),
     "type": frozenset({TokenType.VOID, TokenType.BOOL, TokenType.TYPE,
-                       TokenType.INT, TokenType.FLOAT, TokenType.CHAR, TokenType.STR}),
+                       TokenType.INT, TokenType.FLOAT, TokenType.CHAR, TokenType.STR,
+                       TokenType.BYTE}),
     "literal": frozenset({TokenType.TRUE, TokenType.FALSE, TokenType.NULL}),
     "storage": frozenset({TokenType.CONST, TokenType.VAR, TokenType.MUTABLE}),
     "declaration": frozenset({TokenType.FUNCTION, TokenType.STRUCT, TokenType.ENUM,
@@ -59,8 +60,10 @@ _CATEGORY_TOKENS: Dict[str, frozenset] = {
                           TokenType.RETURN, TokenType.MATCH, TokenType.CASE,
                           TokenType.BREAK, TokenType.CONTINUE}),
     "error_handling": frozenset({TokenType.ERRORTYPE, TokenType.TRY,
-                                 TokenType.CATCH, TokenType.THROW}),
-    "memory": frozenset({TokenType.MOVE, TokenType.FREE, TokenType.POINTER}),
+                                 TokenType.CATCH, TokenType.THROW,
+                                 TokenType.FINALLY}),
+    "memory": frozenset({TokenType.MOVE, TokenType.FREE, TokenType.POINTER,
+                         TokenType.WITH}),
     "operator_word": frozenset({TokenType.AND, TokenType.OR, TokenType.NOT,
                                 TokenType.SIZEOF, TokenType.CAST}),
 }
@@ -78,6 +81,10 @@ def _construir_symbols() -> Dict[str, TokenType]:
         return {}
     tabla: Dict[str, TokenType] = dict(_SINGLE)
     tabla.update({a + b: token for (a, b), token in _DOUBLE.items()})
+    # el que no esta en las tablas: '<<=' (tres caracteres)
+    tabla["<<="] = TokenType.SHIFT_LEFT_ASSIGN
+    # '>>' y '>>=' NO: el lexer da dos '>' y los junta el parser (ver
+    # SHIFT_RIGHT); publicarlos como un simbolo mentiria sobre lo que tokeniza
     # '@' y '#' no pasan por el scanner de operadores (cada uno tiene el suyo),
     # pero son simbolos del lenguaje igual y la extension los necesita.
     tabla["@"] = TokenType.DECORATOR
@@ -221,7 +228,97 @@ def build_language_info() -> dict:
         "severities": _severities(),
         "errors": _error_catalog(),
         "stages": _pipeline_stages(),
+        # v4: lo que necesita un resaltador (una gramatica TextMate) y los
+        # snippets, para que la extension no copie a mano la sintaxis
+        "syntax": _syntax(),
+        "snippets": SNIPPETS,
     }
+
+
+#: Las expresiones regulares de los literales, en la sintaxis de Oniguruma
+#: (la de las gramaticas TextMate de VS Code). Espejo de
+#: 'lexer/scanners/number.py', que no usa expresiones regulares: un test
+#: comprueba que reconocen lo mismo que el lexer (test_lang_info_lexer).
+NUMBER_REGEX = {
+    "int": r"0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*"
+           r"|0[oO][0-7](?:_?[0-7])*|[0-9](?:_?[0-9])*",
+    "float": r"[0-9](?:_?[0-9])*\.[0-9](?:_?[0-9])*",
+}
+
+
+def _syntax() -> dict:
+    """Comentarios, literales, escapes y el formato de un f-string."""
+    try:
+        from src.frontend.lexer.scanners.strings import _ESCAPES
+        from src.frontend.parser.expressions.nud import FORMAT_SPEC
+    except ImportError:  # pragma: no cover - ejecucion directa
+        _ESCAPES, FORMAT_SPEC = {}, ""
+    return {
+        # los reconoce el lexer en codigo ('lexer.py', 'c_dir.py'): un
+        # comentario de bloque NO se anida (el primer '-/' lo cierra)
+        "comments": {"line": "//", "block": ["/-", "-/"], "block_nests": False},
+        "string": {"quote": '"', "escapes": sorted("\\" + k for k in _ESCAPES)},
+        "char": {"quote": "'", "escapes": sorted("\\" + k for k in _ESCAPES)},
+        "fstring": {
+            "prefix": "f",
+            "interpolation": ["{", "}"],
+            "brace_escapes": ["{{", "}}"],
+            # '{x!r:08b}': la conversion y el especificador
+            "conversions": ["r"],
+            "format_spec": FORMAT_SPEC,
+            "format_types": {"d": "int, byte (decimal)", "x": "int, byte (hexadecimal)",
+                             "X": "int, byte (HEXADECIMAL)", "b": "int, byte (binario)",
+                             "o": "int, byte (octal)", "f": "float (fijo)"},
+        },
+        "numbers": {
+            "int": NUMBER_REGEX["int"],
+            "float": NUMBER_REGEX["float"],
+            "prefixes": {"0x": 16, "0b": 2, "0o": 8},
+            "separator": "_",
+        },
+        "identifier": r"[\p{L}_][\p{L}\p{N}_]*",
+        "dunder": r"__[A-Za-z0-9_]+__",
+    }
+
+
+#: Plantillas de las construcciones del lenguaje, en la sintaxis de snippets
+#: de VS Code (``${1:nombre}`` es un campo con su valor por defecto; ``$0``,
+#: donde queda el cursor). ``context``: "top" va en el nivel superior del
+#: archivo, "body" dentro de una funcion. Un test las compila todas con sus
+#: valores por defecto (test_lang_info_snippets; las de "impl" y "free" junto
+#: a un ``struct Punto``): una plantilla que no compila no se publica.
+SNIPPETS = [
+    {"prefix": "main", "description": "punto de entrada",
+     "context": "top", "body": "fn main() -> int {\n\t$0\n\treturn 0;\n}"},
+    {"prefix": "fn", "description": "funcion",
+     "context": "top", "body": "fn ${1:nombre}(${2:int x}) -> ${3:int} {\n\treturn ${4:x};\n}"},
+    {"prefix": "struct", "description": "struct",
+     "context": "top", "body": "struct {\n\t${2:int} ${3:campo};\n} ${1:Nombre};"},
+    {"prefix": "enum", "description": "enum",
+     "context": "top", "body": "enum ${1:Nombre} { ${2:A}, ${3:B} };"},
+    {"prefix": "impl", "description": "metodos de un tipo",
+     "context": "top", "body": "@impl ${1:Punto} {\n\tfn ${2:metodo}(${1:Punto} ptr self) -> ${3:int} {\n\t\treturn ${4:0};\n\t}\n}"},
+    {"prefix": "free", "description": "destructor (__free__)",
+     "context": "top", "body": "hook fn __free__(${1:Punto} ptr ${2:x}) -> void {\n\t$0\n}"},
+    {"prefix": "test", "description": "bloque de prueba",
+     "context": "top", "body": "test \"${1:nombre}\" {\n\t$0\n}"},
+    {"prefix": "import", "description": "importar una libreria",
+     "context": "top", "body": "#import ${1:mem}"},
+    {"prefix": "from", "description": "importar de una libreria",
+     "context": "top", "body": "#from ${1:io} #import ${2:stdp}"},
+    {"prefix": "if", "description": "if / else",
+     "context": "body", "body": "if (${1:true}) {\n\t$2\n} else {\n\t$0\n};"},
+    {"prefix": "while", "description": "while",
+     "context": "body", "body": "while (${1:false}) {\n\t$0\n};"},
+    {"prefix": "match", "description": "match",
+     "context": "body", "body": "match (${1:0}) {\n\tcase ${2:0}: {\n\t\t$0\n\t}\n}"},
+    {"prefix": "try", "description": "try / catch / finally",
+     "context": "body", "body": "try {\n\t$1\n} catch (${2:int} ${3:e}) {\n\t$4\n} finally {\n\t$0\n};"},
+    {"prefix": "with", "description": "recurso que se destruye al salir",
+     "context": "body", "body": "with (var ${1:int} ${2:r} = ${3:0}) {\n\t$0\n};"},
+    {"prefix": "var", "description": "variable",
+     "context": "body", "body": "var ${1:int} ${2:x} = ${3:0};"},
+]
 
 
 def _pipeline_stages() -> List[str]:

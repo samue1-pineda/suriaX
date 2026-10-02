@@ -1,0 +1,51 @@
+/- Excepciones 1: lo basico.
+
+ 'throw v;' corta la ejecucion y sube por las llamadas hasta el primer
+ 'try' cuyo 'catch' acepte 'v'. Si el bloque protegido no lanza, los
+ 'catch' no corren. Lo que se lanza es un VALOR cualquiera: no hace falta
+ declarar una clase de excepcion.
+-/
+#from io #import stdp
+
+fn divide(int a, int b) -> int {
+    if (b == 0) { throw "division entre cero"; };
+    return a / b;
+}
+
+fn intermedio(int a, int b) -> int {
+    // no atrapa nada: el throw de 'divide' cruza este marco sin detenerse
+    var int r = divide(a, b);
+    stdp.println("  nunca se imprime si divide lanzo");
+    return r;
+}
+
+fn cuenta_atras(int n) -> int {
+    if (n == 0) { throw 0; };
+    return cuenta_atras(n - 1);
+}
+
+fn main() -> int {
+    stdp.println("-- mismo bloque");
+    try {
+        stdp.println("  antes del throw");
+        throw 42;
+        stdp.println("  despues del throw (no se ve)");
+    } catch (int e) {
+        stdp.println(f"  atrapado {e}");
+    };
+
+    stdp.println("-- sin throw, el catch no corre");
+    try { stdp.println(f"  10 / 2 = {divide(10, 2)}"); }
+    catch (str e) { stdp.println("  no deberia verse"); };
+
+    stdp.println("-- desde una funcion, atravesando otra");
+    try { intermedio(1, 0); }
+    catch (str e) { stdp.println(f"  atrapado: {e}"); };
+
+    stdp.println("-- desde el fondo de una recursion de 200 marcos");
+    try { cuenta_atras(200); }
+    catch (int e) { stdp.println(f"  atrapado {e}"); };
+
+    stdp.println("-- la ejecucion sigue despues del try");
+    return 0;
+}

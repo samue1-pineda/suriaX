@@ -1,0 +1,103 @@
+/- hir.protobuf — el formato de bytes de protobuf, lo justo para el `.phir`
+   (`V0/src/HIR/wire.py`, la parte que ESCRIBE).
+
+ Un mensaje de protobuf es una lista de campos. Cada campo empieza con una
+ ETIQUETA (su número y su tipo de wire) y sigue con su valor:
+
+   - varint (tipo 0): enteros, booleanos y enums, 7 bits por byte;
+   - 64 bits (tipo 1): un `double`, en little-endian;
+   - delimitado (tipo 2): un texto, un submensaje o una lista empaquetada,
+     precedido de su largo.
+
+ Para que la salida sea IDÉNTICA a la de la V0, quien usa este módulo tiene
+ que escribir los campos en orden de NÚMERO y omitir los escalares que valen
+ su valor por defecto (salvo los de un `oneof`, que siempre se escriben).
+ Esas reglas son del emisor (`hir.emisor`); aquí solo se codifica.
+-/
+
+#import array.vector as vec
+#import text
+#import mem
+
+//: tipos de wire que usa el esquema
+public const int VARINT = 0;
+public const int F64 = 1;
+public const int DELIMITADO = 2;
+
+/- Un buffer vacío para escribir un mensaje. -/
+public fn buffer() -> vec.Vector<byte> {
+    return vec.dynamic<byte>(16);
+}
+
+/- Un entero como varint. Un negativo ocupa 10 bytes: protobuf codifica los
+   `int64` negativos en complemento a dos de 64 bits (no en zigzag). -/
+public fn varint(vec.Vector<byte> ptr mutable out, int valor) -> void {
+    if (valor < 0) {
+        // los 63 bits bajos en 9 grupos de 7, y el bit de signo solo en el
+        // décimo: el corrimiento aritmético repite el signo, pero de cada
+        // grupo solo se toman sus 7 bits
+        var int i = 0;
+        while (i < 9) {
+            out.push(cast<byte>(((valor >> (7 * i)) & 0x7F) | 0x80));
+            i = i + 1;
+        };
+        out.push(cast<byte>(1));
+        return;
+    };
+    var int v = valor;
+    while (v >= 0x80) {
+        out.push(cast<byte>((v & 0x7F) | 0x80));
+        v = v >> 7;
+    };
+    out.push(cast<byte>(v));
+}
+
+/- La etiqueta de un campo: `(numero << 3) | tipo`. -/
+public fn etiqueta(vec.Vector<byte> ptr mutable out, int numero, int tipo) -> void {
+    varint(out, (numero << 3) | tipo);
+}
+
+/- Agrega los bytes de `datos` al final de `out`. -/
+public fn agrega(vec.Vector<byte> ptr mutable out, vec.Vector<byte> ptr datos) -> void {
+    var int i = 0;
+    var int n = datos.len();
+    while (i < n) {
+        out.push(datos.get(i));
+        i = i + 1;
+    };
+}
+
+/- Un campo varint (entero, bool o enum), SIEMPRE: el que decide omitirlo
+   por valer 0 es el llamador. -/
+public fn campo_varint(vec.Vector<byte> ptr mutable out, int numero, int valor) -> void {
+    etiqueta(out, numero, VARINT);
+    varint(out, valor);
+}
+
+/- Un campo delimitado con los bytes de `cuerpo` (un submensaje o un
+   bloque empaquetado). -/
+public fn campo_bytes(vec.Vector<byte> ptr mutable out, int numero,
+                      vec.Vector<byte> ptr cuerpo) -> void {
+    etiqueta(out, numero, DELIMITADO);
+    varint(out, cuerpo.len());
+    agrega(out, cuerpo);
+}
+
+/- Un campo de texto, en UTF-8. -/
+public fn campo_texto(vec.Vector<byte> ptr mutable out, int numero, str valor) -> void {
+    var vec.Vector<byte> utf8 = text.to_bytes(valor);
+    campo_bytes(out, numero, &utf8);
+}
+
+/- Un campo `double`: sus 64 bits IEEE-754 en little-endian. -/
+public fn campo_double(vec.Vector<byte> ptr mutable out, int numero, float valor) -> void {
+    etiqueta(out, numero, F64);
+    var int bits = mem.float_bits(valor);
+    var int i = 0;
+    while (i < 8) {
+        out.push(cast<byte>((bits >> (8 * i)) & 0xFF));
+        i = i + 1;
+    };
+}
+
+#export as protobuf

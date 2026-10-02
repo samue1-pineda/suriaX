@@ -1,0 +1,24 @@
+struct { str que; } Recurso;
+
+hook fn __free__(Recurso ptr r) -> void {
+}
+
+fn toma(Recurso r) -> void {
+}
+
+fn crea(str q) -> Recurso {
+    var Recurso r = Recurso{ que: q };
+    return r;
+}
+
+fn main() -> int {
+    var Recurso a = crea("a");
+    var Recurso b = Recurso{ que: "b" };
+    toma(move b);
+    var Recurso c = crea("c");
+    c = crea("d");
+    move a;
+    crea("tirado");
+    var str ptr n = &c.que;
+    return 0;
+}

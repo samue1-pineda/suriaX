@@ -191,3 +191,61 @@ def test_public_hook_si_se_exporta_al_consumidor():
                           'fn main() -> int { var box.B x = box.of("bye\\n"); '
                           "print(&x); return 0; };\n"}
     assert_project_output(files, "bye\n")
+
+
+# --------------------------------------------------------------------------- #
+# lo que se oculta sigue funcionando POR DENTRO, y el error dice por que
+# --------------------------------------------------------------------------- #
+
+#: 'internal' como detalle de implementacion: la funcion publica lo usa.
+LIB_CON_AYUDANTE = (
+    "internal fn doble(int x) -> int { return x * 2; }\n"
+    "internal const int BASE = 10;\n"
+    "public fn calcula(int x) -> int { return doble(x) + BASE; }\n"
+    "#export as calc\n"
+)
+
+
+def test_una_fn_publica_usa_lo_internal_de_su_archivo():
+    """Una libreria cuyas funciones publicas usan algo 'internal' se llama
+    desde fuera sin problema: 'internal' oculta el NOMBRE al consumidor, no
+    el codigo a su propio archivo. (Se reporto que esto fallaba con "no
+    existe"; se verifico que hoy funciona y queda fijado aqui.)"""
+    files = {"lib/calc.libsrx": LIB_CON_AYUDANTE,
+             "main.srcx": '#from io #import stdp\n#import calc\n'
+                          'fn main() -> int { stdp.println(f"{calc.calcula(4)}"); '
+                          'return 0; };\n'}
+    assert_project_output(files, "18\n")
+
+
+def test_el_error_de_internal_dice_que_existe_pero_es_internal():
+    """El codigo es SEM011 (contrato de arriba), pero el mensaje no puede
+    sugerir que el simbolo no existe: dice que es 'internal' y que significa."""
+    err = _err({"lib/calc.libsrx": LIB_CON_AYUDANTE,
+                "main.srcx": "#import calc\n"
+                             "fn main() -> int { return calc.doble(1); };\n"})
+    assert "SEM011" in err and "'internal'" in err, err
+
+
+def test_el_error_de_private_dice_que_es_de_otro_paquete():
+    err = _err(_cross_pkg("#import mylib", "    return mylib.priv_fn();"))
+    assert "SEM011" in err and "'private'" in err, err
+
+
+def test_private_visible_entre_submodulos_del_mismo_paquete():
+    """Un paquete es su CARPETA: dos submodulos de 'lib/pk' se ven lo
+    'private' entre si, y el consumidor de fuera solo ve lo 'public'."""
+    files = {
+        "lib/pk/main.libsrx": "#export package as pk\n",
+        "lib/pk/a.libsrx": "private fn base() -> int { return 10; }\n"
+                           "#export as a\n",
+        "lib/pk/b.libsrx": "#import pk.a\n"
+                           "public fn dos() -> int { return a.base() + 1; }\n"
+                           "#export as b\n",
+        "main.srcx": '#from io #import stdp\n#import pk.b\n'
+                     'fn main() -> int { stdp.println(f"{b.dos()}"); return 0; };\n',
+    }
+    assert_project_output(files, "11\n")
+    files["main.srcx"] = "#import pk.a\nfn main() -> int { return a.base(); };\n"
+    err = _err(files)
+    assert "SEM011" in err and "'private'" in err, err

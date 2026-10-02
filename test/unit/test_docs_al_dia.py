@@ -60,10 +60,7 @@ def test_el_glosario_no_inventa_hooks():
 def test_el_esquema_del_hir_coincide_en_el_glosario_y_en_el_proto():
     """El enum del esquema y el vocabulario de la Semántica son el mismo
     conjunto: si uno gana un hook, el otro también."""
-    try:
-        from src.HIR.stubs import load_hir_pb2
-    except Exception:  # pragma: no cover - sin protobuf no aplica
-        return
+    from src.HIR.stubs import load_hir_pb2
     from src.frontend.semantic.hooks import HOOK_SPECS
 
     pb = load_hir_pb2()
@@ -217,10 +214,7 @@ def test_ningun_documento_escribe_la_version_a_mano():
 def test_la_doc_publicada_nombra_la_version_de_esquema_vigente():
     """``documentation/source/hir.rst`` enseña un ``.phir`` de ejemplo: si el
     esquema sube y el ejemplo no, la web enseña un formato que ya no existe."""
-    try:
-        from src.HIR.emmit_IR import SCHEMA_VERSION
-    except Exception:  # pragma: no cover
-        return
+    from src.HIR.emmit_IR import SCHEMA_VERSION
     doc = _leer("documentation/source/hir.rst")
     assert f"schema_version: {SCHEMA_VERSION}" in doc, (
         f"hir.rst no muestra 'schema_version: {SCHEMA_VERSION}' en su ejemplo")
@@ -340,3 +334,50 @@ def test_el_workflow_de_docs_escucha_a_todas_sus_fuentes():
     assert cubierto("version.py"), (
         "docs.yml tiene que reconstruir el sitio cuando cambia version.py: "
         "el título de la página lo lleva")
+
+
+# --------------------------------------------------------------------------- #
+# la gramática (docs/gramar/grammar.ebnf)
+# --------------------------------------------------------------------------- #
+
+def _gramatica() -> dict[str, str]:
+    """Las reglas de la EBNF, ``nombre -> cuerpo``, sin comentarios."""
+    texto = re.sub(r"\(\*.*?\*\)", "", _leer("docs/gramar/grammar.ebnf"), flags=re.S)
+    return dict(re.findall(r"^([A-Za-z_]+)\s*=\s*(.*?);\s*$", texto, flags=re.S | re.M))
+
+
+def test_la_gramatica_no_usa_reglas_sin_definir():
+    reglas = _gramatica()
+    usadas: set[str] = set()
+    for cuerpo in reglas.values():
+        sin_terminales = re.sub(r'"[^"]*"|\'[^\']*\'|\?[^?]*\?', "", cuerpo)
+        usadas |= set(re.findall(r"\b[A-Za-z_]+\b", sin_terminales))
+    faltan = sorted(usadas - set(reglas) - {"EOF"})
+    assert not faltan, f"la EBNF usa reglas que no define: {faltan}"
+
+
+def test_la_gramatica_nombra_las_palabras_reservadas_del_lexer():
+    """La EBNF quedó desactualizada una vez; esto ata su vocabulario al del
+    lexer (``KEYWORDS``): una palabra reservada nueva, o una retirada, la
+    obliga a cambiar."""
+    sys.path.insert(0, os.path.join(_REPO_ROOT, "V0"))
+    from include.t_types import KEYWORDS
+    reglas = _gramatica()
+    escritas: set[str] = set()
+    for categoria in ("type_kw", "decl_kw", "control_kw", "memory_kw", "error_kw",
+                      "word_op", "word_lit"):
+        escritas |= set(re.findall(r'"([^"]+)"', reglas[categoria]))
+    assert escritas == set(KEYWORDS), (
+        f"faltan en la EBNF: {sorted(set(KEYWORDS) - escritas)}; "
+        f"sobran: {sorted(escritas - set(KEYWORDS))}")
+
+
+def test_el_glosario_de_tokens_documenta_todos_los_tokens():
+    """``docs/gramar/t_types.md`` llegó a omitir 33 tokens (las excepciones,
+    ``with``, ``byte``, los operadores de bits...). Cada valor de
+    ``TokenType`` tiene que aparecer por su nombre."""
+    sys.path.insert(0, os.path.join(_REPO_ROOT, "V0"))
+    from include.t_types import TokenType
+    doc = _leer("docs/gramar/t_types.md")
+    faltan = [t.name for t in TokenType if not re.search(r"\b" + t.name + r"\b", doc)]
+    assert not faltan, f"tokens sin documentar en docs/gramar/t_types.md: {faltan}"

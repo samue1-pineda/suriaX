@@ -9,7 +9,7 @@ para compartir la forma del dato.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:  # pragma: no cover - solo para anotaciones
     from include.types_ast import Type
@@ -35,6 +35,13 @@ class LoadedLibrary:
     alias: str
     path: str
     unit: str = ""  # '' -> se completa con 'alias' (ver __post_init__)
+    # submódulos de un paquete que EXISTEN pero no compilaron, por nombre de
+    # archivo (su '#export' no llegó a leerse) -> sus errores, PENDIENTES de
+    # reportar. Se reportan cuando alguien importa ese submódulo, en la
+    # línea de ESE import (ver '__init__._reporta_fallido'): un paquete se
+    # carga entero en su primer import, y un submódulo roto que el programa
+    # no usa no debe impedirle compilar. Una lista vacía: ya se reportó.
+    fallidos: Dict[str, List] = field(default_factory=dict)
     # exports por nombre: funciones (values) y structs/enums/type (types).
     values: Dict[str, "Symbol"] = field(default_factory=dict)
     types: Dict[str, "Symbol"] = field(default_factory=dict)
@@ -49,6 +56,11 @@ class LoadedLibrary:
     dunders: Dict[Tuple[str, str], "Symbol"] = field(default_factory=dict)
     # solo paquetes: submodulo -> LoadedLibrary (para '#import io.string').
     subs: Dict[str, "LoadedLibrary"] = field(default_factory=dict)
+    # nombres que EXISTEN en la libreria pero no se exportan por ser
+    # 'internal' (exclusivos de su archivo). Solo el NOMBRE, nunca el simbolo:
+    # sirve para que el diagnostico diga "es internal" en vez de "no existe",
+    # que es lo que hacia creer que la libreria estaba rota.
+    internos: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         # una libreria suelta se identifica por su propio alias; solo

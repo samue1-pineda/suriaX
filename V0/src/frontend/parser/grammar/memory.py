@@ -1,4 +1,4 @@
-"""Modelo de memoria: *ownership + move-semantics* (EBNF secc. 2).
+"""Modelo de memoria: *ownership + move-semantics* (EBNF).
 
 ::
     move_stmt = "move" expression ";"

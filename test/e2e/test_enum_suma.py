@@ -155,13 +155,34 @@ def test_void_no_puede_ser_payload():
     assert_has_code("enum E { V(void) };", "SEM025")
 
 
-def test_un_payload_con_destructor_se_rechaza():
-    """Destruir un enum suma exigiría saber QUÉ variante es en ejecución.
-    Todavía no existe, así que se rechaza en vez de filtrarse en silencio."""
+_RECURSO = ('struct { int id; } R;\n'
+            'hook fn __free__(R ptr r) -> void { __write__(f"drop {r.id}\\n"); };\n'
+            'enum E { V(R), Fin };\n')
+
+
+def test_un_payload_con_destructor_se_destruye_con_su_variante():
+    """Era SEM029: destruir un enum suma exige saber QUÉ variante es en
+    ejecución. Destruir por tipo lo hace: la variante que haya al morir
+    decide qué se destruye (y 'Fin' no tiene nada)."""
+    _run('    var E a = E.V(R{ id: 1 });\n    var E b = E.Fin;\n'
+         '    a = E.V(R{ id: 2 });\n    E.V(R{ id: 3 });\n'
+         '    __write__("fin\\n");\n    return 0;',
+         "drop 1\ndrop 3\nfin\ndrop 2\n", extra=_RECURSO)
+
+
+def test_lo_que_liga_un_case_es_un_prestamo_del_payload():
+    """``case V(r)`` liga el payload MISMO: se lee y se modifica, pero sigue
+    siendo del enum. Cederlo lo destruiría dos veces: SEM036."""
+    _run('    var E a = E.V(R{ id: 4 });\n'
+         '    match (a) { case E.V(r) { __write__(f"tiene {r.id}\\n"); }; };\n'
+         '    return 0;',
+         "tiene 4\ndrop 4\n", extra=_RECURSO)
     assert_has_code(
-        "struct { int ptr mutable d; } R;\n"
-        "hook fn __free__(R ptr r) -> void { };\n"
-        "enum E { V(R), Fin };", "SEM029")
+        W + _RECURSO +
+        "fn f(E e) -> R {\n"
+        "    match (e) { case E.V(r) { return r; }; };\n"
+        "    return R{ id: 0 };\n"
+        "};", "SEM036")
 
 
 def test_un_puntero_a_algo_con_destructor_si_pasa():

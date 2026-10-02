@@ -251,12 +251,6 @@ def test_un_programa_con_solo_avisos_emite_su_hir():
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if repo not in sys.path:
         sys.path.insert(0, repo)
-    try:
-        import google.protobuf  # noqa: F401
-    except ImportError:
-        print("      (omitido: sin protobuf no hay fase HIR)", file=sys.stderr)
-        return
-
     from driver import CompileOptions, compile_source
 
     fuente = ("enum Color { ROJO, VERDE };\n"

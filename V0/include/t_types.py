@@ -73,6 +73,7 @@ class TokenType(Enum):
     TRY = 54           # 'try', abre un bloque protegido
     CATCH = 55         # 'catch', captura el error propagado
     THROW = 56         # 'throw', inicia la propagacion
+    FINALLY = 59       # 'finally', corre al salir del 'try' por cualquier camino
 
     # --- operadores aritmeticos ---
     ASSIGN = 60        # =
@@ -129,6 +130,25 @@ class TokenType(Enum):
     ERROR = 98         # token sintetico ante un error lexico
     EOF = 100
 
+    # --- recursos ---
+    WITH = 101         # 'with (var T x = e) { }': RAII con nombre
+
+    # --- operadores de BITS (solo sobre 'int') -------------------------------
+    PIPE = 102         # |   o de bits
+    CARET = 103        # ^   o exclusivo de bits
+    TILDE = 104        # ~   complemento de bits (prefijo)
+    SHIFT_LEFT = 105   # <<
+    # '>>' NO lo emite el lexer: son dos GREATER, y el parser los junta si van
+    # PEGADOS y estan en posicion de operador. Asi 'Vector<Vector<int>>'
+    # cierra dos genericos sin que nadie parta un token (el problema de C++98).
+    SHIFT_RIGHT = 106
+    AMP_ASSIGN = 107          # &=
+    PIPE_ASSIGN = 108         # |=
+    CARET_ASSIGN = 109        # ^=
+    SHIFT_LEFT_ASSIGN = 110   # <<=
+    SHIFT_RIGHT_ASSIGN = 111  # >>=  (lo arma el parser: '>' + '>=' pegados)
+    BYTE = 112         # 'byte' (tipo: un entero SIN signo de 8 bits, 0..255)
+
 
 # --- tablas de busqueda O(1) usadas por los scanners ---
 #
@@ -143,6 +163,7 @@ KEYWORDS: dict[str, TokenType] = {
     "int": TokenType.INT,
     "float": TokenType.FLOAT,
     "str": TokenType.STR,
+    "byte": TokenType.BYTE,
     "bool": TokenType.BOOL,
     "void": TokenType.VOID,
     "true": TokenType.TRUE,
@@ -169,6 +190,9 @@ KEYWORDS: dict[str, TokenType] = {
     "try": TokenType.TRY,
     "catch": TokenType.CATCH,
     "throw": TokenType.THROW,
+    "finally": TokenType.FINALLY,
+    # recursos: 'with (var T x = e) { }' (RAII: '__free__' al salir)
+    "with": TokenType.WITH,
     # control de flujo
     "if": TokenType.IF,
     "else": TokenType.ELSE,

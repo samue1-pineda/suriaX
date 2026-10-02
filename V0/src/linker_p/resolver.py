@@ -7,12 +7,16 @@ todo aquí es O(1) en stats por candidato, sin listar directorios.
 **Rutas de búsqueda**, en orden:
 
 1. el directorio del fuente que importa;
-2. las rutas de ``libraries.libsrx_paths`` del ``.suriaX_config.yaml``,
+2. si ese directorio está DENTRO de un paquete, la carpeta que contiene al
+   paquete: así un submódulo importa a su hermano (``pk/b`` ->
+   ``#import pk.a``) y un programa guardado dentro de su paquete lo
+   encuentra;
+3. las rutas de ``libraries.libsrx_paths`` del ``.suriaX_config.yaml``,
    resueltas RELATIVAS A LA RAÍZ DEL PROYECTO (``config["_root"]``, el
    directorio del yaml) — nunca al CWD del proceso. Default: ``./lib``;
-3. la **librería estándar que trae el compilador**.
+4. la **librería estándar que trae el compilador**.
 
-El tercer escalón separa dos cosas que estaban mezcladas: las librerías que
+El último escalón separa dos cosas que estaban mezcladas: las librerías que
 trae el COMPILADOR (``io``, ``mem``, ``array``…) y las que escribe el
 USUARIO. Sin él, ``io`` solo se encontraba si el proyecto tenía su propia
 copia de ``lib/`` al lado del fuente — así que un programa fuera del
@@ -108,16 +112,27 @@ def _project_resolve(config: Optional[dict], path: str) -> str:
 
 
 def search_paths(source_path: Optional[str], config: Optional[dict]) -> List[str]:
-    """Rutas de búsqueda, en orden: dir del fuente, la configuración del
-    proyecto (resuelta contra su raíz, nunca contra el CWD) y, al final, la
-    stdlib del compilador.
+    """Rutas de búsqueda, en orden: dir del fuente, la raíz del paquete que
+    lo contiene (si está dentro de uno), la configuración del proyecto
+    (resuelta contra su raíz, nunca contra el CWD) y, al final, la stdlib del
+    compilador.
 
     Sin duplicados: la stdlib no se repite si el proyecto ya la declaró, y
     así el diagnóstico de "no se encontró" no lista dos veces la misma ruta.
     """
     paths: List[str] = []
     if source_path:
-        paths.append(os.path.dirname(os.path.abspath(source_path)))
+        propio = os.path.dirname(os.path.abspath(source_path))
+        paths.append(propio)
+        # Si el fuente vive DENTRO de un paquete, la carpeta que contiene al
+        # paquete también es ruta de búsqueda: sin ella, un submódulo no podía
+        # importar a un hermano ('pk/b.libsrx' -> '#import pk.a') ni un
+        # programa a su propio paquete ('aritmetica/calc.srcx' ->
+        # '#import aritmetica.frontend'): la búsqueda empezaba DENTRO del
+        # paquete y nunca lo encontraba (SEM009).
+        raiz = _raiz_de_paquete(propio)
+        if raiz is not None:
+            paths.append(raiz)
     configured = None
     if config is not None:
         configured = (config.get("libraries") or {}).get("libsrx_paths")
@@ -128,6 +143,24 @@ def search_paths(source_path: Optional[str], config: Optional[dict]) -> List[str
         paths.append(stdlib)
     vistas: set = set()
     return [p for p in paths if not (p in vistas or vistas.add(p))]
+
+
+def _raiz_de_paquete(directorio: str) -> Optional[str]:
+    """La carpeta que CONTIENE al paquete más externo que envuelve a
+    ``directorio``, o ``None`` si ``directorio`` no está dentro de un paquete.
+
+    Sube mientras la carpeta sea un paquete (tiene su archivo padre): así un
+    paquete anidado (``a/b/``) se resuelve desde fuera de ``a``, igual que lo
+    hace un consumidor externo.
+    """
+    actual = directorio
+    raiz = None
+    while package_parent(actual, os.path.basename(actual)) is not None:
+        raiz = os.path.dirname(actual)
+        if raiz == actual:        # llegó a la raíz del sistema de archivos
+            break
+        actual = raiz
+    return raiz
 
 
 def _name_candidates(lib: str) -> Tuple[str, ...]:

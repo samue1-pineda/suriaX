@@ -1,4 +1,4 @@
-"""``function_decl`` (EBNF secc. 1, funciones).
+"""``function_decl`` (EBNF).
 
 ::
     function_decl = "fn" ( IDENTIFIER | DUNDER ) "(" [ param_list ] ")"

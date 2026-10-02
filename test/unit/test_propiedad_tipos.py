@@ -15,7 +15,6 @@ eso hay uno con reloj.
 from __future__ import annotations
 
 import os
-import signal
 import sys
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -32,6 +31,7 @@ hook fn __free__(Buffer ptr b) -> void { };
 
 struct { Buffer b; int n; } Caja;
 struct { Buffer ptr prestado; int n; } Vista;
+struct { int ptr prestado; int n; } VistaDeEnteros;
 struct { Caja c; } Envoltorio;
 struct { int x; int y; } Punto;
 struct { Nodo ptr sig; int v; } Nodo;
@@ -108,8 +108,18 @@ def test_un_puntero_a_un_tipo_que_posee_no_posee():
     assert _posee(pointer_of(nominal("Buffer"))) is False
 
 
-def test_un_campo_puntero_no_contagia_la_propiedad():
-    assert _posee("Vista") is False
+def test_un_campo_puntero_a_un_dueno_posee():
+    """Regla 4: un ``R ptr`` en un CAMPO es el bloque de ``mem`` del struct
+    (como el buffer de un ``std::vector``), y posee si ``R`` posee. Asi
+    ``Vector<R>`` posee y se destruye con sus elementos. El costo, aceptado:
+    un campo que solo presta tambien cuenta, y copiar el struct pide
+    ``move``."""
+    assert _posee("Vista") is True
+
+
+def test_un_campo_puntero_a_algo_sin_destructor_no_posee():
+    """...y solo si ``R`` posee: ``Vector<int>`` sigue siendo copiable."""
+    assert _posee("VistaDeEnteros") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -164,17 +174,12 @@ def test_un_struct_que_se_contiene_por_valor_no_cuelga():
     ciclo.members["yo"] = Symbol(name="yo", kind=SymbolKind.FIELD, ln=1, col=1,
                                  type=nominal("Ciclo"))
     tabla.global_scope.define_type(ciclo)
-    signal.signal(signal.SIGALRM, _timeout)
-    signal.alarm(5)
-    try:
-        assert _posee("Ciclo", tabla) is False
-    finally:
-        signal.alarm(0)
-
-
-def _timeout(*_args):
-    raise AssertionError(
-        "owns_resources no terminó: el guardia de ciclos dejó de funcionar")
+    # con un tiempo limite portable (antes 'signal.alarm': solo POSIX, y en
+    # Windows la prueba fallaba siempre sin llegar a probar nada)
+    from helpers import run_with_timeout
+    assert run_with_timeout(
+        lambda: _posee("Ciclo", tabla), 5,
+        "owns_resources no terminó: el guardia de ciclos dejó de funcionar") is False
 
 
 # --------------------------------------------------------------------------- #

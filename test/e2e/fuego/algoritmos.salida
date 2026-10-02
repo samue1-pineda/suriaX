@@ -1,0 +1,10 @@
+primos hasta 100: 25
+fib(40) = 102334155
+matriz: [19 22; 43 50]
+mcd(1071, 462) = 21
+reconocer es palindromo: true
+suriax es palindromo: false
+cesar: krod pxqgr -> hola mundo
+balanceado '([()])': true
+balanceado '([)]': false
+suma de la lista: 6

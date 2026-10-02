@@ -1,0 +1,80 @@
+/- sistema.rutas: las rutas del sistema de archivos, calculadas COMO LAS
+ CALCULA EL SISTEMA (las mismas cadenas que 'os.path' de Python en ese
+ sistema operativo: '\' y letras de unidad en Windows, '/' en los demás).
+
+ Existe para que un programa en suriaX —el compilador escrito en suriaX, el
+ primero— ubique archivos y escriba sus rutas igual que el compilador de
+ Python. Por eso no inventa reglas propias: 'absoluta' es 'os.path.abspath',
+ 'normaliza' es 'os.path.normpath', y así cada una.
+
+     #import sistema.rutas as rt
+     rt.absoluta("lib/calc.libsrx")    // C:\proyecto\lib\calc.libsrx
+     rt.une("lib", "calc.libsrx")      // lib\calc.libsrx
+     rt.normaliza("a/./b/../c")        // a\c
+-/
+
+// llamadas al host
+internal fn __directorio_actual__() -> str;
+internal fn __entorno__(str nombre) -> str;
+internal fn __separador__() -> str;
+internal fn __absoluta__(str ruta) -> str;
+internal fn __normaliza__(str ruta) -> str;
+internal fn __une__(str a, str b) -> str;
+internal fn __carpeta_de__(str ruta) -> str;
+internal fn __nombre_de__(str ruta) -> str;
+internal fn __es_carpeta__(str ruta) -> bool;
+internal fn __es_archivo__(str ruta) -> bool;
+
+// La carpeta desde la que se ejecuta el programa ('os.getcwd').
+public fn directorio_actual() -> str {
+    return __directorio_actual__();
+}
+
+// El valor de la variable de entorno 'nombre', o "" si no está definida.
+public fn entorno(str nombre) -> str {
+    return __entorno__(nombre);
+}
+
+// El separador de carpetas del sistema: "\" en Windows, "/" en los demás.
+public fn separador() -> str {
+    return __separador__();
+}
+
+// La ruta ABSOLUTA y normalizada ('os.path.abspath').
+public fn absoluta(str ruta) -> str {
+    return __absoluta__(ruta);
+}
+
+// La ruta sin '.', sin '..' que se puedan resolver y sin separadores
+// repetidos, con el separador del sistema ('os.path.normpath'). No toca el
+// disco: no sigue enlaces ni comprueba que exista.
+public fn normaliza(str ruta) -> str {
+    return __normaliza__(ruta);
+}
+
+// 'b' dentro de 'a' ('os.path.join'); si 'b' es absoluta, 'b'.
+public fn une(str a, str b) -> str {
+    return __une__(a, b);
+}
+
+// La carpeta que contiene a 'ruta' ('os.path.dirname').
+public fn carpeta_de(str ruta) -> str {
+    return __carpeta_de__(ruta);
+}
+
+// El último tramo de 'ruta' ('os.path.basename').
+public fn nombre_de(str ruta) -> str {
+    return __nombre_de__(ruta);
+}
+
+// ¿'ruta' es una carpeta que existe?
+public fn es_carpeta(str ruta) -> bool {
+    return __es_carpeta__(ruta);
+}
+
+// ¿'ruta' es un archivo que existe?
+public fn es_archivo(str ruta) -> bool {
+    return __es_archivo__(ruta);
+}
+
+#export as rutas

@@ -70,9 +70,10 @@ Ideas centrales:
   nullable `T?` son **préstamos**: no transfieren propiedad.
 
 La **verificación** ocurre en dos niveles: la etapa **semántica** valida la
-propiedad sobre el flujo del cuerpo (uso-tras-move, doble move) y el
-**lowering a MIR** (en C++) hará la verificación final, incluidos los tiempos
-de vida de los préstamos.
+propiedad sobre el flujo del cuerpo (uso-tras-move, doble move) y el **MIR**
+(en C++) la repite sobre el grafo de control de flujo, por **todos** los
+caminos que llegan a cada punto. Los tiempos de vida de los préstamos se
+siguen, por ahora, dentro de un bloque (ver [docs/mir.md](docs/mir.md)).
 
 Por qué este modelo y no otro: ownership **degrada bien**. Sin su verificador
 de préstamos sigue siendo seguro —restrictivo, pero nunca acepta un programa
@@ -124,3 +125,8 @@ Cada fase define su jerarquía de errores con códigos estables y serializables
 (`LEXxxx`, `PARxxx`, `ASTxxx`, `HIRxxx`, ...) derivados de `CompilerError`.
 Permiten reportes uniformes, tests y trazabilidad a lo largo del
 pipeline.
+
+Un fallo **del compilador** no se mezcla con los del programa: es `ICE000`,
+con su propio código de salida (`6`) y el traceback de la excepción original.
+Decirle a un estudiante "tu programa tiene un error" cuando el que falló es el
+compilador le hace buscar un fallo que no existe.

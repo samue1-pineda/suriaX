@@ -90,12 +90,22 @@ class Symbol:
     # FUNCTION/HOOK: tipos de sus parametros en orden (para validar aridad y,
     # a futuro Fase 3, compatibilidad de argumentos). 'type' es el retorno.
     param_types: Optional[Tuple[Type, ...]] = None
+    # IMPORT: nombres que la libreria tiene pero que ESTE consumidor no ve,
+    # con el motivo ('internal' | 'private'). Solo para explicar el
+    # diagnostico: acceder a uno sigue siendo un error.
+    ocultos: Optional[Dict[str, str]] = None
     # STRUCT: campos | ENUM: items | IMPORT: exports de la libreria.
     # Sub-namespace plano O(1); NO participa de la cadena de scopes.
     members: Optional[Dict[str, "Symbol"]] = None
     # Scope donde se DEFINIO (ver Scope.sid). Lo pone 'define_*', asi que
     # ningun sitio que declare simbolos tiene que acordarse de ponerlo.
     scope_id: int = 0
+    # FUNCION GENERICA: los tipos (que nombran sus parametros) de los valores
+    # que COPIA su cuerpo, cada uno con donde ('vector.libsrx:128: se copia
+    # ...'). Instanciarla con un tipo que tiene destructor es SEM038: la copia
+    # lo destruiria dos veces. Lo calcula scope_resolver al cerrar el modulo
+    # y viaja con el Symbol a quien importe la libreria.
+    copias: Tuple[Tuple[Type, str], ...] = ()
 
 
 @dataclass(slots=True)

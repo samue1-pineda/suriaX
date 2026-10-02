@@ -1,0 +1,76 @@
+/- Excepciones 2: cada 'catch' atrapa un TIPO.
+
+ 'catch (T e)' atrapa solo lo que se lanzo con tipo T (el tipo ESTATICO de
+ la expresion del throw, el que decidio el compilador). Las ramas se
+ prueban en orden y gana la PRIMERA que encaja; 'catch (e)' sin tipo
+ atrapa cualquier cosa. Si ninguna encaja, el valor sigue subiendo.
+
+ Casos que antes fallaban: un 'char' se confundia con un 'str' de un
+ caracter porque se miraba el valor en ejecucion, no su tipo.
+-/
+#from io #import stdp
+
+struct { str msg; int linea; } ErrorDeSintaxis;
+enum Fallo { NoEncontrado(str), Limite(int), Desconocido };
+
+fn lanza(int que) -> void {
+    if (que == 0) { throw 7; };
+    if (que == 1) { throw "texto"; };
+    if (que == 2) { throw 'c'; };
+    if (que == 3) { throw 2.5; };
+    if (que == 4) { throw false; };
+    if (que == 5) { throw ErrorDeSintaxis{ msg: "falta ';'", linea: 12 }; };
+    if (que == 6) { throw Fallo.Limite(100); };
+    throw Fallo.Desconocido;
+}
+
+fn clasifica(int que) -> void {
+    try { lanza(que); }
+    catch (int e) { stdp.println(f"  int {e}"); }
+    catch (str e) { stdp.println(f"  str {e}"); }
+    catch (char e) { stdp.println(f"  char {e}"); }
+    catch (float e) { stdp.println(f"  float {e}"); }
+    catch (bool e) { stdp.println(f"  bool {e}"); }
+    catch (ErrorDeSintaxis e) { stdp.println(f"  sintaxis en {e.linea}: {e.msg}"); }
+    catch (Fallo f) {
+        match (f) {
+            case Fallo.NoEncontrado(q): { stdp.println(f"  no encontrado {q}"); }
+            case Fallo.Limite(n): { stdp.println(f"  limite {n}"); }
+            case Fallo.Desconocido: { stdp.println("  desconocido"); }
+        }
+    };
+}
+
+fn solo_enteros() -> void {
+    try { throw "no soy int"; }
+    catch (int e) { stdp.println("  no deberia verse"); };
+}
+
+fn main() -> int {
+    stdp.println("-- cada tipo cae en su rama");
+    var int i = 0;
+    while (i < 8) { clasifica(i); i = i + 1; };
+
+    stdp.println("-- char y str de un caracter son tipos distintos");
+    try { throw "x"; }
+    catch (char c) { stdp.println("  MAL: char atrapo un str"); }
+    catch (str s) { stdp.println(f"  str {s}"); };
+    try { throw 'x'; }
+    catch (str s) { stdp.println("  MAL: str atrapo un char"); }
+    catch (char c) { stdp.println(f"  char {c}"); };
+
+    stdp.println("-- gana la primera rama que encaja");
+    try { throw 1; }
+    catch (int a) { stdp.println("  primera"); }
+    catch (int b) { stdp.println("  segunda (no se ve)"); };
+
+    stdp.println("-- sin tipo atrapa lo que las demas dejan");
+    try { throw 3.0; }
+    catch (int e) { stdp.println("  no se ve"); }
+    catch (e) { stdp.println("  atrapado por la rama sin tipo"); };
+
+    stdp.println("-- ninguna rama encaja: el valor sigue subiendo");
+    try { solo_enteros(); }
+    catch (str e) { stdp.println(f"  lo atrapa el de afuera: {e}"); };
+    return 0;
+}

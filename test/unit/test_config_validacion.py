@@ -31,18 +31,20 @@ def _codigos(contenido: str) -> list[str]:
         return [e.code for e in errors_of(reload_config(start_dir=tmp))]
 
 
-def _hay_yaml() -> bool:
-    """Sin ``pyyaml`` no se llega a parsear: estos casos no aplican."""
+def _exigir_yaml() -> None:
+    """Sin ``pyyaml`` el yaml no se llega a parsear: la prueba se OMITE, con
+    aviso. Antes hacía ``return`` y contaba como pasada sin haber leído un
+    solo yaml."""
+    from helpers import omitir
     try:
         import yaml  # noqa: F401
-        return True
     except ImportError:
-        return False
+        omitir("pyyaml no está instalado (pip install pyyaml): sin él el "
+               "compilador usa la configuración por defecto y no valida el yaml")
 
 
 def test_una_clave_mal_escrita_se_reporta():
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     codigos = _codigos("version: 2\nlibraries:\n  libsrx_path:\n    - ./lib\n")
     assert "CFG004" in codigos, (
         f"un typo en una clave debe reportarse, no ignorarse: {codigos}")
@@ -50,8 +52,7 @@ def test_una_clave_mal_escrita_se_reporta():
 
 def test_la_sugerencia_nombra_la_clave_correcta():
     """Lo que convierte el diagnóstico en útil: decir qué se quiso escribir."""
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     from config import errors_of, reload_config
 
     with tempfile.TemporaryDirectory(prefix="suriax-cfg-") as tmp:
@@ -64,37 +65,41 @@ def test_la_sugerencia_nombra_la_clave_correcta():
 
 
 def test_un_valor_fuera_del_conjunto_se_reporta():
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     assert "CFG006" in _codigos("target: zzz_no_existe\n")
 
 
 def test_un_tipo_equivocado_se_reporta():
     """``libsrx_paths: ./lib`` (cadena en vez de lista) recorrería la cadena
     carácter a carácter como si cada letra fuera una ruta."""
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     assert "CFG005" in _codigos("libraries:\n  libsrx_paths: ./lib\n")
 
 
 def test_un_yaml_roto_se_reporta():
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     assert "CFG002" in _codigos("target: [[[roto\n")
 
 
 def test_una_configuracion_valida_no_reporta_nada():
     """El otro lado del contrato: cero falsos positivos."""
-    if not _hay_yaml():
-        return
+    _exigir_yaml()
     assert _codigos("version: 2\ntarget: interp\n"
                     "libraries:\n  libsrx_paths:\n    - ./lib\n") == []
 
 
 def test_la_configuracion_del_repositorio_es_valida():
-    """La que se distribuye tiene que pasar su propia validación."""
-    if not _hay_yaml():
-        return
+    """La que se distribuye tiene que pasar su propia validación.
+
+    Si el repositorio no trae una (hoy '.suriaX_config.yaml' está en
+    .gitignore), no hay nada que validar: sin esta omisión la prueba validaba
+    los valores por DEFECTO y pasaba sin haber leído ningún archivo.
+    """
+    _exigir_yaml()
+    if not os.path.isfile(os.path.join(_REPO_ROOT, ".suriaX_config.yaml")):
+        from helpers import omitir
+        omitir("el repositorio no versiona un .suriaX_config.yaml (está en "
+               ".gitignore): no hay configuración distribuida que validar")
     from config import errors_of, reload_config
 
     criticos = [e.code for e in errors_of(reload_config(start_dir=_REPO_ROOT))

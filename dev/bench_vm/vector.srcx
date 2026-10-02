@@ -1,0 +1,28 @@
+/- Banco de la VM: STRUCTS en un vector de libreria.
+
+ 'Vector<Punto>' de 'lib/array': cada 'push' y cada 'get' es una llamada a
+ la libreria, que crece reservando y copiando bloques de 'mem'. Mide el
+ camino tipico de un programa real: tipos del usuario, genericos y hooks.
+-/
+#from io #import stdp
+#import array.vector as vec
+
+struct { int x; int y; } Punto;
+
+fn main() -> int {
+    var vec.Vector<Punto> v = vec.dynamic<Punto>(4);
+    var int i = 0;
+    while (i < 20000) {
+        v.push(Punto{ x: i, y: 2 * i });
+        i = i + 1;
+    };
+    var int total = 0;
+    i = 0;
+    while (i < v.len()) {
+        var Punto p = v.get(i);
+        total = total + p.x + p.y;
+        i = i + 1;
+    };
+    stdp.println(f"{v.len()} puntos, total = {total}");
+    return 0;
+}

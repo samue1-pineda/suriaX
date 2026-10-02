@@ -11,15 +11,15 @@ observe el pipeline global en [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Estado actual
 
-| Fase          | Estado            | Notas |
-|---------------|-------------------|-------|
-| source_reader |  funcional      | UTF-8 → Unicode, normaliza saltos de línea. |
-| Lexer         |  funcional      | Una pasada; comentarios, interpolación, `#extern cpp{}`. |
-| Parser        |  solo recibe tokens | Cursor listo (peek/advance/expect); orquesta `#test lexer`. |
-| AST           |  pendiente       | añadir interaccion con JSON para debugging|
-| AST-tipado    |  pendiente       | Tipado estático fuerte y nominal. |
-| Semántica     |  pendiente       | Símbolos, scopes, modelo de memoria. |
-| HIR (protobuf)|  pendiente       | Puente Python → C++. |
+| Fase          | Estado     | Notas |
+|---------------|------------|-------|
+| source_reader | funcional  | UTF-8 → Unicode, normaliza saltos de línea. Un fuente que no es UTF-8 es `LEX008`. |
+| Lexer         | funcional  | Una pasada; comentarios, interpolación, `#extern cpp{}`. |
+| Parser        | funcional  | Descenso recursivo LL(k≤2) + Pratt, recuperación en modo pánico. Ver [su diseño](../V0/src/frontend/parser/ARQUITECTURA.md). |
+| AST           | funcional  | `--emit-ast-json`, `#test parser`. |
+| AST-tipado    | funcional  | Tipado estático, fuerte y nominal; `--emit-ast-json` lo vuelca anotado. |
+| Semántica     | funcional  | Símbolos y scopes, tipos, propiedad (`move`/`free`), hooks, librerías. Ver [su diseño](../V0/src/frontend/semantic/ARQUITECTURA.md). |
+| HIR (protobuf)| funcional  | Codec propio, sin dependencias. Ver [hir.md](hir.md). |
 
 ## Lexer (lo que ya funciona)
 
@@ -36,10 +36,8 @@ Salida: `list[Token]` terminada en `EOF`. Detalle de tokens en
 [gramar/t_types.md](gramar/t_types.md); gramática en
 [gramar/grammar.ebnf](gramar/grammar.ebnf).
 
-## TODO
+## Pendiente
 
-- [ ] Parser de descenso recursivo + Pratt (expresiones con precedencia).
-- [ ] Construcción del AST.
-- [ ] Anotación de tipos (AST-tipado) — sistema nominal.
-- [ ] Análisis semántico (símbolos, propiedad, move).
-- [ ] Emisión del HIR en protobuf.
+Lo que falla hoy en el frontend está en [c_errorstfix.md](../c_errorstfix.md)
+(p. ej. la línea `frontend OK` aparece aunque haya errores). El plan está en
+[ROADMAP.md](../ROADMAP.md).

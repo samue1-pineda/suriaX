@@ -16,24 +16,35 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import run_program  # noqa: E402
+from helpers import omitir, run_program  # noqa: E402
 from runtime.interpreter.memory import native  # noqa: E402
+
+
+def _exigir_nativo() -> None:
+    """Omite la prueba (visible, con la causa) si ``memory_c`` no cargó.
+
+    Antes era ``if not native.AVAILABLE: return``: la prueba "pasaba" sin
+    ejecutar nada, en esta máquina y en la CI, que no construye el módulo.
+    """
+    if not native.AVAILABLE:
+        omitir(f"el módulo nativo 'memory_c' no cargó ({native.LOAD_ERROR}); "
+               "constrúyelo con: cmake -S . -B build && "
+               "cmake --build build --target suriax-native")
+
 
 _W = "fn __write__(str s) -> void;\n"
 
 
 def test_backend_nativo_disponible_y_activo():
     """Por defecto (sin SURIAX_NATIVE_MEM=0) el intérprete usa NativeCell."""
-    if not native.AVAILABLE:
-        return  # entorno sin el .so: nada que afirmar
+    _exigir_nativo()
     from runtime.interpreter.memory import pointer
     assert pointer.Cell.__name__ == "NativeCell"
 
 
 def test_memory_class_maquina_de_estados():
     """La lógica LIVE/MOVED/FREED y move-semantics vive en C++."""
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     from runtime.cxx_api import api
     M = api.load("memory_c").Memory()
 
@@ -102,7 +113,17 @@ def test_nativo_y_python_dan_lo_mismo():
     el nativo cuando está disponible (es el default)."""
     salida_python = _prog_output("0")
     assert "6" in salida_python, salida_python
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     salida_nativa = _prog_output("1")
     assert salida_nativa == salida_python, (salida_nativa, salida_python)
+
+
+def test_si_el_modulo_no_carga_se_sabe_por_que():
+    """La caída a Python puro es deliberada, pero el motivo no se tira: sin
+    él, "no cargó" podía ser que nadie lo construyó, que se construyó para
+    otra versión de Python o que el binario está roto."""
+    if native.AVAILABLE:
+        assert native.LOAD_ERROR is None, native.LOAD_ERROR
+    else:
+        assert isinstance(native.LOAD_ERROR, str) and native.LOAD_ERROR, (
+            "memory_c no cargó y no quedó registrado por qué")

@@ -118,22 +118,28 @@ fn main() -> int {
 
 
 def test_lista_enlazada_recorrido():
+    """Una lista enlazada en una ARENA: los nodos en un vector y el enlace es
+    un indice (-1 = fin). 'return &n' de un local seria un puntero colgante
+    (SEM037)."""
     src = WRITE + """
-struct { int v; Nodo ptr? sig; } Nodo;
+#import array.vector as vec
+struct { int v; int sig; } Nodo;
 
-fn cons(int v, Nodo ptr? resto) -> Nodo ptr? {
-    var Nodo n = Nodo{ v: v, sig: resto };
-    return &n;
+fn cons(vec.Vector<Nodo> ptr mutable arena, int v, int resto) -> int {
+    arena.push(Nodo{ v: v, sig: resto });
+    return arena.len() - 1;
 };
 
-fn suma(Nodo ptr? n) -> int {
-    if (n == null) { return 0; };
-    return n.v + suma(n.sig);
+fn suma(vec.Vector<Nodo> ptr arena, int n) -> int {
+    if (n < 0) { return 0; };
+    var Nodo nodo = arena.get(n);
+    return nodo.v + suma(arena, nodo.sig);
 };
 
 fn main() -> int {
-    var Nodo ptr? lista = cons(1, cons(2, cons(3, null)));
-    __write__(f"{suma(lista)}\\n");
+    var vec.Vector<Nodo> arena = vec.dynamic<Nodo>(4);
+    var int lista = cons(&arena, 1, cons(&arena, 2, cons(&arena, 3, -1)));
+    __write__(f"{suma(&arena, lista)}\\n");
     return 0;
 };
 """
@@ -269,7 +275,9 @@ test "doble de 21" {
         assert os.path.isfile(phir), "no se emitió el .phir"
         proc = subprocess.run(
             [sys.executable, os.path.join(repo, "runtime", "interpreter", "main.py"),
-             phir, "--test"], capture_output=True, text=True, cwd=tmp, timeout=120,
+             phir, "--test"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=tmp, timeout=120,
         )
         assert proc.returncode == 0, proc.stderr
         assert "PASS" in proc.stdout, proc.stdout
@@ -277,45 +285,65 @@ test "doble de 21" {
 
 
 def test_arbol_binario_completo():
-    """La prueba de fuego: BST con inserción, recorrido y búsqueda."""
+    """La prueba de fuego: BST con inserción, recorrido y búsqueda.
+
+    Los nodos viven en una ARENA (un vector) y se enlazan por índice (-1 =
+    ninguno), que es como suriaX guarda un árbol: no hay tipos recursivos por
+    valor, y devolver '&n' de un local era un puntero a algo que muere al
+    salir de la función (ahora es SEM037, ver el test de abajo)."""
     src = WRITE + """
-struct { int value; Node ptr? left; Node ptr? right; } Node;
+#import array.vector as vec
+struct { int value; int left; int right; } Node;
 
-fn leaf(int v) -> Node ptr? {
-    var Node n = Node{ value: v, left: null, right: null };
-    return &n;
-};
-
-fn insert(Node ptr? root, int v) -> Node ptr? {
-    if (root == null) { return leaf(v); };
-    if (v < root.value) {
-        root.left = insert(root.left, v);
-    }; else {
-        root.right = insert(root.right, v);
+fn insert(vec.Vector<Node> ptr mutable arena, int root, int v) -> int {
+    if (root < 0) {
+        arena.push(Node{ value: v, left: -1, right: -1 });
+        return arena.len() - 1;
     };
+    var Node n = arena.get(root);
+    if (v < n.value) {
+        n.left = insert(arena, n.left, v);
+    } else {
+        n.right = insert(arena, n.right, v);
+    };
+    arena[root] = n;
     return root;
 };
 
-fn inorder(Node ptr? node) -> void {
-    if (node == null) { return; };
-    inorder(node.left);
-    __write__(f"{node.value} ");
-    inorder(node.right);
+fn inorder(vec.Vector<Node> ptr arena, int node) -> void {
+    if (node < 0) { return; };
+    var Node n = arena.get(node);
+    inorder(arena, n.left);
+    __write__(f"{n.value} ");
+    inorder(arena, n.right);
 };
 
 fn main() -> int {
-    var Node ptr? root = null;
-    root = insert(root, 5);
-    root = insert(root, 3);
-    root = insert(root, 8);
-    root = insert(root, 1);
-    root = insert(root, 9);
-    inorder(root);
+    var vec.Vector<Node> arena = vec.dynamic<Node>(4);
+    var int root = -1;
+    root = insert(&arena, root, 5);
+    root = insert(&arena, root, 3);
+    root = insert(&arena, root, 8);
+    root = insert(&arena, root, 1);
+    root = insert(&arena, root, 9);
+    inorder(&arena, root);
     __write__("\\n");
     return 0;
 };
 """
     assert_output(src, "1 3 5 8 9")
+
+
+def test_devolver_la_direccion_de_un_local_es_SEM037():
+    """'return &n' con 'n' local: el llamador recibiria un puntero a algo que
+    ya no existe. Con un puntero de base (lo apuntado es de otro), no."""
+    from helpers import assert_has_code, assert_ok
+    assert_has_code("struct { int v; } N;\n"
+                    "fn f() -> N ptr { var N n = N{ v: 1 }; return &n; };", "SEM037")
+    assert_has_code("struct { int v; } N;\n"
+                    "fn f(N n) -> int ptr { return &n.v; };", "SEM037")
+    assert_ok("struct { int v; } N;\n"
+              "fn f(N ptr mutable p) -> int ptr { return &p.v; };")
 
 
 def test_metodos_dunder_se_ejecutan_y_mutan():
@@ -440,10 +468,9 @@ def test_emit_hir_con_ruta_explicita_crea_su_carpeta():
         proc = subprocess.run(
             [sys.executable, os.path.join(repo, "V0", "main.py"),
              path, "--emit-hir", destino],
-            capture_output=True, text=True, cwd=tmp, timeout=120,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", cwd=tmp, timeout=120,
         )
-        if "protobuf" in (proc.stdout + proc.stderr).lower() and proc.returncode != 0:
-            return                      # sin protobuf no hay HIR que emitir
         assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
         assert os.path.isfile(destino), (
             f"no se escribió el .phir en la ruta pedida:\n{proc.stdout}\n{proc.stderr}")

@@ -1,0 +1,22 @@
+enum Color { ROJO, VERDE, AZUL };
+enum Codigo { OK = 200, NO_ESTA = 404 };
+enum Forma { Circulo(float), Rect(float, float), Nada };
+
+fn area(Forma f) -> float {
+    match (f) {
+        case Forma.Circulo(r): { return r * r * 3.0; }
+        case Forma.Rect(a, b): { return a * b; }
+        case Forma.Nada: { return 0.0; }
+    }
+    return 0.0;
+}
+
+fn main() -> int {
+    var Color c = Color.VERDE;
+    const Codigo k = Codigo.NO_ESTA;
+    var Forma f = Forma.Rect(2.0, 3.0);
+    if (c == Color.AZUL) { return 1; };
+    var str n = Color.ROJO.name;
+    var int v = cast<int>(k);
+    return cast<int>(area(f)) + v;
+}

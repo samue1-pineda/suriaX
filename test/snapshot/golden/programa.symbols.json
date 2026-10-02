@@ -26,6 +26,7 @@
         "type_name": "Nodo",
         "type_params": [],
         "param_types": null,
+        "ocultos": null,
         "members": {
           "x": {
             "__node__": "Symbol",
@@ -52,8 +53,10 @@
             "type_name": null,
             "type_params": [],
             "param_types": null,
+            "ocultos": null,
             "members": null,
-            "scope_id": 0
+            "scope_id": 0,
+            "copias": []
           },
           "sig": {
             "__node__": "Symbol",
@@ -94,11 +97,14 @@
             "type_name": null,
             "type_params": [],
             "param_types": null,
+            "ocultos": null,
             "members": null,
-            "scope_id": 0
+            "scope_id": 0,
+            "copias": []
           }
         },
-        "scope_id": 0
+        "scope_id": 0,
+        "copias": []
       }
     },
     "values": {
@@ -143,6 +149,21 @@
         "param_types": [
           {
             "__node__": "Type",
+            "kind": "POINTER",
+            "name": null,
+            "inner": {
+              "__node__": "Type",
+              "kind": "NOMINAL",
+              "name": "Nodo",
+              "inner": null,
+              "mut": false,
+              "args": []
+            },
+            "mut": true,
+            "args": []
+          },
+          {
+            "__node__": "Type",
             "kind": "INT",
             "name": null,
             "inner": null,
@@ -150,8 +171,10 @@
             "args": []
           }
         ],
+        "ocultos": null,
         "members": null,
-        "scope_id": 0
+        "scope_id": 0,
+        "copias": []
       },
       "suma": {
         "__node__": "Symbol",
@@ -208,8 +231,10 @@
             "args": []
           }
         ],
+        "ocultos": null,
         "members": null,
-        "scope_id": 0
+        "scope_id": 0,
+        "copias": []
       },
       "main": {
         "__node__": "Symbol",
@@ -236,8 +261,10 @@
         "type_name": null,
         "type_params": [],
         "param_types": [],
+        "ocultos": null,
         "members": null,
-        "scope_id": 0
+        "scope_id": 0,
+        "copias": []
       }
     }
   },

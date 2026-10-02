@@ -1,0 +1,33 @@
+/- Excepciones 10: el mismo programa que el 9, pero el move SI ocurre.
+
+ 'verifica(0)' no lanza, 'r' se cede a 'toma', y despues 'otra' lanza. En
+ el catch 'r' ya no es nuestro. Al compilar no se puede saber (depende de
+ donde salto el throw), asi que lo detecta la EJECUCION: RT001, uso despues
+ de 'move', con la linea exacta. La 'r' la destruyo su nuevo dueno.
+
+ codigo: 70 RT001
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"libera {r.que}"); }
+
+fn toma(Recurso r) -> void { stdp.println(f"toma {r.que}"); }
+
+fn verifica(int x) -> void {
+    if (x > 0) { throw x; };
+}
+
+fn otra() -> void { throw 9; }
+
+fn main() -> int {
+    var Recurso r = Recurso{ que: "recurso" };
+    try {
+        verifica(0);
+        toma(move r);
+        otra();
+    } catch (int e) {
+        stdp.println(f"fallo {e} despues de ceder: {r.que}");
+    };
+    return 0;
+}

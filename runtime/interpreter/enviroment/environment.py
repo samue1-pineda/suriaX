@@ -18,11 +18,26 @@ from ..memory.pointer import Cell
 
 
 class Frame:
-    __slots__ = ("cells", "parent")
+    __slots__ = ("cells", "parent", "lanzados")
 
     def __init__(self, parent: Optional["Frame"] = None) -> None:
         self.cells: dict[str, Cell] = {}
         self.parent = parent
+        #: solo en el marco de un 'catch': nombre del binding -> la clave del
+        #: tipo con el que LLEGÓ el valor. Un 'catch (e)' no sabe al compilar
+        #: qué atrapó, así que 'throw e;' la recupera de aquí (ver
+        #: 'Evaluator._stmt_throw'). None en cualquier otro marco.
+        self.lanzados: Optional[dict] = None
+
+    def lanzado(self, name: str):
+        """La clave de tipo con la que llegó el binding ``name`` de un
+        ``catch``, o None si ``name`` no es un binding de ``catch``."""
+        frame: Optional[Frame] = self
+        while frame is not None:
+            if name in frame.cells:
+                return frame.lanzados.get(name) if frame.lanzados else None
+            frame = frame.parent
+        return None
 
     def define(self, name: str, cell: Cell) -> None:
         # el shadowing por frame es legal (la Semántica ya validó duplicados

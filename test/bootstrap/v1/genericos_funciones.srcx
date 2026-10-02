@@ -1,0 +1,30 @@
+struct { T valor; } Caja<T>;
+
+fn primero<T>(T a, T b) -> T { return a; }
+fn envuelve<T>(T x) -> Caja<T> { return Caja<T>{ valor: x }; }
+fn desenvuelve<T>(Caja<T> c) -> T { return c.valor; }
+fn par<K, V>(K k, V v) -> V { var K copia = k; return v; }
+fn vacia<T>(int n) -> int { return n; }
+fn ptr_de<T>(T ptr p) -> T { return p[0]; }
+fn llama<T>(T x) -> T { return primero<T>(x, x); }
+fn local<T>(T x) -> T { var T y = x; var Caja<T> c = envuelve<T>(y); return c.valor; }
+fn anida<T>(T x) -> Caja<Caja<T>> { return envuelve<Caja<T>>(envuelve<T>(x)); }
+
+fn main() -> int {
+    var int a = primero<int>(1, 2);
+    var int b = primero(3, 4);
+    var str s = primero("x", "y");
+    var Caja<int> c = envuelve<int>(5);
+    var Caja<str> d = envuelve("cinco");
+    var int e = desenvuelve<int>(c) + desenvuelve<int>(envuelve(6));
+    var float f = par<str, float>("k", 2.5);
+    var bool g = par(1, true);
+    var int h = vacia<str>(8);
+    var int i = llama(9);
+    var int ptr pi = &i;
+    var int j = ptr_de<int>(pi) + local<int>(1);
+    var Caja<Caja<int>> k = anida(3);
+    primero(1, 2);
+    envuelve<str>("t");
+    return a + b + e + h + i + j + k.valor.valor;
+}

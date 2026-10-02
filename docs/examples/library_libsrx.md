@@ -11,8 +11,14 @@ tambien se pueden crear archivos usar igual que una libreria pero hacer muchas l
 NOTE: "file.srcx" is used as a library, for better performance create a library using the extension .libsrx
 `
 
-> Estado: válido a nivel léxico. La resolución real de
-> `#import`/`#export` y la carga de `.libsrx` es trabajo del parser/semántica (ver [ROADMAP.md](../../ROADMAP.md), Fase 9).
+> **Estado:** la resolución de `#import`/`#export` y la carga de `.libsrx`
+> funcionan (linker de librerías, `V0/src/linker_p/`). Los ejemplos de esta
+> página son de **varios archivos**: la librería `IO` que se escribe aquí es
+> una de ejemplo (sus funciones no imprimen nada) y se usa poniéndola como
+> `io.libsrx` junto al `.srcx` que la importa. El directorio del fuente se
+> busca **antes** que la stdlib, así que esa `IO` tapa a la real. La `IO` de
+> verdad está en [`lib/io/`](../../lib/io/) (`IO.stdp`, `IO.stdpf`): ver
+> [helloworld.md](helloworld.md).
 
 ## Reglas de una `.libsrx`
 
@@ -24,7 +30,7 @@ NOTE: "file.srcx" is used as a library, for better performance create a library 
 
 ## Ejemplo: librería `IO`
 
-Archivo [`io.libsrx`](io.libsrx):
+Archivo `io.libsrx` (se crea junto al `.srcx` que lo importa):
 
 ```srcx
 // io.libsrx — librería de entrada/salida (ejemplo)
@@ -87,6 +93,8 @@ fn printf(str fmt) -> void {
 
 Desde un programa `.srcx`:
 
+Cada forma va en su propio programa (son tres maneras de importar lo mismo):
+
 ```srcx
 // forma con alias explícito
 const IO = #import IO;
@@ -125,6 +133,9 @@ lib/io/
 > Un `#import print` dentro de `main.libsrx` crearía una unidad suelta
 > `print` además de la del paquete (`IO.print`).
 
+Con ese paquete de ejemplo (`print` y `console` son hipotéticos: la stdlib
+real tiene `stdp` y `stdpf`):
+
 ```srcx
 #from IO.print #import __print__;   // liga SOLO ese símbolo (cero polución)
 
@@ -138,7 +149,8 @@ IO.console.log("anidado\n");
 **Los tipos que publica la librería se nombran cualificados**, igual que sus
 funciones — tanto en una anotación como en un literal de struct. El nombre
 cualificado se canonicaliza al que declaró la librería, así que unifica con
-lo que devuelven sus propias funciones:
+lo que devuelven sus propias funciones (con una librería hipotética
+`geo/point.libsrx`):
 
 ```srcx
 #import geo.point;

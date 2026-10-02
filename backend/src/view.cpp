@@ -187,7 +187,8 @@ std::string Printer::expr_text(const pb::Expr& e) {
             return "(" + e.unary().op() + " " + expr(e.unary().operand()) + ")";
         case pb::Expr::kAssignment:
             return expr(e.assignment().target()) + " = " +
-                   expr(e.assignment().value());
+                   expr(e.assignment().value()) +
+                   (e.assignment().drops_old() ? "  ⟨destruye el viejo⟩" : "");
         case pb::Expr::kCall: {
             std::string args;
             for (int i = 0; i < e.call().args_size(); ++i) {
@@ -291,7 +292,9 @@ void Printer::block(const pb::Block& b, int indent) {
             if (i != 0) path += ".";
             path += d.path(i);
         }
-        line("drop " + path + hook(d.hook()), 0, 0, indent);
+        line("drop " + path + (d.by_type() ? std::string("  ⟨por su tipo⟩")
+                                           : hook(d.hook())),
+             0, 0, indent);
     }
 }
 
@@ -375,6 +378,10 @@ void Printer::stmt(const pb::Stmt& s, int indent) {
                     arm.has_type() ? format_type(arm.type()) + " " : std::string();
                 line("catch (" + filter + arm.name() + ")", 0, 0, indent);
                 block(arm.block(), indent + 1);
+            }
+            if (s.try_stmt().has_finally_block()) {
+                line("finally", 0, 0, indent);
+                block(s.try_stmt().finally_block(), indent + 1);
             }
             break;
         }
@@ -667,7 +674,8 @@ std::vector<ExternBlock> collect_extern(const Image& image) {
             if (decl.node_case() != pb::Decl::kExternBlock) continue;
             blocks.push_back(ExternBlock{
                 unit.alias(), module.source_file(), decl.extern_block().target(),
-                decl.extern_block().raw(), decl.ln(), decl.col()});
+                decl.extern_block().raw(), decl.ln(), decl.col(),
+                decl.extern_block().requires_()});
         }
     };
     // librerias primero y el main al final: el mismo orden en el que el

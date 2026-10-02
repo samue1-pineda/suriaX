@@ -45,13 +45,16 @@ from .typed_ast import resolve_types
 
 
 class Parser:
-    __slots__ = ("tokens", "cursor", "ctx")
+    __slots__ = ("tokens", "cursor", "ctx", "fuente")
 
     def __init__(self, tokens: List[Token]):
         # el parser NADA MAS recibe los tokens ya generados por el lexer.
         self.tokens = tokens
         self.cursor = Cursor(tokens)
         self.ctx = ParserContext()
+        # el TEXTO del fuente, si quien lo corre lo tiene (solo para citarlo
+        # en la vista de desugaring; el parser no lo usa)
+        self.fuente: Optional[str] = None
 
     # ------------------------------------------------------------------ #
     # punto de entrada real del parser
@@ -160,6 +163,37 @@ class Parser:
         self._dump_hir(program, table, sem_errors, source_path=source_path)
         return "hir"
 
+    def _run_test_desugar(self, source_path: Optional[str]) -> str:
+        """Lo que se escribio y lo que el compilador entiende: el HIR legible
+        con cada construccion que salio de un azucar marcada, y la linea del
+        fuente encima (ver ``src/HIR/desugar.py``)."""
+        program = self.parse()
+        resolve_types(program)
+        from ..semantic import analyze  # import diferido, ver docstring del modulo
+        table, sem_errors = analyze(program, source_path=source_path)
+        if self.ctx.errors or sem_errors:
+            print("=== #test desugar — NO emitido: hay errores previos ===")
+            for err in (*self.ctx.errors, *sem_errors):
+                print(f"  {err.code}: {err.message}  ({err.loc})")
+            return "desugar"
+        fuente = self.fuente
+        if fuente is None and source_path:
+            try:
+                with open(source_path, encoding="utf-8") as fh:
+                    fuente = fh.read()
+            except OSError:
+                fuente = None
+        from src.HIR.desugar import render  # import diferido (protobuf)
+        texto, errores = render(program, table, source_file=source_path or "",
+                               source=fuente)
+        if texto is None:
+            print(f"=== #test desugar — NO emitido ({len(errores)} errores) ===")
+            for err in errores:
+                print(f"  {err.code}: {err.message}  ({err.loc})")
+            return "desugar"
+        print(texto)
+        return "desugar"
+
     def run_stage(self, name: str, *, source_path: Optional[str] = None) -> Optional[str]:
         """Ejecuta el volcado de UNA fase, sin que el fuente traiga '#test'.
 
@@ -187,6 +221,7 @@ class Parser:
         "ast": _run_test_ast,
         "sem": _run_test_sem,
         "hir": _run_test_hir,
+        "desugar": _run_test_desugar,
     }
 
     def _dump_tokens(self) -> None:

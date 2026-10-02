@@ -55,7 +55,7 @@ std::string owner_of(const pb::Module& module, std::uint32_t type_id) {
 // no una que el backend re-decida: dos consumidores que ligan nombres
 // distintos ejecutan programas distintos. Espejo de
 // 'interpreter._run_module_level' y de 'web/wir/lower.#collectBindings'.
-using Bindings = std::unordered_map<std::string, std::string>;
+}  // namespace
 
 Bindings bindings_of(const Unit& unit) {
     Bindings out;
@@ -81,6 +81,8 @@ Bindings bindings_of(const Unit& unit) {
     return out;
 }
 
+namespace {
+
 class Walker {
 public:
     Walker(const Image& image, Program& program, Function& fn,
@@ -98,6 +100,11 @@ private:
         for (const std::string& part : d.path()) {
             if (!path.empty()) path += ".";
             path += part;
+        }
+        // por su TIPO: no nombra un hook, lo decide la forma al ejecutar
+        if (d.by_type()) {
+            fn_.drops.push_back(Drop{std::move(path), "su tipo", true});
+            return;
         }
         const pb::Symbol* bound = image_.hook(d.hook());
         std::string nombre = d.hook().owner_type() + "." +
@@ -151,6 +158,7 @@ private:
                 for (const pb::CatchClause& c : s.try_stmt().catches()) {
                     block(c.block());
                 }
+                if (s.try_stmt().has_finally_block()) block(s.try_stmt().finally_block());
                 break;
             default:
                 // 'break'/'continue'/'import'/'type_decl' no llaman a nada y
@@ -200,6 +208,16 @@ private:
                 expr(e.member().obj());
                 break;
             case pb::Expr::kAddrOf:
+                if (e.addr_of().operand().node_case() == pb::Expr::kMember) {
+                    fn_.direcciones_de_campo.push_back(&e.addr_of().operand());
+                }
+                if (e.addr_of().operand().node_case() == pb::Expr::kIdentifier) {
+                    const std::string& n = e.addr_of().operand().identifier().name();
+                    if (std::find(fn_.direcciones.begin(), fn_.direcciones.end(), n) ==
+                        fn_.direcciones.end()) {
+                        fn_.direcciones.push_back(n);
+                    }
+                }
                 expr(e.addr_of().operand());
                 break;
             case pb::Expr::kMoveExpr:
@@ -233,6 +251,7 @@ private:
         for (const pb::Expr& arg : node.args()) expr(arg);
 
         Call site;
+        site.node = &e;
         site.line = e.ln();
         site.col = e.col();
         site.name = callee_name(node.callee());
@@ -251,7 +270,9 @@ private:
             // primitivo). Los implementa el backend, asi que no son un
             // agujero — pero se marcan, porque el backend tiene que saber
             // que le tocan a el.
-            if (is_primitive(node.hook().owner_type())) {
+            // 'hash(k)' con 'k' de un parametro de tipo: tampoco esta en la
+            // tabla; lo decide el MIR con el tipo concreto de la instancia
+            if (is_primitive(node.hook().owner_type()) || node.hook().kind() == pb::HASH) {
                 site.target = CallTarget::Native;
                 record(std::move(site));
                 return;
@@ -294,16 +315,28 @@ private:
         const std::size_t dot = site.name.rfind('.');
         int found = -1;
         if (dot != std::string::npos) {
-            const auto binding = bindings_.find(site.name.substr(0, dot));
-            if (binding != bindings_.end()) {
-                found = lookup(binding->second, site.name.substr(dot + 1));
-            }
+            const std::string unidad = unidad_de_ruta(site.name.substr(0, dot));
+            if (!unidad.empty()) found = lookup(unidad, site.name.substr(dot + 1));
         } else {
             // un nombre pelado se busca en ESTA unidad primero: una funcion
             // propia gana sobre lo que se importo, que es la regla del
             // frontend.
             found = lookup(fn_.unit, site.name);
             if (found < 0) found = lookup(std::string(), site.name);
+            // ...y si no, una funcion traida con '#from cosa #import doble
+            // [as d]': el enlace dice 'cosa.doble' (unidad y nombre). Sin
+            // esto la llamada quedaba sin resolver en la VM mientras el
+            // interprete la ejecutaba.
+            if (found < 0) {
+                const auto enlace = bindings_.find(site.name);
+                if (enlace != bindings_.end()) {
+                    const std::size_t corte = enlace->second.rfind('.');
+                    if (corte != std::string::npos) {
+                        found = lookup(enlace->second.substr(0, corte),
+                                       enlace->second.substr(corte + 1));
+                    }
+                }
+            }
         }
         if (found >= 0) {
             site.index = found;
@@ -327,11 +360,38 @@ private:
         record(std::move(site));
     }
 
+    // La unidad que nombra una ruta escrita en ESTA unidad: 'fe' (un alias)
+    // o 'sistema.archivos' (un paquete importado entero y su submodulo). Solo
+    // el primer tramo es un nombre local; lo que sigue es el camino dentro
+    // del paquete. "" si el primer tramo no esta ligado.
+    std::string unidad_de_ruta(const std::string& ruta) const {
+        const auto directo = bindings_.find(ruta);
+        if (directo != bindings_.end()) return directo->second;
+        const std::size_t punto = ruta.find('.');
+        if (punto == std::string::npos) return std::string();
+        const auto primero = bindings_.find(ruta.substr(0, punto));
+        if (primero == bindings_.end()) return std::string();
+        return primero->second + ruta.substr(punto);
+    }
+
     bool is_variant(const std::string& name) const {
         const std::size_t dot = name.rfind('.');
         if (dot == std::string::npos) return false;
         const std::string owner = name.substr(0, dot);
         const std::string item = name.substr(dot + 1);
+        // 'fig.Figura.Circulo': el dueno va por el ALIAS de otra unidad, que
+        // solo esta unidad sabe traducir ('fig' -> 'geo.figura').
+        const std::size_t punto = owner.find('.');
+        if (punto != std::string::npos) {
+            const auto binding = bindings_.find(owner.substr(0, punto));
+            if (binding == bindings_.end()) return false;
+            for (const std::unique_ptr<Unit>& unit : image_.units()) {
+                if (unit->alias() == binding->second) {
+                    return unit->variant_arity(owner.substr(punto + 1), item) >= 0;
+                }
+            }
+            return false;
+        }
         for (const std::unique_ptr<Unit>& unit : image_.units()) {
             if (unit->variant_arity(owner, item) >= 0) return true;
         }
@@ -398,6 +458,9 @@ void collect_slots_block(const pb::Block& b, std::vector<Slot>& out) {
                 for (const pb::CatchClause& c : s.try_stmt().catches()) {
                     collect_slots_block(c.block(), out);
                 }
+                if (s.try_stmt().has_finally_block()) {
+                    collect_slots_block(s.try_stmt().finally_block(), out);
+                }
                 break;
             case pb::Stmt::kMatchStmt:
                 for (const pb::CaseArm& arm : s.match_stmt().cases()) {
@@ -436,12 +499,16 @@ void declare(const Unit& unit, bool is_main, Program& program) {
         program.index.emplace(Program::key(entry.unit, entry.name),
                               program.functions.size());
         // un 'dunder' de nombre llano es un METODO: su dueno es el nominal de
-        // su receptor, igual que lo decide el frontend.
+        // su receptor, igual que lo decide el frontend. Se indexa por el
+        // nombre ESCRITO ('__doble__', 'push'), que es como lo nombra la
+        // llamada 'p.__doble__()' y como lo indexa el interprete: el 'dunder'
+        // del HIR es el nombre sin guiones ('doble') y con el, un 'dunder fn'
+        // quedaba sin resolver.
         if (!fn.dunder().empty() && fn.params_size() > 0) {
             const std::string owner =
                 owner_of(unit.module(), fn.params(0).type_id());
             if (!owner.empty()) {
-                program.methods.emplace(owner + "." + fn.dunder(),
+                program.methods.emplace(owner + "." + fn.name(),
                                         program.functions.size());
             }
         }
@@ -498,7 +565,22 @@ Program resolve(const Image& image) {
                       found == bindings.end() ? vacio : found->second);
         walker.block(fn.decl->body());
     }
+
+    // 4) el indice de sitios, ya con los vectores quietos.
+    for (std::size_t f = 0; f < program.functions.size(); ++f) {
+        const std::vector<Call>& calls = program.functions[f].calls;
+        for (std::size_t c = 0; c < calls.size(); ++c) {
+            if (calls[c].node != nullptr) program.sites.emplace(calls[c].node,
+                                                                std::make_pair(f, c));
+        }
+    }
     return program;
+}
+
+const Call* Program::site_of(const pb::Expr& node) const {
+    const auto it = sites.find(&node);
+    if (it == sites.end()) return nullptr;
+    return &functions[it->second.first].calls[it->second.second];
 }
 
 void write_resolved(const Program& program, std::ostream& out) {

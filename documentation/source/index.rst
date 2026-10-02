@@ -65,6 +65,7 @@ El pipeline, de principio a fin:
    repo/DESIGN_PRINCIPLES
    memory_decision
    inference_decision
+   vm_decision
    repo/ROADMAP
    repo/CONTRIBUTING
 

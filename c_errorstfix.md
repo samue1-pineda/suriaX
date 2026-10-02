@@ -1,196 +1,206 @@
-# Informe de errores y riesgos visibles en el repositorio
+# Errores conocidos de suriaX
 
-**INFORME DE LA VERSION PUBLICA 0.2.0**
+**VERSIÓN 0.3.1**
 
-Este documento resume los problemas y riesgos que se observan actualmente en
-el proyecto: lo que hay que corregir en la proxima version.
+La biblia de los errores de la **versión publicada** (la de
+[`version.py`](version.py)): todo lo que se sabe que falla. Si algo está
+roto y no aparece aquí, lo que está incompleto es este documento. Solo lista
+lo que **sigue abierto**; cuando algo se corrige, sale de aquí y queda en
+[CHANGELOG.md](CHANGELOG.md).
 
-**importante**: cada version lanzada al publico puede venir con errores; los
-mas importantes salen en este resumen. Lo que ya se corrigio se queda escrito
-al final, para que quien venia de la 0.1.4 sepa que ya no tiene que esquivar.
+Cada versión lanzada al público puede traer errores; aquí van TODOS los
+conocidos, no solo los grandes.
 
-## Resumen general
+## Estado general
 
-El frontend (lexer → parser → AST tipado → Semantica → HIR) y el interprete
-tree-walk estan completos y se ejercitan de punta a punta. El backend nativo
-(MIR → VM/JIT) **no existe todavia**: es lo unico que separa a suriaX de
-poder compilar a un binario. El target web (`.phir` → WIR → JS/WASM) ejecuta
-un subconjunto declarado del lenguaje.
+- **Frontend** (lexer → parser → AST tipado → Semántica) y **HIR**: completos.
+  El compilador entero —incluida la ejecución— corre **solo con la
+  biblioteca estándar de Python**.
+- **Intérprete tree-walk**: completo. Es el target `interp` y el oráculo de
+  las pruebas diferenciales.
+- **Backend C++** (`backend/`): lowering a MIR, VM de registros y
+  verificación de propiedad. Da la misma salida que el intérprete en todo el
+  corpus del repositorio, incluido el bootstrap, y es unas 150 veces más
+  rápida. Falta el JIT y cualquier binario nativo, y hay construcciones que
+  todavía no baja (ver 1).
+- **Target web** (`.phir` → WIR → JS/WASM): ejecuta un subconjunto declarado.
+- **Bootstrap** (`src/`, el compilador escrito en suriaX): se compila a sí
+  mismo con resultados idénticos a los de la V0 (el punto fijo). Todavía no
+  da diagnósticos (supone un programa válido), no lee el
+  `.suriaX_config.yaml` (busca las librerías en `./lib` y la stdlib) y no
+  crea la carpeta de salida: escribir en `salida/x.phir` sin que exista es
+  `EXC003` (la V0 sí la crea).
 
-No es una version estable. Es una pre-alpha que ya hace lo que dice hacer.
-
----
-
-## Problemas abiertos
-
-### 1. Backend nativo: MIR, VM y JIT
-
-Sigue siendo el hueco grande, aunque ya no entero: el **lector de HIR en C++
-existe** (`backend/`, con su diferencial contra el lector de Python). Lo que
-falta es el lowering a MIR y la VM.
-
-Decidido en esta version: **el target nativo es una VM de bytecode con JIT,
-no LLVM**. El MIR ya es un IR de registros con CFG; meter LLVM en medio
-anadia una dependencia enorme y un segundo modelo de memoria que verificar.
-
-#### pospuesto para V.0.4.0
-
-### 2. La libreria de vectores no es generica todavia
-
-Los genericos de TIPO existen y se comprueban (`struct { ... } Vector<T>;`,
-con sustitucion real al instanciar), pero `lib/array/vector.libsrx` sigue
-siendo monomorfico sobre `int`. Quien quiera un vector de otra cosa lo copia.
-
-**No es trabajo de libreria: esta bloqueado.** Migrarla exige genericos de
-FUNCION (`fn make<T>() -> Vector<T>`, `fn push<T>(Vector<T> ptr v, T x)`),
-que no existen. El tipo puede ser generico; su fabrica y sus metodos, no.
-
-#### solucion propuesta
-
-Primero genericos de funcion, y despues la migracion, que entonces si es
-trabajo de libreria. El diseño de los genericos de funcion NO esta en duda:
-la instanciacion es EXPLICITA en el sitio de llamada (`make<int>()`), porque
-el lenguaje no tiene inferencia por decision registrada y `ROADMAP.md` ya
-fija `type_args` como "regla compartida para futuros genericos de libreria".
-Lo que falta es el trabajo: parser, semantica, un campo nuevo en `hir.proto`,
-los TRES lectores y el interprete.
-
-### 3. Literales de arreglo: son un TIPO nuevo, no sintaxis
-
-`[1, 2, 3]` y `int xs[3]` no existen, y se aplazan a proposito junto con los
-genericos de funcion. Lo que se midio al evaluarlos:
-
-- `TypeKind` tiene 12 variantes y ninguna es un arreglo. Un literal necesita
-  un tipo, asi que hace falta `TypeKind.ARRAY` **con tamaño** (`int[3]` y
-  `int[4]` son tipos distintos, igual que `Vector<int>` y `Vector<str>`).
-- Eso cruza la frontera: campo nuevo en `hir.proto` y los **tres** lectores
-  (interprete, web, C++) mas el emisor.
-- El indexado de hoy (`Index`) solo despacha `__index__` sobre nominales;
-  un arreglo nativo necesita su propio camino.
-- **Choca con el modelo de memoria**: `Drop.path` es una lista de NOMBRES de
-  campo y no admite indices, asi que un arreglo de un tipo con `__free__` no
-  se puede destruir. Habria que rechazarlo, igual que `SEM029` rechaza un
-  payload con destructor.
-
-Y empuja contra el principio central del proyecto —*antes de añadir sintaxis,
-la pregunta es si puede ser una libreria mas un hook*—: la respuesta natural
-es `Vector<T>`, que vuelve a depender de genericos de funcion. Los dos huecos
-estan bloqueados por la MISMA pieza que falta.
-
-### 4. Sin inferencia de tipos, por decision
-
-`var int x = 1;` no se puede escribir `var x = 1;`. **Es deliberado**: menos
-complejidad, mejores diagnosticos. El registro de la decision esta en
-[la documentacion](documentation/source/inference_decision.rst).
-
-Se anota aqui porque a quien viene de otro lenguaje le parece un error, y no
-lo es.
-
-### 5. El paquete nativo necesita pybind11
-
-El modelo de memoria del interprete tiene un lado C++ (`runtime/logic_mem/`)
-que se construye con pybind11. El frontend entero corre sin el —y sin
-protobuf, y sin pyyaml—, pero distribuir un binario nativo no es trivial.
-
-#### recomendacion
-
-Para un uso sin dependencias nativas, no usar punteros (`ptr`, `&`). El
-compilador diagnostica lo que le falta en vez de reventar: `--check` lo dice
-antes de empezar.
+Es una pre-alpha: hace lo que dice hacer, con los límites de abajo.
 
 ---
 
-## Corregido desde la 0.2.0
+## 1. Backend nativo (C++)
 
-- **Los literales de cadena adyacentes se concatenan.** `"parte uno "
-  "parte dos"` es un solo literal, como en C, C++ y Python, y los funde el
-  lexer — antes era `PAR003` y habia que escribir `+`, pagando en ejecucion
-  algo que se sabe al leer el archivo. La regla del caso dudoso: cada literal
-  conserva la SUYA, asi que `f"a{x}" "{y}"` interpola `{x}` y no `{y}`.
-- **El lector de HIR en C++ existe** (`backend/`). No ejecuta nada todavia
-  —el MIR sigue pendiente— pero congela el contrato de la frontera: sus
-  vistas son byte-identicas a las de Python y hay un diferencial que las
-  compara sobre un programa que toca cada forma del esquema.
-- **`--hir-pretty` ya no revienta con `try`/`catch`.** La vista seguia
-  leyendo `catch_name`/`catch_block`, tags `reserved` desde que `TryStmt`
-  paso a N ramas filtradas por tipo.
-- **La notacion de un tipo no pierde informacion.** `error int` se escribia
-  `error` y `Vector<int>` se escribia `Vector`; ademas la clave de tipos del
-  indice de conversiones ignoraba los argumentos del generico, asi que
-  `Vector<int>` y `Vector<str>` compartian entrada (en el interprete y en el
-  target web, que ni siquiera decodificaba el campo).
-- **La destruccion que inserta el compilador se ve.** Los `drop` de ambito y
-  de campo, el `⟨transfiere⟩` de un retorno que cede la propiedad y el
-  `⟨temporal …⟩` del valor que nadie recibe viajaban en el HIR y ninguna
-  vista los mostraba.
-- **`match` avisa cuando no es exhaustivo** (`SEM030`). Un `match` que no
-  encaja con nada no hacia nada, en silencio, y añadir una variante a un
-  `enum` dejaba incompletos todos los `match` del proyecto sin que nada lo
-  dijera. Es un AVISO y no un rechazo: un `match` parcial es un programa
-  valido con significado definido, y el lenguaje no tiene comodin con el que
-  decir "el resto me da igual". Solo avisa donde SABE — una rama que el
-  analisis no puede leer como variante concreta lo calla entero.
-- **Un aviso ya no detiene la compilacion.** La escala de `Severity`
-  prometia desde el principio que un WARNING deja continuar, y el pipeline
-  no lo cumplia: cualquier diagnostico acumulado ponia el codigo de salida en
-  error y el HIR no se emitia. Declarar algo como aviso no servia de nada, y
-  por eso no habia ni uno en todo el compilador.
-- **Un `struct` es un VALOR.** `var Caja b = a;` daba dos nombres al MISMO
-  valor: `b.v = 99` cambiaba tambien `a`, y pasar un struct por valor a una
-  funcion dejaba que el llamado mutara al llamador. Con eso la regla de
-  punteros no significaba nada — escribir por un `ptr` de solo lectura es
-  `SEM015`, pero bastaba pasar el struct por valor. Ahora ligar copia; un
-  parametro declarado `ptr` NO se copia, que es lo que permite a un hook o a
-  un metodo mutar su receptor.
-- **`move` tambien es una EXPRESION** (`var Buffer b = move origen;`). La
-  documentacion del modelo de memoria la usaba desde el principio y el parser
-  no la tenia: sin ella no habia forma de ligar a otro nombre un valor que
-  posee recursos, y ligarlo a secas dejaba DOS duenos y su destructor corria
-  dos veces. Ligar sin `move` algo con destructor es ahora `SEM032`.
-- **El `int` envuelve a 64 bits.** Python no tiene ese limite, asi que el
-  interprete daba `9223372036854775808` donde el target web daba el minimo
-  negativo: dos consumidores del MISMO programa con numeros distintos. Y
-  guardar ese valor reventaba el backend nativo de memoria con un error de
-  pybind11, porque ahi una celda es un `int64_t` de verdad.
-- **Dividir por cero es `RT016`**, no un traceback de Python sin posicion.
-- **Caerse por el final de una funcion es `RT017`.** Antes devolvia `null` en
-  silencio: un valor que no es un `int` en un lenguaje sin coerciones ni
-  inferencia, y el fallo aparecia a tres funciones de distancia.
-- **Indexar un primitivo es `SEM031`.** `texto[i]` compilaba y moria en
-  ejecucion con `RT014`; ahora lo dice el sistema de tipos al leer el
-  programa. **El indexado de cadenas sigue sin existir**: es la limitacion
-  mas visible al escribir texto sin librerias.
-- **La sustitucion de genericos llega a la DESTRUCCION.** El campo de un
-  generico se declara como `T`, y `T` no resuelve a nada: sin sustituir,
-  `Caja<R>` no poseia nada aunque `R` tuviera `__free__`, asi que su
-  destructor **no se ejecutaba nunca**. Lo mismo tapaba los ciclos de tamano
-  infinito que pasan por un generico (`struct { Caja<S> c; } S;` se
-  aceptaba). Cada pregunta que baja a los campos sustituye primero.
-- **La guarda contra recursion del analisis de tamano estaba mal puesta**:
-  comparaba el nombre de un TIPO contra la lista de nombres de CAMPO
-  recorridos, asi que un ciclo ajeno al tipo consultado (`A` -> `B` -> `C` ->
-  `B`) no la disparaba y el recorrido no terminaba.
-- **`internal` SI se comprueba.** El informe de la 0.2.0 lo daba por no
-  aplicado; en realidad se filtra en el linker de librerias y el consumidor
-  recibe `SEM011`. Hay tres pruebas que lo cubren.
+- **Sin JIT ni binario**: la VM interpreta el MIR; no genera `.exe` ni `.o`.
+  Decidido: el target nativo será una VM con JIT, no LLVM (pospuesto para
+  la 0.4.0).
+- **Un programa que aborta no libera lo que tenía vivo**: una excepción que
+  nadie atrapa, un `RT` o `salir()` terminan el proceso sin cerrar sus
+  ámbitos, como en C++.
+- **La verificación de préstamos es local a un bloque**: prestar en una rama
+  y transferir en otra no se cruza.
+- **`#extern cpp` en la VM** tiene tres límites que el intérprete no tiene
+  igual:
+  - hasta 6 parámetros por función;
+  - la llamada se arma con una firma de enteros de 64 bits y doubles, que es
+    correcta en las ABI de 64 bits (x86-64 de Linux y de Windows, AArch64)
+    y no en una de 32;
+  - `suriax-hir` no lee el `.suriaX_config.yaml`: el compilador y las
+    banderas salen de `$CXX` y `SURIAX_CPP_FLAGS` (y de los `requires(...)`
+    de los bloques).
 
-## Corregido desde la 0.1.4
+  En los dos motores, una excepción de C++ que cruza la frontera termina el
+  proceso: el contrato es `extern "C"`.
+- **El recolector de cadenas de la VM es conservador**: un registro que
+  todavía guarda el índice de una cadena vieja la mantiene viva un rato más.
+  `--memoria-max` recoge antes de rendirse, pero puede cortar con algo más de
+  memoria de la que el programa usa de verdad.
+- **La posición de una excepción de `sistema`** (`e.linea`) es la de la
+  llamada DENTRO de la librería, no la del programa que llamó a
+  `sis.leer(...)`. Es el mismo problema que los errores `RT` sin archivo
+  (sección 3).
 
-- **Las librerias de `lib/` compilan todas.** El error de sintaxis en
-  `lib/math/basic.libsrx` ("se esperaba `;` y se encontro `fn`") ya no
-  ocurre; hay una prueba que compila cada `.libsrx` del repositorio.
-- **El despacho cross-modulo funciona.** Un dunder sobre un tipo de otra
-  libreria se encuentra y se llama (ver [lib/HOOKS.md](lib/HOOKS.md)).
-- **El modelo por regiones se retiro.** No podia verificarse; en su lugar hay
-  **ownership** con drop automatico al cerrar el ambito. Se liberaron 8
-  palabras reservadas. El registro esta en
-  [la decision de memoria](documentation/source/memory_decision.rst).
-- **La version tiene una sola fuente.** `version.py` en la raiz: lo leen
-  CMake, la documentacion publicada, `suriaX --version`, el contrato del LSP
-  y el release. Antes el README decia 0.1.4, `README_ES.md` 0.1.5 y la
-  documentacion publicaba 0.2.0, los tres para el mismo commit.
-- **La documentacion desalineada.** Los documentos que el sitio publica y
-  viven junto al codigo ya disparan su reconstruccion; antes se editaban y la
-  pagina seguia mostrando lo viejo.
+## 2. Propiedad y memoria
 
-*happy coding : )*
+- **Un préstamo de `at` que sobrevive a su elemento** (`var R ptr p =
+  v.at(0); v.set(0, ...); p.id`): la VM da `RT003` (el elemento murió) y el
+  intérprete lee el elemento NUEVO de la misma celda. Es un programa
+  incorrecto en los dos, pero solo uno lo dice.
+- **Leer una celda que se sacó con `mem.take`**: el intérprete da `RT001`
+  (movida) y la VM lee `0`, porque no lleva el estado de cada celda de un
+  bloque (tampoco el de una celda sin escribir).
+- **`&b[i]` de un escalar** (`int`, `float`...) lo acepta el frontend y es
+  `RT011` en los dos motores: necesitaría un puntero al interior del bloque
+  (bloque + desplazamiento). El de un objeto funciona (es lo que usa
+  `Vector.at`). El frontend debería rechazar el de un escalar al compilar.
+- **`Vector<void>` compila y no significa nada.**
+
+## 2b. Target web
+
+- **`byte` y el formato de un f-string (`!r`, `:08b`) no bajan al target
+  web**: se rechazan con un `WEB` explícito (`CODEGEN_TYPE`,
+  `CODEGEN_STRING`), no se ignoran. Los cambios del web de este lote no se
+  compilaron en la máquina donde se hicieron (no había `node`): los verifica
+  la CI.
+
+## 3. Diagnósticos que confunden
+
+- **Los errores de ejecución no dicen en qué ARCHIVO ocurrieron**: un `throw`
+  desde una librería sale como `RT020: throw ... (102:30)`, y esa línea es de
+  la librería.
+- **`frontend OK: ...` se imprime aunque haya errores**, justo encima de
+  ellos.
+- **Un programa que se llama como una librería que importa se importa a sí
+  mismo**: `excepciones.srcx` con `#import excepciones` encuentra primero su
+  propio archivo (la carpeta del fuente es la primera ruta de búsqueda) y el
+  error dice `SEM010: 'excepciones.srcx' no termina en '#export ...'`, que
+  no nombra la causa.
+- **Una f-string partida en dos líneas ubica sus interpolaciones en una
+  posición mezclada**: en `f"a{x}"` seguido en la línea siguiente de
+  `f"b{y}"`, la `y` queda en la línea de la PRIMERA cadena con la columna de
+  la segunda. Un error dentro de esa interpolación apunta a un sitio que no
+  es. (El parser del bootstrap reproduce lo mismo, a propósito, para poder
+  compararse.)
+- **Dentro de una interpolación, todas las expresiones llevan la MISMA
+  posición.** En `f"{doble(mas_uno(3))}"` las dos llamadas salen en la
+  columna de la interpolación. Un error en cualquiera de ellas apunta al
+  mismo sitio.
+
+  El backend C++ confundía las dos llamadas por eso, y ahora identifica cada
+  sitio por su nodo. La causa sigue en el frontend.
+- **Errores en cascada tras la recuperación del parser**: `var int xs[3];` da
+  `PAR023` (correcto) y además un `PAR012` falso sobre el `};` de cierre.
+- **`error` es palabra reservada y el diagnóstico no lo dice**: un campo
+  `int error;` da `PAR003: se esperaba un nombre ..., se encontro ERRORTYPE`
+  y arrastra un `SEM001`.
+- **`--check` marca `protobuf` y `pybind11` como `[FALTA]`**, pero son
+  opcionales. `V0/driver/artifacts.py` culpa a protobuf de cualquier fallo al
+  importar el emisor.
+- **Dos sitios descartan la causa de un fallo**:
+  - `semantic/hooks.py` (`except Exception: real = None`: el diagnóstico sale
+    con `<?>`);
+  - `semantic/extensions.py` (`except Exception: return None`).
+
+## 4. Windows
+
+- **Imprimir caracteres fuera de cp1252 con la salida redirigida es un
+  ICE000** (el UB-1, abajo). La suite no lo ve porque corre en modo UTF-8.
+- **El `linker` autodetectado puede ser el `link.EXE` de Git** (coreutils,
+  no un enlazador); `--init-config` lo escribe en el yaml. El mismo problema
+  aparece al construir el backend con un `clang++` suelto: la guía
+  [`CMake/README.md`](CMake/README.md) explica cómo usar MSVC.
+- La suite solo corre en Ubuntu en la CI (el build sí corre en los tres
+  sistemas): lo específico de Windows no lo ve un workflow. En esta máquina
+  la suite pasa entera sin variables de entorno.
+
+## 5. Repositorio
+
+- **Faltan dos archivos que se citan**: el `Procfile` (el playground dice
+  desplegarse con él) y `docs/propuesta_vm_bytecode.md` (la arquitectura del
+  intérprete lo llama "regla no negociable").
+- **Una carpeta que no describe el código**: `V0/src/backend/` (planes de un
+  backend LLVM que no existe).
+- **Los ejemplos de `docs/examples/*.md` no los verifica ninguna prueba.**
+- **`test_escalado_lineal_del_frontend` se omite sola a menudo**: si su
+  medición dura menos de 10 ms la declara no fiable, y en una máquina rápida
+  pasa la mitad de las veces. Su umbral es frágil.
+- **`.suriaX_config.yaml` está en `.gitignore`** y una prueba habla de "la
+  configuración que se distribuye": hoy se omite diciéndolo.
+
+## 6. Límites del lenguaje que parecen errores
+
+No son fallos: son cosas que el lenguaje todavía no tiene. Se listan porque
+quien las encuentra suele pensar que algo se rompió.
+
+- `.name` de un enum solo vale sobre un item escrito (`TType.PLUS.name`), no
+  sobre una variable.
+- No hay funciones como valores (ni punteros a función ni callbacks), ni
+  subcadenas, ni tablas Unicode (ver `src/frontend/readme.md`).
+- No hay bucle `for`: todo bucle es un `while`.
+- **El parámetro de un genérico se deduce solo si el argumento lo nombra
+  ENTERO**: `primero(1)` deduce `T=int` en `fn primero<T>(T a)`, pero con
+  `fn f<T>(Caja<T> c)` o `T ptr` hay que escribirlo (`f<int>(c)`). El error
+  dice que se esperaba `Caja<T>`, que es exactamente lo que falta escribir.
+- **Un bloque de `mem` guardado en un campo es del struct que lo guarda**
+  (se copia y se libera con él, como el buffer de un `std::vector`). Un
+  struct no puede PRESTAR un bloque ajeno en un campo: para prestar está un
+  parámetro `ptr`.
+- **Copiar un struct copia todo lo suyo**, incluido el almacenamiento de sus
+  vectores. `var vec.Vector<int> b = a;` cuesta O(n); para no copiar se usa
+  `move` o un `ptr`.
+- No hay literales de arreglo (`[1, 2, 3]`) ni arreglos nativos
+  (`int xs[3]`); `int vec.Vector v[5];` sí existe.
+- Un `-/` dentro de un comentario de bloque lo cierra (no se anidan).
+- No hay tipos recursivos (un árbol se guarda en una arena, enlazado por
+  índices), ni una
+  forma de sacar un valor de un campo dejando otro en su lugar (lo que en
+  Rust es `mem::replace`).
+- Agotar la pila (`RT019`) no se puede atrapar: un programa recursivo no
+  puede recuperarse de un anidamiento demasiado profundo en su entrada.
+- **Un `int?` no se puede desenvolver**: se guarda, se compara (`== 7`,
+  `== null`) y se escribe, pero no hay forma de sacar el `int` (ni `cast`,
+  ni `match`, ni estrechamiento tras `!= null`). Ordenarlo (`a < 7`) es
+  `AST006`.
+- **Los operadores de bits no los tiene el target web** (`WEB100`), ni
+  `hash(x)`.
+
+## Comportamiento indefinido conocido (UB → ICE000)
+
+Un **ICE000** (error interno del compilador, exit 6) es un comportamiento
+indefinido: el compilador no sabía qué hacer con ese programa. Cada caso
+conocido se anota aquí con el programa que lo provoca y lo que DEBERÍA
+pasar. Cuando recibe su propio error, o deja de fallar, sale de la tabla. La
+meta es que se vacíe.
+
+| UB | Programa que lo provoca | Hoy | Debería |
+|---|---|---|---|
+| UB-1 | En Windows, con la salida redirigida (`> archivo`): `stdp.println("listo ✓");` (cualquier carácter fuera de cp1252) | ICE000: `UnicodeEncodeError` en el intrínseco `__write__` (`runtime/interpreter/intrinsics.py`) | Escribir el texto (UTF-8), sin error |
+
+Si encuentras un ICE000 que no está aquí, es un UB nuevo: anótalo con el
+programa mínimo que lo reproduce.

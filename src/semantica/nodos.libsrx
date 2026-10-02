@@ -1,0 +1,100 @@
+/- semantica.nodos — leer el árbol del parser (`frontend.arbol`) desde la
+   Semántica.
+
+ El parser guarda los escalares de cada nodo YA ESCRITOS, en el formato del
+ volcado canónico (` name="main" value=2`): así su prueba diferencial compara
+ texto contra la V0. La Semántica necesita esos valores sueltos, y los lee
+ de ese mismo texto. Leer el volcado es más frágil que un campo propio, pero
+ deja el parser —verificado nodo a nodo contra la V0— sin tocar.
+-/
+
+#import frontend.arbol as ar
+#import array.vector as vec
+#import text
+
+/- El valor del escalar `clave` de `n`, sin comillas ni escapes; "" si no
+   lo tiene. Un texto se escribe entre comillas con los escapes de
+   `ar.cita`; lo demás (números, `True`) va tal cual hasta el espacio. -/
+public fn atributo(vec.Vector<ar.Nodo> ptr a, int n, str clave) -> str {
+    var str attrs = a.get(n).attrs;
+    var int i = text.find(attrs, " " + clave + "=");
+    if (i < 0) { return ""; };
+    i = i + len(clave) + 2;
+    if (i < len(attrs) and attrs[i] == '"') {
+        return sin_comillas(attrs, i + 1);
+    };
+    var int fin = text.find_from(attrs, " ", i);
+    if (fin < 0) { fin = len(attrs); };
+    return text.slice(attrs, i, fin);
+}
+
+/- Lee un texto citado desde `i` (justo después de la comilla que abre)
+   hasta la comilla que cierra, deshaciendo los escapes de `ar.cita`. -/
+fn sin_comillas(str s, int i) -> str {
+    var vec.Vector<str> partes = vec.dynamic<str>(8);
+    var int desde = i;
+    while (i < len(s) and s[i] != '"') {
+        if (s[i] == '\\' and i + 1 < len(s)) {
+            partes.push(text.slice(s, desde, i));
+            var char e = s[i + 1];
+            if (e == 'n') { partes.push("\n"); }
+            else if (e == 't') { partes.push("\t"); }
+            else if (e == 'r') { partes.push("\r"); }
+            else if (e == '0') { partes.push("\0"); }
+            else { partes.push(cast<str>(e)); };
+            i = i + 2;
+            desde = i;
+        } else {
+            i = i + 1;
+        };
+    };
+    partes.push(text.slice(s, desde, i));
+    return text.join(&partes, "");
+}
+
+/- El texto de un trozo de f-string (un nodo sin clase): el parser lo
+   guarda ya citado en `nombre`. -/
+public fn texto_de_parte(vec.Vector<ar.Nodo> ptr a, int n) -> str {
+    return sin_comillas(a.get(n).nombre, 1);
+}
+
+/- Los elementos de un escalar LISTA (`field_names=[x,y]`). -/
+public fn lista(vec.Vector<ar.Nodo> ptr a, int n, str clave) -> vec.Vector<str> {
+    var vec.Vector<str> r = vec.dynamic<str>(4);
+    var str crudo = atributo(a, n, clave);
+    if (len(crudo) < 2) { return r; };
+    var str dentro = text.slice(crudo, 1, len(crudo) - 1);
+    if (dentro == "") { return r; };
+    var int desde = 0;
+    var int i = 0;
+    while (i <= len(dentro)) {
+        if (i == len(dentro) or dentro[i] == ',') {
+            r.push(text.slice(dentro, desde, i));
+            desde = i + 1;
+        };
+        i = i + 1;
+    };
+    return r;
+}
+
+/- El primer hijo de `n` colgado del campo `campo`, o -1. -/
+public fn hijo(vec.Vector<ar.Nodo> ptr a, int n, str campo) -> int {
+    return ar.hijo_llamado(a, n, campo);
+}
+
+/- Todos los hijos de `n` colgados del campo `campo`, en orden. -/
+public fn hijos(vec.Vector<ar.Nodo> ptr a, int n, str campo) -> vec.Vector<int> {
+    var vec.Vector<int> r = vec.dynamic<int>(4);
+    var int h = a.get(n).primero;
+    while (h >= 0) {
+        if (a.get(h).campo == campo) { r.push(h); };
+        h = a.get(h).siguiente;
+    };
+    return r;
+}
+
+public fn clase(vec.Vector<ar.Nodo> ptr a, int n) -> str { return a.get(n).clase; }
+public fn linea(vec.Vector<ar.Nodo> ptr a, int n) -> int { return a.get(n).linea; }
+public fn col(vec.Vector<ar.Nodo> ptr a, int n) -> int { return a.get(n).col; }
+
+#export as nodos

@@ -137,6 +137,8 @@ pertenecían al modelo por regiones, retirado con él (ver
     ``throw``       Lanza un error.
     ``try``         Bloque que captura errores.
     ``catch``       Rama que recibe el error de un ``try``.
+    ``finally``     Bloque que corre al salir del ``try`` por cualquier camino.
+    ``with``        Un recurso, un guardián o un receptor con ámbito.
     ``error``       Tipo unión valor-o-error (``error int``).
     ``public``      Visible para quien importe la librería (por defecto).
     ``private``     Visible dentro del mismo paquete.
@@ -461,6 +463,8 @@ retorno de una :ref:`función <function-def>`. los literales correspondientes (n
     +----------------------------+------------+-------------------------------------------------------------+
     | :ref:`STRING <string-def>` | ``str``    | Secuencia de code points Unicode.                           |
     +----------------------------+------------+-------------------------------------------------------------+
+    | :ref:`BYTE <byte-def>`     | ``byte``   | Entero sin signo de 8 bits (0..255): un octeto.             |
+    +----------------------------+------------+-------------------------------------------------------------+
     | :ref:`BOOL <bool-def>`     | ``bool``   | Valor lógico (:ref:`true <true-def>` /                      |
     |                            |            | :ref:`false <false-def>`).                                  |
     +----------------------------+------------+-------------------------------------------------------------+
@@ -478,14 +482,20 @@ retorno de una :ref:`función <function-def>`. los literales correspondientes (n
 INT (``int``)
 ~~~~~~~~~~~~~~
 
-tipo entero. un literal entero mal formado o fuera de rango produce
-:ref:`LEX005 <LEX005-def>` / :ref:`LEX006 <LEX006-def>`.
+tipo entero de 64 bits con signo. un literal se escribe en decimal o, con
+prefijo, en hexadecimal (``0xFF``), binario (``0b1010``) u octal (``0o755``),
+como en Python; ``_`` separa dígitos (``1_000_000``), solo ENTRE dos. un
+literal con prefijo es un **patrón de bits** (la regla de Java): puede usar los
+64 bits, y con el bit 63 encendido el valor es negativo
+(``0xFFFFFFFFFFFFFFFF`` vale ``-1``). uno mal formado (``0x``, ``0b102``,
+``1__0``) o que no cabe en 64 bits produce :ref:`LEX007 <LEX007-def>`.
 
 .. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
    int edad = 25;
+   int mascara = 0xFF_00;
 
 .. _float-def:
 
@@ -499,6 +509,25 @@ número en coma flotante. múltiples puntos decimales generan :ref:`LEX006 <LEX0
    :emphasize-lines: 1
 
    float pi = 3.1416;
+
+.. _byte-def:
+
+BYTE (``byte``)
+~~~~~~~~~~~~~~~~
+
+un entero SIN signo de 8 bits (0..255): un octeto de un archivo o de un
+protocolo. un literal entero que cabe entra donde se espera un ``byte``
+(``var byte b = 0xFF;``, ``b == 10``); uno que no cabe es un error. se compara
+y se enmascara (``& | ^ ~``); sumar o desplazar se hace en ``int``
+(``cast<int>(b)``), y ``cast<byte>(n)`` trunca (módulo 256). en la VM un
+bloque de ``byte`` ocupa un byte por celda.
+
+.. code-block:: srcx
+   :linenos:
+   :emphasize-lines: 1
+
+   byte b = 0x0F;
+   byte alto = ~b & 0xF0;
 
 .. _char-def:
 
@@ -757,6 +786,62 @@ una fuente conocida de errores que no compra nada.
 **El destino tiene que poder evaluarse dos veces.** La expansión lo nombra dos
 veces, así que ``v[f()] += 1`` llamaría a ``f`` dos veces. Se rechaza con un
 error que dice cómo escribirlo completo, en vez de hacerlo en silencio.
+
+operadores de bits
+~~~~~~~~~~~~~~~~~~~~~
+
+Solo sobre ``int`` (64 bits con signo); sobre cualquier otro tipo son ``AST006``.
+``&`` es el mismo token que la dirección (``ADDRESS``): en posición de prefijo
+toma la dirección, entre dos operandos es el *y* de bits.
+
+.. table:: Operadores de bits
+    :width: 90%
+    :widths: auto
+    :align: center
+
+    +---------------------+------------------+--------------------------------------------------+
+    | Token               | Lexema           | Descripción                                      |
+    +=====================+==================+==================================================+
+    | ``ADDRESS`` (infijo)| ``&``            | *Y* de bits.                                     |
+    +---------------------+------------------+--------------------------------------------------+
+    | ``PIPE``            | ``|``            | *O* de bits.                                     |
+    +---------------------+------------------+--------------------------------------------------+
+    | ``CARET``           | ``^``            | *O exclusivo* de bits.                           |
+    +---------------------+------------------+--------------------------------------------------+
+    | ``TILDE``           | ``~``            | Complemento (prefijo): ``~x`` es ``-x - 1``.     |
+    +---------------------+------------------+--------------------------------------------------+
+    | ``SHIFT_LEFT``      | ``<<``           | Desplaza a la izquierda; envuelve a 64 bits.     |
+    +---------------------+------------------+--------------------------------------------------+
+    | ``SHIFT_RIGHT``     | ``>>``           | Desplaza a la derecha conservando el signo.      |
+    +---------------------+------------------+--------------------------------------------------+
+    | compuestos          | ``&=`` ``|=``    | Azúcar de ``x = x op v``.                        |
+    |                     | ``^=`` ``<<=``   |                                                  |
+    |                     | ``>>=``          |                                                  |
+    +---------------------+------------------+--------------------------------------------------+
+
+Tres decisiones:
+
+- **La precedencia es la de Python y Rust, no la de C**: los de bits ligan más
+  que las comparaciones, así que ``a & b == c`` es ``(a & b) == c``. De menor a
+  mayor: ``|`` < ``^`` < ``&`` < ``<<``/``>>`` < ``+``/``-``.
+- **El lexer no emite** ``>>``: son dos ``>``, y el parser los junta cuando van
+  **pegados** y en posición de operador. Así ``Vector<Vector<int>>`` cierra dos
+  genéricos sin partir ningún token (el problema que tuvo C++ hasta C++11), y
+  ``a > > b`` no es un desplazamiento. ``SHIFT_RIGHT`` y ``SHIFT_RIGHT_ASSIGN``
+  existen como tokens, pero solo los arma el parser.
+- **Un desplazamiento fuera de** ``[0, 64)`` **es una excepción**
+  (``excepciones.DesplazamientoInvalido``, ``EXC005``): en C es comportamiento
+  indefinido y en Python da un entero de otro tamaño.
+
+.. code-block:: srcx
+   :class: fragmento
+   :linenos:
+
+   var int flags = 0;
+   flags |= 1 << 3;              // enciende el bit 3
+   var bool puesto = flags & (1 << 3) != 0;
+   h = (h ^ c) * 1099511628211;     // un paso de FNV-1a
+
 
 operadores de comparación
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

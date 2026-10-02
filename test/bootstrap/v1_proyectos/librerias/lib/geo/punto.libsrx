@@ -1,0 +1,9 @@
+public struct { str nombre; int x; } Punto;
+
+public hook fn __free__(Punto ptr p) -> void { }
+
+public fn crea(str n, int x) -> Punto {
+    return Punto{ nombre: n, x: x };
+}
+
+#export as punto

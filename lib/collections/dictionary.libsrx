@@ -1,0 +1,222 @@
+/- collections.dictionary — un DICCIONARIO genérico: claves K a valores V.
+
+     var dic.Dictionary<str, int> d = dic.make<str, int>(8);
+     d.put("uno", 1);          // agrega o reemplaza
+     d.get("uno");             // 1 (excepciones.NoEncontrado si no está)
+     d.contains("dos");        // false
+     d.remove("uno");          // true si estaba
+     d.len();                  // cuántas claves hay
+     d.keys();                 // un vec.Vector<K> con las claves
+     d.values();               // sus valores, en el mismo orden
+     d.at("uno");              // PRESTA el valor (un 'V ptr'), sin copiarlo
+     d.take("uno");            // lo SACA: la clave se quita y el valor es tuyo
+
+ QUÉ PUEDE SER CLAVE: lo que tiene un hash y una igualdad.
+   - 'int', 'bool', 'char', 'str' y un enum sin payload: nativos.
+   - Un struct con los hooks '__hash__' y '__eq__' (dos claves iguales
+     tienen que dar el mismo hash). Sin '__hash__' es RT011 al usarlo.
+   - 'float' no: NaN no es igual a sí mismo.
+
+ CÓMO ESTÁ HECHO: direccionamiento abierto con sondeo lineal. Tres bloques
+ de 'mem' del mismo tamaño —las claves, los valores y el ESTADO de cada
+ casilla (libre, ocupada o borrada)—, y la casilla de una clave es
+ 'hash(clave) & (cap - 1)': la capacidad es siempre una potencia de 2, así
+ que el '&' hace de módulo sin dividir. Si la casilla está ocupada por otra
+ clave se prueba la siguiente.
+
+ Borrar deja una LÁPIDA (estado BORRADA) y no una casilla libre: una
+ búsqueda se detiene en la primera libre, y si 'remove' la dejara libre, una
+ clave que se guardó más adelante porque esta estaba ocupada ya no se
+ encontraría.
+
+ Cuando las casillas en uso (ocupadas + lápidas) pasan de 3/4 se duplica la
+ capacidad y se vuelve a insertar todo: así una búsqueda casi siempre
+ termina en una o dos casillas.
+
+ EL ORDEN de 'keys()' es el de las casillas, que depende del hash: no es el
+ de inserción. Es el mismo en el intérprete y en la VM (los dos calculan el
+ mismo hash), pero cambia si cambia la capacidad.
+
+ VALORES CON DESTRUCTOR: el diccionario es su dueño y los destruye al
+ morir, al reemplazarlos ('put' sobre una clave que ya estaba) y al quitarlos
+ ('remove'). Lo que COPIARIA un valor —'get', 'values()'— es SEM038 con un
+ valor así: para leerlo, 'at'; para quedárselo, 'take'. Una CLAVE con
+ destructor no se admite (buscar copia la clave: SEM038).
+-/
+
+#import mem
+#import array.vector as vec
+#import excepciones as exc
+
+// el estado de cada casilla
+internal const int LIBRE = 0;
+internal const int OCUPADA = 1;
+internal const int BORRADA = 2;
+
+public struct {
+    K ptr mutable keys;       // la clave de cada casilla
+    V ptr mutable values;     // su valor, en la misma casilla
+    int ptr mutable states;   // LIBRE, OCUPADA o BORRADA
+    int len;                  // claves guardadas
+    int cap;                  // casillas (siempre una potencia de 2)
+    int tombstones;           // lápidas
+} Dictionary<K, V>;
+
+// Un bloque de 'n' estados, todos LIBRE.
+internal fn libres(int n) -> int ptr mutable {
+    var int ptr mutable estados = mem.reserve<int>(n);
+    var int i = 0;
+    while (i < n) {
+        estados[i] = LIBRE;
+        i = i + 1;
+    };
+    return estados;
+}
+
+// Un diccionario vacío con lugar para 'capacity' claves antes de crecer.
+public fn make<K, V>(int capacity) -> Dictionary<K, V> {
+    var int cap = 8;
+    while (cap * 3 < capacity * 4) { cap = cap * 2; };
+    return Dictionary<K, V>{ keys: mem.reserve<K>(cap), values: mem.reserve<V>(cap),
+                             states: libres(cap), len: 0, cap: cap, tombstones: 0 };
+}
+
+@impl Dictionary<K, V> {
+    // La casilla que guarda 'key', o -1.
+    fn slot_of(Dictionary<K, V> ptr self, K key) -> int {
+        var int mascara = self.cap - 1;
+        var int i = hash(key) & mascara;
+        var int probadas = 0;
+        while (probadas < self.cap) {
+            var int estado = self.states[i];
+            if (estado == LIBRE) { return -1; };
+            if (estado == OCUPADA and self.keys[i] == key) { return i; };
+            i = (i + 1) & mascara;
+            probadas = probadas + 1;
+        };
+        return -1;
+    }
+
+    // Guarda 'value' en 'key': la agrega o reemplaza su valor.
+    fn put(Dictionary<K, V> ptr mutable self, K key, V value) -> void {
+        var int donde = self.slot_of(key);
+        if (donde >= 0) {
+            self.values[donde] = move value;   // el viejo se destruye
+            return;
+        };
+        if ((self.len + self.tombstones + 1) * 4 > self.cap * 3) { self.grow(); };
+        var int mascara = self.cap - 1;
+        var int i = hash(key) & mascara;
+        while (self.states[i] == OCUPADA) { i = (i + 1) & mascara; };
+        if (self.states[i] == BORRADA) { self.tombstones = self.tombstones - 1; };
+        self.keys[i] = move key;
+        self.values[i] = move value;
+        self.states[i] = OCUPADA;
+        self.len = self.len + 1;
+    }
+
+    // El valor de 'key' (excepciones.NoEncontrado si no está).
+    fn get(Dictionary<K, V> ptr self, K key) -> V {
+        var int i = self.slot_of(key);
+        if (i < 0) {
+            throw exc.NoEncontrado{ mensaje: "la clave no está en el diccionario" };
+        };
+        return self.values[i];
+    }
+
+    // PRESTA el valor de 'key': un puntero al que está guardado, sin copiarlo.
+    fn at(Dictionary<K, V> ptr self, K key) -> V ptr {
+        var int i = self.slot_of(key);
+        if (i < 0) {
+            throw exc.NoEncontrado{ mensaje: "la clave no está en el diccionario" };
+        };
+        return &self.values[i];
+    }
+
+    // SACA el valor de 'key' (la clave se quita): el que lo recibe es su
+    // único dueño.
+    fn take(Dictionary<K, V> ptr mutable self, K key) -> V {
+        var int i = self.slot_of(key);
+        if (i < 0) {
+            throw exc.NoEncontrado{ mensaje: "la clave no está en el diccionario" };
+        };
+        var K clave = mem.take<K>(self.keys, i);
+        self.states[i] = BORRADA;
+        self.len = self.len - 1;
+        self.tombstones = self.tombstones + 1;
+        return mem.take<V>(self.values, i);
+    }
+
+    // ¿Está 'key'?
+    fn contains(Dictionary<K, V> ptr self, K key) -> bool {
+        return self.slot_of(key) >= 0;
+    }
+
+    // Quita 'key'; devuelve si estaba. Su clave y su valor se destruyen aquí
+    // (al salir, como cualquier local).
+    fn remove(Dictionary<K, V> ptr mutable self, K key) -> bool {
+        var int i = self.slot_of(key);
+        if (i < 0) { return false; };
+        var K clave = mem.take<K>(self.keys, i);
+        var V valor = mem.take<V>(self.values, i);
+        self.states[i] = BORRADA;
+        self.len = self.len - 1;
+        self.tombstones = self.tombstones + 1;
+        return true;
+    }
+
+    // Cuántas claves hay.
+    fn len(Dictionary<K, V> ptr self) -> int {
+        return self.len;
+    }
+
+    // Las claves, en el orden de sus casillas.
+    fn keys(Dictionary<K, V> ptr self) -> vec.Vector<K> {
+        var vec.Vector<K> salida = vec.dynamic<K>(self.len);
+        var int i = 0;
+        while (i < self.cap) {
+            if (self.states[i] == OCUPADA) { salida.push(self.keys[i]); };
+            i = i + 1;
+        };
+        return salida;
+    }
+
+    // Los valores, en el mismo orden que 'keys()'.
+    fn values(Dictionary<K, V> ptr self) -> vec.Vector<V> {
+        var vec.Vector<V> salida = vec.dynamic<V>(self.len);
+        var int i = 0;
+        while (i < self.cap) {
+            if (self.states[i] == OCUPADA) { salida.push(self.values[i]); };
+            i = i + 1;
+        };
+        return salida;
+    }
+
+    // Duplica las casillas y vuelve a insertar todo (las lápidas se van).
+    fn grow(Dictionary<K, V> ptr mutable self) -> void {
+        var int antes = self.cap;
+        var K ptr mutable claves = self.keys;
+        var V ptr mutable valores = self.values;
+        var int ptr mutable estados = self.states;
+        self.cap = antes * 2;
+        self.keys = mem.reserve<K>(self.cap);
+        self.values = mem.reserve<V>(self.cap);
+        self.states = libres(self.cap);
+        self.len = 0;
+        self.tombstones = 0;
+        var int i = 0;
+        while (i < antes) {
+            // se MUEVEN: cada clave y cada valor sigue con un solo dueño, y
+            // los bloques viejos se sueltan vacíos
+            if (estados[i] == OCUPADA) {
+                self.put(mem.take<K>(claves, i), mem.take<V>(valores, i));
+            };
+            i = i + 1;
+        };
+        mem.release<K>(claves);
+        mem.release<V>(valores);
+        mem.release<int>(estados);
+    }
+}
+
+#export as dictionary

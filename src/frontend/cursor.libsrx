@@ -1,0 +1,199 @@
+/- frontend.cursor — el estado del parser y la lectura de tokens.
+
+ Traducción de `V0/src/frontend/parser/cursor.py` y `context.py`. Todo el
+ parser comparte UN `Parser` (pasado como `ptr mutable`): los tokens, la
+ posición, el árbol que se va construyendo y el poco contexto sintáctico
+ que hace falta (si un '{' puede abrir un literal de struct, y si se está
+ dentro de un bucle).
+
+ Los errores de sintaxis son EXCEPCIONES, como en la V0: quien encuentra
+ algo inesperado lanza un `ErrorDeSintaxis`, y el bucle del programa lo
+ atrapa, lo anota y se recupera en la declaración siguiente. Es la misma
+ idea que usa la V0 con `raise ParseError`, escrita con el `throw` de
+ suriaX.
+
+ La ventana de tokens (`fin`): el análisis de una interpolación (`{expr}`
+ de una f-string) necesita parsear OTROS tokens y volver. En vez de cambiar
+ el vector de tokens —sacarlo del struct sería mover algo a través de un
+ puntero, que el lenguaje no permite (SEM036)—, los tokens de la
+ interpolación se AÑADEN al final y se parsean moviendo la ventana
+ `[pos, fin]`. Al terminar, la ventana vuelve a la de antes.
+-/
+
+#import frontend.tokens as tk
+#import frontend.arbol as ar
+#import array.vector as vec
+
+public struct { str codigo; str mensaje; int linea; int col; } ErrorDeSintaxis;
+
+public struct {
+    vec.Vector<tk.Token> toks;
+    int pos;
+    int fin;                    // índice del EOF de la ventana actual
+    vec.Vector<ar.Nodo> arbol;
+    bool sin_literal;           // un '{' tras un nombre NO abre un literal ('case X { }')
+    int bucles;                 // profundidad de bucles ('break' fuera de uno es error)
+    int en_finally;             // 'bucles' al entrar al 'finally' en curso; -1 fuera de uno
+    vec.Vector<int> receptores; // el receptor de '.campo' de cada 'with' abierto (-1: tiene varios)
+    int guardianes;             // cuantos 'with' sin nombre van (para 'with#N')
+} Parser;
+
+/- Lanza un error de sintaxis. Nunca vuelve: quien la llama escribe después
+   un `return` que no se ejecuta, porque el lenguaje exige uno. -/
+public fn falla(str codigo, str mensaje, int linea, int col) -> void {
+    throw ErrorDeSintaxis{ codigo: codigo, mensaje: mensaje, linea: linea, col: col };
+}
+
+public fn mira(Parser ptr p, int desplazamiento) -> tk.Token {
+    var int i = p.pos + desplazamiento;
+    if (i < p.fin) { return p.toks.get(i); }
+    return p.toks.get(p.fin);   // siempre el EOF
+}
+
+public fn actual(Parser ptr p) -> tk.Token { return mira(p, 0); }
+
+public fn avanza(Parser ptr mutable p) -> tk.Token {
+    var tk.Token t = mira(p, 0);
+    if (t.tipo != tk.TType.EOF) { p.pos = p.pos + 1; }
+    return t;
+}
+
+public fn es(Parser ptr p, tk.TType tipo) -> bool { return mira(p, 0).tipo == tipo; }
+
+public fn es_en(Parser ptr p, int desplazamiento, tk.TType tipo) -> bool {
+    return mira(p, desplazamiento).tipo == tipo;
+}
+
+public fn acepta(Parser ptr mutable p, tk.TType tipo) -> bool {
+    if (es(p, tipo)) {
+        avanza(p);
+        return true;
+    }
+    return false;
+}
+
+public fn al_final(Parser ptr p) -> bool { return es(p, tk.TType.EOF); }
+
+/- Consume un token del tipo pedido o lanza PAR003. -/
+public fn exige(Parser ptr mutable p, tk.TType tipo) -> tk.Token {
+    var tk.Token t = mira(p, 0);
+    if (t.tipo != tipo) {
+        falla("PAR003", f"se esperaba {tk.nombre_de(tipo)}, se encontro {tk.nombre_de(t.tipo)}",
+              t.linea, t.col);
+    }
+    return avanza(p);
+}
+
+public fn es_nombre(tk.TType tipo) -> bool {
+    return tipo == tk.TType.IDENTIFIER or tipo == tk.TType.DUNDER;
+}
+
+/- Un NOMBRE: IDENTIFIER o DUNDER ('__x__' es gramaticalmente un nombre). -/
+public fn exige_nombre(Parser ptr mutable p) -> tk.Token {
+    var tk.Token t = mira(p, 0);
+    if (not es_nombre(t.tipo)) {
+        falla("PAR003", f"se esperaba un nombre (IDENTIFIER o DUNDER), se encontro {tk.nombre_de(t.tipo)}",
+              t.linea, t.col);
+    }
+    return avanza(p);
+}
+
+// --------------------------------------------------------------------------- //
+// el valor de un token (la V0 lo trae ya calculado; aquí se deriva del lexema)
+// --------------------------------------------------------------------------- //
+
+/- El texto entre `desde` y `hasta` (no hay subcadenas en el lenguaje). -/
+public fn trozo(str s, int desde, int hasta) -> str {
+    var str r = "";
+    var int i = desde;
+    while (i < hasta) {
+        r = r + cast<str>(s[i]);
+        i = i + 1;
+    }
+    return r;
+}
+
+/- '#import' -> 'import';  '@impl' -> 'impl'. -/
+public fn sin_prefijo(tk.Token t) -> str { return trozo(t.lexema, 1, len(t.lexema)); }
+
+/- '__free__' -> 'free' (el nombre de un DUNDER sin sus guiones). -/
+public fn nombre_dunder(tk.Token t) -> str {
+    return trozo(t.lexema, 2, len(t.lexema) - 2);
+}
+
+/- El VALOR de un literal numérico, como texto decimal: `0xFF` -> `255`,
+   `1_000` -> `1000`. Es lo que guarda la V0 en su token. Un literal con
+   prefijo es un patrón de bits: los enteros de suriaX envuelven a 64 bits,
+   así que `0xFFFFFFFFFFFFFFFF` da `-1` sin hacer nada especial. Uno decimal
+   se deja como texto: la V0 no lo recorta, y si no cabe lo dice la
+   Semántica. -/
+public fn valor_numerico(str s) -> str {
+    var int base = 10;
+    if (len(s) > 1 and s[0] == '0') {
+        var char l = s[1];
+        if (l == 'x' or l == 'X') { base = 16; }
+        if (l == 'b' or l == 'B') { base = 2; }
+        if (l == 'o' or l == 'O') { base = 8; }
+    }
+    var int i = 0;
+    if (base != 10) {
+        var int r = 0;
+        i = 2;
+        while (i < len(s)) {
+            if (s[i] != '_') {
+                var int p = cast<int>(s[i]);
+                var int d = p - 48;
+                if (p >= 97) { d = p - 87; } else if (p >= 65) { d = p - 55; }
+                r = r * base + d;
+            }
+            i = i + 1;
+        }
+        return f"{r}";
+    }
+    var str limpio = "";
+    while (i < len(s)) {
+        if (s[i] != '_') { limpio = limpio + cast<str>(s[i]); }
+        i = i + 1;
+    }
+    return limpio;
+}
+
+/- Un entero escrito en decimal (sin signo). Tampoco hay 'str -> int'. -/
+public fn entero(str s) -> int {
+    var int r = 0;
+    var int i = 0;
+    while (i < len(s)) {
+        r = r * 10 + (cast<int>(s[i]) - 48);
+        i = i + 1;
+    }
+    return r;
+}
+
+// --------------------------------------------------------------------------- //
+// el árbol
+// --------------------------------------------------------------------------- //
+
+public fn nodo(Parser ptr mutable p, str clase, int linea, int col) -> int {
+    return ar.nuevo(&p.arbol, clase, linea, col);
+}
+
+public fn nodo_en(Parser ptr mutable p, str clase, tk.Token t) -> int {
+    return ar.nuevo(&p.arbol, clase, t.linea, t.col);
+}
+
+public fn hijo(Parser ptr mutable p, int padre, str campo, int h) -> void {
+    ar.hijo(&p.arbol, padre, campo, h);
+}
+
+public fn texto(Parser ptr mutable p, int n, str clave, str valor) -> void {
+    ar.attr_texto(&p.arbol, n, clave, valor);
+}
+
+public fn crudo(Parser ptr mutable p, int n, str clave, str valor) -> void {
+    ar.attr_crudo(&p.arbol, n, clave, valor);
+}
+
+public fn clase(Parser ptr p, int n) -> str { return ar.clase_de(&p.arbol, n); }
+public fn nombre(Parser ptr p, int n) -> str { return ar.nombre_de(&p.arbol, n); }
+
+#export as cursor

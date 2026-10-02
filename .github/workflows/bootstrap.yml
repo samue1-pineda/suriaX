@@ -1,0 +1,55 @@
+name: Bootstrap (V1 contra V0)
+
+# La categoria 'bootstrap' de la suite: el lexer y el parser escritos en
+# suriaX (src/frontend/) contra los de la V0, token a token y nodo a nodo, y
+# los dos corriendo como programas en la VM.
+#
+# Corre SOLO cuando cambia uno de los dos lados de la comparacion (o la VM
+# que los ejecuta). El release la corre siempre ('python test/main.py --todo').
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/frontend/**"
+      - "V0/src/frontend/lexer/**"
+      - "V0/src/frontend/parser/**"
+      - "V0/include/**"
+      - "lib/**"
+      - "backend/**"
+      - "test/bootstrap/**"
+      - "test/helpers.py"
+      - ".github/workflows/bootstrap.yml"
+  pull_request:
+    paths:
+      - "src/frontend/**"
+      - "V0/src/frontend/lexer/**"
+      - "V0/src/frontend/parser/**"
+      - "V0/include/**"
+      - "lib/**"
+      - "backend/**"
+      - "test/bootstrap/**"
+      - "test/helpers.py"
+      - ".github/workflows/bootstrap.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: V1 contra V0
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # los programas del bootstrap se corren tambien en la VM
+      - name: Construir el backend C++
+        run: |
+          cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target suriax-hir -j
+      - name: Categoria 'bootstrap'
+        run: python test/main.py bootstrap

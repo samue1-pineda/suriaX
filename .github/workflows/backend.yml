@@ -1,0 +1,84 @@
+name: Backend (VM contra interprete)
+
+# La categoria 'backend' de la suite: el diferencial VM <-> interprete y las
+# pruebas de 'suriax-hir', y la misma VM bajo AddressSanitizer + UBSan.
+#
+# Corre SOLO cuando cambia lo que prueba: comparar dos motores en cada commit
+# (un cambio en la documentacion, en el web) no dice nada nuevo y cuesta
+# minutos. El release la corre siempre ('python test/main.py --todo').
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "CMake/**"
+      - "CMakeLists.txt"
+      - "V0/src/HIR/**"
+      - "lib/**"
+      - "runtime/**"
+      - "test/backend/**"
+      - "test/helpers.py"
+      - "version.py"
+      - ".github/workflows/backend.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "CMake/**"
+      - "CMakeLists.txt"
+      - "V0/src/HIR/**"
+      - "lib/**"
+      - "runtime/**"
+      - "test/backend/**"
+      - "test/helpers.py"
+      - "version.py"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diferencial:
+    name: Diferencial VM <-> interprete
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Construir el backend C++
+        run: |
+          cmake -S . -B build -DSURIAX_BUILD_NATIVE=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target suriax-hir -j
+      - name: Categoria 'backend'
+        run: python test/main.py backend
+
+  # Cualquier desborde, uso tras liberar o comportamiento indefinido ABORTA
+  # la prueba en vez de producir, quiza, la salida correcta por casualidad.
+  # Pila de 64 MB: ASan agranda cada marco, y la VM ejecuta cada llamada de
+  # suriaX como una llamada de C++ (su tope son 4096 marcos).
+  sanitizadores:
+    name: VM con ASan y UBSan
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Construir el backend instrumentado
+        run: |
+          cmake -S . -B build-asan -DCMAKE_CXX_COMPILER=clang++ \
+                -DSURIAX_BUILD_NATIVE=OFF -DCMAKE_BUILD_TYPE=Debug \
+                -DSURIAX_SANITIZE="address;undefined"
+          cmake --build build-asan --target suriax-hir -j
+      - name: Categoria 'backend' contra la VM instrumentada
+        env:
+          SURIAX_HIR_BIN: ${{ github.workspace }}/build-asan/bin/suriax-hir
+          ASAN_OPTIONS: halt_on_error=1:detect_stack_use_after_return=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ulimit -s 65536
+          python test/main.py backend

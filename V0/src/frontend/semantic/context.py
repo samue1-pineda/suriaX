@@ -30,8 +30,11 @@ class SemanticContext:
         "source_path",
         "config",
         "fn_locals",
+        "fn_symbols",
         "loaded_libraries",
         "hook_specs",
+        "copias",
+        "instancias",
     )
 
     def __init__(
@@ -69,6 +72,20 @@ class SemanticContext:
         # Lo llena scope_resolver (pasada 3) para que memory_check (pasada 4)
         # pueda anotar Symbol.moved_at sin reconstruir scopes.
         self.fn_locals: Dict[int, Dict[str, Symbol]] = {}
+        # FunctionDecl (por id) -> su Symbol (funcion o metodo). Lo llena
+        # 'collect' (pasada 1) y lo usa scope_resolver para guardar la FIRMA
+        # ya canonica: en la pasada 1 las anotaciones todavia estan tal como
+        # se escribieron ('vec.Vector<int>'), y quien la consulte despues
+        # compara contra tipos canonicos ('vector.Vector<int>').
+        self.fn_symbols: Dict[int, Symbol] = {}
+        # FunctionDecl (por id) -> las COPIAS de un valor generico que hace su
+        # cuerpo: (tipo que nombra un parametro, donde). Y cada llamada a un
+        # generico: (Symbol del llamador o None, sus parametros de tipo,
+        # Symbol del llamado, mapa de la instancia, nombre, linea, columna).
+        # Con las dos, scope_resolver decide al cerrar el modulo que
+        # instancias copiarian un valor con destructor (SEM038).
+        self.copias: Dict[int, List[Any]] = {}
+        self.instancias: List[Any] = []
         # unidades .libsrx CARGADAS en esta compilacion: alias publico ->
         # ruta del archivo. La fase HIR emite un .phir por unidad y el
         # modulo principal solo las referencia (Module.libraries).

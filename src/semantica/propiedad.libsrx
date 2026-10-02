@@ -1,0 +1,228 @@
+/- semantica.propiedad — quién POSEE qué, y qué se destruye
+   (`V0/.../semantic/type_service.py: owns_resources` y
+   `scope_resolver.py: _aplanar_drops`, `_destructor_de`).
+
+ Las reglas de la V0, en el mismo orden (ver `src/hir/contrato.md`, sección 6):
+
+ 1. un `ptr T` NO posee: es un préstamo;
+ 2. un tipo nominal con `__free__` posee;
+ 3. un `struct` posee si posee algún campo por valor;
+ 4. un CAMPO `R ptr` posee si `R` posee (el bloque es del struct);
+ 5. un `enum` posee si posee el payload de alguna variante (un payload
+    puntero no: la regla 4 es solo de campos).
+
+ `T?` y `error T` poseen si lo envuelto posee. Los primitivos nunca.
+
+ Un struct GENÉRICO posee según su instancia: sus campos se miran ya
+ sustituidos (`Caja<R>` posee si `R` posee; `Caja<int>` no). Un parámetro
+ de tipo solo (`T`) no posee: dentro de un genérico, lo que decide su
+ destrucción es la instancia, y se destruye POR SU TIPO (`aplana`).
+
+ Un tipo que se contiene a sí mismo por valor no debería existir, pero esta
+ pasada no es quien lo rechaza: `vistos` evita colgarse, como en la V0.
+-/
+
+#import semantica.tipos as tip
+#import semantica.simbolos as sim
+#import array.vector as vec
+
+//: `HookKind.FREE` del HIR
+public const int FREE = 1;
+
+/- El símbolo del tipo nominal bajo `t`, desenvolviendo `T?` y `error T`
+   (envoltorios) pero NUNCA `ptr` (un préstamo). -1 si no hay. -/
+public fn simbolo_nominal(tip.Universo ptr u, sim.Tabla ptr tabla, int t) -> int {
+    var int x = t;
+    while (x > 0 and (tip.clase_de(u, x) == tip.NULLABLE or tip.clase_de(u, x) == tip.ERROR)) {
+        x = tip.inner_de(u, x);
+    };
+    if (x <= 0 or tip.clase_de(u, x) != tip.NOMINAL) { return -1; };
+    return sim.busca_tipo(tabla, tip.nombre_de(u, x));
+}
+
+/- El nominal bajo `t`, desenvolviendo `T?` y `error T` (`_nominal_de`): sus
+   argumentos de genérico viven en el TIPO, no en el símbolo. -/
+public fn nominal_bajo(tip.Universo ptr u, int t) -> int {
+    var int x = t;
+    while (x > 0 and (tip.clase_de(u, x) == tip.NULLABLE or tip.clase_de(u, x) == tip.ERROR)) {
+        x = tip.inner_de(u, x);
+    };
+    return x;
+}
+
+/- El `__free__` que declara el tipo nominal bajo `t`, o -1. -/
+public fn destructor_de(tip.Universo ptr u, sim.Tabla ptr tabla, int t) -> int {
+    var int s = simbolo_nominal(u, tabla, t);
+    if (s < 0) { return -1; };
+    return hook_free(tabla, s);
+}
+
+/- El `__free__` del tipo que declara el símbolo `s`: por su nombre y, si
+   no, por su nombre canónico (`lookup_hook(name) or lookup_hook(canonical)`). -/
+fn hook_free(sim.Tabla ptr tabla, int s) -> int {
+    var sim.Simbolo simbolo = sim.simbolo(tabla, s);
+    var int h = sim.busca_hook(tabla, simbolo.nombre, FREE);
+    if (h < 0 and simbolo.tipo_nombre != "") { h = sim.busca_hook(tabla, simbolo.tipo_nombre, FREE); };
+    return h;
+}
+
+/- ¿Un valor de tipo `t` tiene algo que destruir? -/
+public fn posee(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int t) -> bool {
+    var vec.Vector<int> vistos = vec.dynamic<int>(4);
+    return posee_en(u, tabla, t, &vistos);
+}
+
+/- ¿Un CAMPO de tipo `t` posee? Como `posee`, más la regla 4. -/
+public fn campo_posee(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int t) -> bool {
+    var vec.Vector<int> vistos = vec.dynamic<int>(4);
+    return campo_posee_en(u, tabla, t, &vistos);
+}
+
+fn campo_posee_en(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int t,
+                  vec.Vector<int> ptr mutable vistos) -> bool {
+    if (t > 0 and tip.clase_de(u, t) == tip.POINTER) {
+        return posee_en(u, tabla, tip.inner_de(u, t), vistos);
+    };
+    return posee_en(u, tabla, t, vistos);
+}
+
+fn visto(vec.Vector<int> ptr vistos, int t) -> bool {
+    var int i = 0;
+    while (i < vistos.len()) {
+        if (vistos.get(i) == t) { return true; };
+        i = i + 1;
+    };
+    return false;
+}
+
+/- `campo` (un tipo declarado con los parámetros del struct `s`) visto
+   desde la instancia `t` (`bindings` + `substitute`). -/
+public fn instancia_de(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int s, int t,
+                       int campo) -> int {
+    var vec.Vector<str> nombres = sim.tparams_de(tabla, s);
+    if (nombres.len() == 0 or t <= 0 or tip.n_args_de(u, t) == 0) { return campo; };
+    var vec.Vector<int> args = vec.dynamic<int>(nombres.len());
+    var int k = 0;
+    while (k < tip.n_args_de(u, t)) {
+        args.push(tip.arg_de(u, t, k));
+        k = k + 1;
+    };
+    return tip.sustituye(u, campo, &nombres, &args);
+}
+
+fn posee_en(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int t,
+            vec.Vector<int> ptr mutable vistos) -> bool {
+    if (t <= 0) { return false; };
+    var int clase = tip.clase_de(u, t);
+    if (clase == tip.POINTER) { return false; };                          // regla 1
+    if (clase == tip.NULLABLE or clase == tip.ERROR) {
+        return posee_en(u, tabla, tip.inner_de(u, t), vistos);
+    };
+    if (clase != tip.NOMINAL) { return false; };
+    var int s = sim.busca_tipo(tabla, tip.nombre_de(u, t));
+    if (s < 0) { return false; };
+    var sim.Simbolo simbolo = sim.simbolo(tabla, s);
+    if (hook_free(tabla, s) >= 0) { return true; };                      // regla 2
+    if (visto(vistos, t)) { return false; };
+    if (simbolo.clase == sim.ENUM) {                                      // regla 5
+        vistos.push(t);
+        var int k = 0;
+        while (k < simbolo.n_miembros) {
+            var int v = sim.miembro_de(tabla, s, k);
+            var int p = 0;
+            while (p < sim.simbolo(tabla, v).n_params) {
+                if (posee_en(u, tabla, sim.param_de(tabla, v, p), vistos)) { return true; };
+                p = p + 1;
+            };
+            k = k + 1;
+        };
+        return false;
+    };
+    if (simbolo.clase != sim.STRUCT) { return false; };
+    vistos.push(t);
+    var int k = 0;
+    while (k < simbolo.n_miembros) {                                       // reglas 3 y 4
+        var int campo = sim.miembro_de(tabla, s, k);
+        var int concreto = instancia_de(u, tabla, s, t, sim.simbolo(tabla, campo).tipo);
+        if (campo_posee_en(u, tabla, concreto, vistos)) { return true; };
+        k = k + 1;
+    };
+    return false;
+}
+
+// ------------------------------------------------------------------------ //
+// los drops concretos de un valor (_aplanar_drops)
+// ------------------------------------------------------------------------ //
+
+struct {
+    int destructor;    // el `__free__` que lo destruye, o -1
+    bool por_tipo;     // se destruye por su tipo (enum, puntero dueño)
+    int ruta_desde;    // la ruta ("c", "dentro") está en `Drops.rutas`
+    int n_ruta;
+} Drop;
+
+struct {
+    vec.Vector<Drop> drops;
+    vec.Vector<str> rutas;
+} Drops;
+
+public fn drops() -> Drops {
+    return Drops{ drops: vec.dynamic<Drop>(8), rutas: vec.dynamic<str>(16) };
+}
+
+public fn agrega(Drops ptr mutable d, vec.Vector<str> ptr ruta, int destructor, bool por_tipo) -> void {
+    var int desde = d.rutas.len();
+    var int i = 0;
+    while (i < ruta.len()) {
+        d.rutas.push(ruta.get(i));
+        i = i + 1;
+    };
+    d.drops.push(Drop{ destructor: destructor, por_tipo: por_tipo, ruta_desde: desde, n_ruta: ruta.len() });
+}
+
+/- Agrega a `salida` las destrucciones de un valor de tipo `t` en `ruta`:
+
+   - si el tipo declara `__free__`, ese destructor se hace cargo de todo lo
+     suyo: una sola destrucción;
+   - un puntero dueño (un campo), un enum o algo que nombra un parámetro de
+     tipo del cuerpo en curso (`genericos`) se destruyen POR SU TIPO;
+   - si no, se baja a los campos que poseen —ya sustituidos, si el struct es
+     genérico—, en orden de declaración (quien llama invierte la lista entera
+     al final). -/
+public fn aplana(tip.Universo ptr mutable u, sim.Tabla ptr tabla, int t, vec.Vector<str> ptr ruta,
+                 vec.Vector<str> ptr genericos, Drops ptr mutable salida) -> void {
+    var int destructor = destructor_de(u, tabla, t);
+    if (destructor >= 0) {
+        agrega(salida, ruta, destructor, false);
+        return;
+    };
+    var int s = simbolo_nominal(u, tabla, t);
+    if (t > 0 and (tip.clase_de(u, t) == tip.POINTER
+                   or (s >= 0 and sim.simbolo(tabla, s).clase == sim.ENUM)
+                   or tip.menciona(u, t, genericos))) {
+        agrega(salida, ruta, -1, true);
+        return;
+    };
+    if (s < 0) { return; };
+    var sim.Simbolo simbolo = sim.simbolo(tabla, s);
+    var int nucleo = nominal_bajo(u, t);
+    var int k = 0;
+    while (k < simbolo.n_miembros) {
+        var int campo = sim.miembro_de(tabla, s, k);
+        var sim.Simbolo c = sim.simbolo(tabla, campo);
+        c.tipo = instancia_de(u, tabla, s, nucleo, c.tipo);
+        if (campo_posee(u, tabla, c.tipo)) {
+            var vec.Vector<str> sub = vec.dynamic<str>(ruta.len() + 1);
+            var int i = 0;
+            while (i < ruta.len()) {
+                sub.push(ruta.get(i));
+                i = i + 1;
+            };
+            sub.push(c.nombre);
+            aplana(u, tabla, c.tipo, &sub, genericos, salida);
+        };
+        k = k + 1;
+    };
+}
+
+#export as propiedad

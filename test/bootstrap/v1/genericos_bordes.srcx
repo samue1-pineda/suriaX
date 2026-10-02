@@ -1,0 +1,39 @@
+// el primer genérico que nombra 'T' es una FUNCIÓN: su posición gana
+fn primero<T>(T x) -> T { return x; }
+struct { T valor; } Caja<T>;
+struct { K clave; V valor; } Entrada<K, V>;
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+
+// una llamada genérica suelta DENTRO de un genérico: temporal por su tipo
+fn suelta<T>(T x) -> int {
+    primero<T>(move x);
+    return 0;
+}
+// asignar sobre un 'T' destruye el viejo; un 'T ptr' es un préstamo
+fn pisa<T>(T a, T b, T ptr p) -> T {
+    var T x = move a;
+    x = move b;
+    var T ptr q = p;
+    return x;
+}
+fn anida<T>(T x) -> Caja<Caja<T>> {
+    var Caja<Caja<T>> c = Caja<Caja<T>>{ valor: Caja<T>{ valor: move x } };
+    return c;
+}
+fn entrada<K, V>(K k, V v) -> Entrada<K, V> {
+    return Entrada<K, V>{ clave: move k, valor: move v };
+}
+fn usa(Entrada<str, R> ptr e) -> str { return e.valor.que; }
+
+fn main() -> int {
+    var Entrada<str, R> e = entrada<str, R>("k", R{ que: "v" });
+    var Caja<Caja<R>> c = anida<R>(R{ que: "c" });
+    var R r = pisa<R>(R{ que: "a" }, R{ que: "b" }, &e.valor);
+    var int n = suelta<int>(1) + suelta<R>(R{ que: "s" });
+    entrada<int, R>(1, R{ que: "t" });
+    anida<int>(2);
+    var Caja<R>? nada = null;
+    if (usa(&e) == "v") { n = n + 1; };
+    return n;
+}

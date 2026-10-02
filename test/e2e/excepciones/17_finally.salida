@@ -1,0 +1,21 @@
+-- return atraviesa el finally
+  finally: x vale 99, pero ya se devolvio 1
+  devolvio 1
+-- lo del try muere antes del finally
+  usa el archivo
+  libera archivo
+  finally despues de liberar
+-- break y continue
+  vuelta 1
+  finally (su propia i vale 100)
+  finally (su propia i vale 100)
+  vuelta 3
+  finally (su propia i vale 100)
+  finally (su propia i vale 100)
+-- anidados, de adentro hacia afuera
+  finally de adentro
+  atrapado afuera: desde adentro
+  finally de afuera
+-- un catch que relanza
+  finally tras un catch que relanza
+  afuera atrapo 12

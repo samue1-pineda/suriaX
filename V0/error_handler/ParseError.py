@@ -258,6 +258,33 @@ class InvalidLibraryNameError(ParseError):
         super().__init__(message, code="PAR026", **kwargs)
 
 
+class ExitFromFinallyError(ParseError):
+    """``return``, ``break`` o ``continue`` que SALE de un bloque ``finally``.
+
+    Un ``finally`` corre porque el ``try`` ya esta saliendo —con un valor, por
+    un salto o con una excepcion en vuelo—. Salir del ``finally`` con otro
+    salto reemplazaria esa salida en silencio: un ``return`` dentro de un
+    ``finally`` se tragaria la excepcion que viajaba. Es la regla de PEP 765
+    en Python y de C# (CS0157). Un ``break`` de un bucle que esta DENTRO del
+    ``finally`` si vale: no sale de el.
+    """
+
+    def __init__(self, message: Any = "salto que sale de un 'finally'", **kwargs: Any):
+        super().__init__(message, code="PAR027", **kwargs)
+
+
+class WithReceiverError(ParseError):
+    """``.campo`` sin un ``with`` de UN valor alrededor.
+
+    Dentro de ``with (ventana) { .ancho = 900; }`` el punto dice "del valor
+    del with". Fuera de un ``with`` no hay a quien referirse, y con varios
+    valores (``with (a, b)``) no se sabria de cual.
+    """
+
+    def __init__(self, message: Any = "'.campo' fuera de un 'with'", **kwargs: Any):
+        super().__init__(message, code="PAR028", **kwargs)
+
+
 # Alias de compatibilidad.
 syntaxError = SyntaxError
 unexpectedToken = UnexpectedTokenError
@@ -312,6 +339,8 @@ __all__ = [
     "InvalidExternBlockError",
     "ExpressionTooDeepError",
     "InvalidLibraryNameError",
+    "ExitFromFinallyError",
+    "WithReceiverError",
     "syntaxError",
     "unexpectedToken",
     "expectedToken",

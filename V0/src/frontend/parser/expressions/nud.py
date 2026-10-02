@@ -1,8 +1,7 @@
 """Handlers de la posicion PREFIJO de una expresion.
 
 Implementa la cadena estructural completa
-``unary -> placement -> postfix -> primary`` de ``docs/gramar/grammar.ebnf``
-(seccion 3). Estos niveles NO se resuelven por binding power (a diferencia de
+``unary -> postfix -> primary`` de ``docs/gramar/grammar.ebnf``. Estos niveles NO se resuelven por binding power (a diferencia de
 los operadores binarios de ``precedence.py``): el EBNF los define como
 niveles fijos anidados a la derecha, asi que se implementan como funciones
 que se llaman entre si.
@@ -36,6 +35,7 @@ from ..cursor import Cursor
 _UNARY_OPS: Dict[TokenType, str] = {
     TokenType.NOT: "not",
     TokenType.MINUS: "-",
+    TokenType.TILDE: "~",
 }
 
 
@@ -226,6 +226,11 @@ def parse_primary(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
 # handlers 'primary' individuales
 # ----------------------------------------------------------------------------
 
+def _miembro_del_receptor(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
+    from ..grammar.with_stmt import parse_receiver_member  # import diferido (ciclo)
+    return parse_receiver_member(cursor, ctx)
+
+
 def _identifier(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     tok = cursor.advance()
     return ast.Identifier(ln=tok.ln, col=tok.col, name=tok.lexeme)
@@ -271,24 +276,34 @@ def _lit_string(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
 
     parts: List[Union[str, ast.Expression]] = []
     for part in sv.parts:
-        parts.append(part if isinstance(part, str) else _parse_interp(part, tok))
+        parts.append(part if isinstance(part, str) else _parse_interp(part, tok, ctx))
     return ast.InterpolatedString(ln=tok.ln, col=tok.col, parts=parts)
 
 
-def _parse_interp(interp: Interp, string_tok: Token) -> ast.Expression:
+def _parse_interp(interp: Interp, string_tok: Token,
+                  ctx: ParserContext) -> ast.Expression:
     """Analiza el texto crudo de un ``{expr}`` como una expresion completa.
 
     El lexer solo delimita el texto de la interpolacion (ver ``Interp`` en
-    ``t_types.py``); su analisis es responsabilidad del parser (EBNF secc. 5).
+    ``t_types.py``); su analisis es responsabilidad del parser (EBNF).
     Se re-tokeniza y re-parsea el fragmento de forma aislada (una interpolacion
     nunca cruza saltos de linea, ver ``scanners/strings.py``), y las posiciones
     del sub-arbol resultante se reubican a la posicion real en el archivo.
     """
     from src.frontend.lexer.lexer import tokenize as _tokenize
 
-    sub_tokens = _tokenize(interp.expr)
+    texto, conversion, formato = separar_formato(interp.expr)
+    if formato is not None and not formato_valido(formato):
+        raise ParseError.InvalidExpressionError(
+            f"interpolacion invalida: el formato ':{formato}' no se entiende; "
+            "es [0][ancho][.precision][tipo], con tipo d, x, X, b, o o f",
+            line=string_tok.ln, column=interp.col,
+        )
+    sub_tokens = _tokenize(texto)
     sub_cursor = Cursor(sub_tokens)
     sub_ctx = ParserContext()
+    # '{.campo}' dentro de un 'with' se refiere a su receptor
+    sub_ctx.with_receivers = list(ctx.with_receivers)
 
     from .. import pratt
     try:
@@ -305,7 +320,53 @@ def _parse_interp(interp: Interp, string_tok: Token) -> ast.Expression:
         )
 
     _relocate(expr, string_tok.ln, interp.col)
+    if conversion or formato:
+        return ast.FormattedValue(ln=string_tok.ln, col=interp.col, value=expr,
+                                  conversion=conversion, format_spec=formato or "")
     return expr
+
+
+def separar_formato(texto: str):
+    """``'x!r:>8'`` -> ``('x', 'r', '>8')``; ``'n:08b'`` -> ``('n', '', '08b')``.
+
+    El ``!`` y el ``:`` se buscan FUERA de parentesis, llaves, corchetes y
+    literales: dentro de una interpolacion puede haber un literal de struct
+    (``g{k: 1}``), una cadena con dos puntos o un ``!=``. El formato es
+    ``None`` si no hay ``:``.
+    """
+    profundidad = 0
+    i, n = 0, len(texto)
+    while i < n:
+        c = texto[i]
+        if c in "\"'":
+            i += 1
+            while i < n and texto[i] != c:
+                i += 2 if texto[i] == "\\" else 1
+            i += 1
+            continue
+        if c in "([{":
+            profundidad += 1
+        elif c in ")]}":
+            profundidad -= 1
+        elif profundidad == 0 and c == "!" and texto[i + 1:i + 2] == "r" \
+                and (i + 2 == n or texto[i + 2] == ":"):
+            return texto[:i], "r", (texto[i + 3:] if i + 2 < n else None)
+        elif profundidad == 0 and c == ":":
+            return texto[:i], "", texto[i + 1:]
+        i += 1
+    return texto, "", None
+
+
+#: ``[0][ancho][.precision][tipo]`` de un ``{x:spec}``. Una sola fuente: la
+#: usa el parser y la publica ``--emit-lang-info`` (para colorearla).
+FORMAT_SPEC = r"0?([1-9][0-9]*)?(\.[0-9]+)?[dxXbof]?"
+
+
+def formato_valido(formato: str) -> bool:
+    """``[0][ancho][.precision][tipo]``: la sintaxis. Que el tipo del valor
+    admita ese formato lo decide la Semantica."""
+    import re
+    return re.fullmatch(FORMAT_SPEC, formato) is not None
 
 
 def _relocate(node: object, ln: int, col: int) -> None:
@@ -375,6 +436,7 @@ def _cast(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
 
 PRIMARY_HANDLERS: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Expression]] = {
     TokenType.IDENTIFIER: _identifier,
+    TokenType.DOT: lambda c, x: _miembro_del_receptor(c, x),   # '.campo' de un 'with'
     TokenType.DUNDER: _identifier,  # referencia a un nombre '__x__' (p. ej. llamar un hook explicitamente)
     TokenType.INT_LIT: _lit_int,
     TokenType.FLOAT_LIT: _lit_float,

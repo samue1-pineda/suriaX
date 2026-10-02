@@ -1,12 +1,13 @@
 """Fuente unica de verdad de la precedencia de operadores infijos.
 
 Cubre exactamente la cadena de precedencia de ``docs/gramar/grammar.ebnf``
-(seccion 3), de menor a mayor:
+(de ``expression`` a ``factor``), de menor a mayor:
 
     assignment(=, +=, -=, *=, /=, %=) < or < and < equality(==,!=)
-        < comparison(<,<=,>,>=) < term(+,-) < factor(*,/,%)
+        < comparison(<,<=,>,>=) < or de bits(|) < xor(^) < y de bits(&)
+        < desplazamiento(<<,>>) < term(+,-) < factor(*,/,%)
 
-``unary`` (``not``/``-``/``&``), ``placement`` (``at``) y ``postfix``
+``unary`` (``not``/``-``/``~``/``&``) y ``postfix``
 (``.``/``()``/``[]``) NO son parte de esta tabla: se resuelven de forma
 estructural (recursion right-nested / bucle de encadenamiento) en
 ``expressions/nud.py`` antes de entrar al bucle binario de ``pratt.py``, ya
@@ -48,6 +49,11 @@ BINDING_POWER: Dict[TokenType, Tuple[int, Assoc]] = {
     TokenType.STAR_ASSIGN: (10, Assoc.RIGHT),
     TokenType.SLASH_ASSIGN: (10, Assoc.RIGHT),
     TokenType.PERCENT_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.AMP_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.PIPE_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.CARET_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.SHIFT_LEFT_ASSIGN: (10, Assoc.RIGHT),
+    TokenType.SHIFT_RIGHT_ASSIGN: (10, Assoc.RIGHT),
 
     TokenType.OR: (20, Assoc.LEFT),
 
@@ -60,6 +66,14 @@ BINDING_POWER: Dict[TokenType, Tuple[int, Assoc]] = {
     TokenType.LESS_EQUAL: (50, Assoc.LEFT),
     TokenType.GREATER: (50, Assoc.LEFT),
     TokenType.GREATER_EQUAL: (50, Assoc.LEFT),
+
+    # BITS, entre las comparaciones y la suma, como en Python y Rust (no como
+    # en C, donde 'a & b == c' es 'a & (b == c)'): | < ^ < & < desplazamientos
+    TokenType.PIPE: (52, Assoc.LEFT),
+    TokenType.CARET: (54, Assoc.LEFT),
+    TokenType.ADDRESS: (56, Assoc.LEFT),     # '&' infijo
+    TokenType.SHIFT_LEFT: (58, Assoc.LEFT),
+    TokenType.SHIFT_RIGHT: (58, Assoc.LEFT),
 
     TokenType.PLUS: (60, Assoc.LEFT),
     TokenType.MINUS: (60, Assoc.LEFT),

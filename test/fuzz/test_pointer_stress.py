@@ -14,8 +14,21 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import run_program  # noqa: E402
+from helpers import omitir, run_program  # noqa: E402
 from runtime.interpreter.memory import native  # noqa: E402
+
+
+def _exigir_nativo() -> None:
+    """Omite la prueba (visible, con la causa) si ``memory_c`` no cargó.
+
+    Antes era ``if not native.AVAILABLE: return``: la prueba "pasaba" sin
+    ejecutar nada, en esta máquina y en la CI, que no construye el módulo.
+    """
+    if not native.AVAILABLE:
+        omitir(f"el módulo nativo 'memory_c' no cargó ({native.LOAD_ERROR}); "
+               "constrúyelo con: cmake -S . -B build && "
+               "cmake --build build --target suriax-native")
+
 
 _W = "fn __write__(str s) -> void;\n"
 
@@ -30,8 +43,7 @@ def _M():
 # --------------------------------------------------------------------------- #
 
 def test_masa_de_cien_mil_celdas():
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     M = _M()
     N = 100_000
     hs = [M.create(i) for i in range(N)]
@@ -56,8 +68,7 @@ def test_masa_de_cien_mil_celdas():
 # --------------------------------------------------------------------------- #
 
 def test_adversarial_estados_de_celda():
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     M = _M()
     h = M.create(1)
     assert M.move_out(h) == (0, 1)
@@ -75,8 +86,7 @@ def test_adversarial_estados_de_celda():
 
 def test_handle_invalido_no_crashea():
     """Un handle que no existe devuelve BAD_HANDLE (5), no un segfault."""
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     M = _M()
     bad = 2 ** 40
     assert M.read(bad)[0] == 5        # BAD_HANDLE
@@ -88,8 +98,7 @@ def test_handle_invalido_no_crashea():
 
 def test_ciclo_intenso_move_write_revive():
     """Miles de ciclos move→write→read sobre la misma celda (revivir)."""
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     M = _M()
     h = M.create(0)
     for i in range(50_000):
@@ -139,8 +148,7 @@ def test_cadena_de_punteros_profunda_differential():
     src = _chain_program(200)
     py = _prog_lines(src, "0")
     assert "19900" in py, py
-    if not native.AVAILABLE:
-        return
+    _exigir_nativo()
     nat = _prog_lines(src, "1")
     assert nat == py, (nat, py)
 

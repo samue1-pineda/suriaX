@@ -1,0 +1,335 @@
+/- frontend.tokens — el vocabulario de suriaX, escrito en suriaX.
+
+ Primera pieza del bootstrap (ver `src/readme.md`): la V1 del compilador se
+ escribe en el propio lenguaje, y empieza donde empieza cualquier
+ compilador, por los tokens.
+
+ Los valores de `TType` son LOS MISMOS que los de `TokenType` en la V0
+ (`V0/include/t_types.py`), número por número. No es casualidad ni
+ comodidad: con los mismos números, el lexer de la V0 y este se pueden
+ comparar token a token sobre el mismo fuente
+ (`test/e2e/test_bootstrap_lexer.py`), y cualquier diferencia es un error de
+ uno de los dos. Los huecos (9, 39-42, 44-45, 47-48, 57-59, 90, 94, 99) son
+ los mismos huecos de la V0: números retirados que no se reutilizan.
+-/
+
+enum TType {
+    // literales e identificadores
+    IDENTIFIER = 1,
+    CHAR_LIT = 2,
+    INT_LIT = 3,
+    FLOAT_LIT = 4,
+    STRING_LIT = 5,
+    TRUE = 6,
+    FALSE = 7,
+    NULL = 8,
+
+    // tipos primitivos (palabras reservadas de tipo)
+    VOID = 10,
+    BOOL = 11,
+    TYPE = 12,
+    INT = 13,
+    FLOAT = 14,
+    CHAR = 22,
+    STR = 23,
+
+    // declaraciones
+    CONST = 15,
+    MUTABLE = 16,
+    FUNCTION = 17,
+    STRUCT = 18,
+    ENUM = 19,
+    SIZEOF = 20,
+    DUNDER = 21,
+    VAR = 24,
+
+    // visibilidad y especificadores
+    PUBLIC = 34,
+    PRIVATE = 35,
+    INTERNAL = 36,
+    HOOK = 37,
+    DUNDER_KW = 38,
+
+    // control de flujo
+    IF = 25,
+    ELSE = 26,
+    WHILE = 27,
+    RETURN = 28,
+    MATCH = 29,
+    CASE = 30,
+    BREAK = 31,
+    CONTINUE = 32,
+    TEST = 33,
+
+    // memoria
+    MOVE = 43,
+    FREE = 46,
+    POINTER = 49,
+    ADDRESS = 50,
+    NULLABLE = 51,
+    CAST = 52,
+
+    // excepciones
+    ERRORTYPE = 53,
+    TRY = 54,
+    CATCH = 55,
+    THROW = 56,
+    FINALLY = 59,
+
+    // operadores
+    ASSIGN = 60,
+    PLUS = 61,
+    MINUS = 62,
+    MULTIPLY = 63,
+    DIVIDE = 64,
+    EQUAL = 65,
+    NOT_EQUAL = 66,
+    LESS = 67,
+    LESS_EQUAL = 68,
+    GREATER = 69,
+    GREATER_EQUAL = 70,
+    ARROW = 71,
+    MODULO = 72,
+    PLUS_ASSIGN = 73,
+    MINUS_ASSIGN = 74,
+    AND = 75,
+    OR = 76,
+    NOT = 77,
+    STAR_ASSIGN = 78,
+    SLASH_ASSIGN = 79,
+    PERCENT_ASSIGN = 91,
+    INCREMENT = 92,
+    DECREMENT = 93,
+
+    // delimitadores
+    L_PAREN = 80,
+    R_PAREN = 81,
+    L_BRACE = 82,
+    R_BRACE = 83,
+    L_BRACKET = 84,
+    R_BRACKET = 85,
+    DOT = 86,
+    COMMA = 87,
+    SEMICOLON = 88,
+    COLON = 89,
+
+    // especiales
+    DECORATOR = 95,
+    DIRECTIVE = 96,
+    RAW_BLOCK = 97,
+    ERROR = 98,
+    EOF = 100,
+
+    // recursos
+    WITH = 101,
+
+    // bits ('>>' y '>>=' los arma el parser: el lexer da dos '>')
+    PIPE = 102,
+    CARET = 103,
+    TILDE = 104,
+    SHIFT_LEFT = 105,
+    SHIFT_RIGHT = 106,
+    AMP_ASSIGN = 107,
+    PIPE_ASSIGN = 108,
+    CARET_ASSIGN = 109,
+    SHIFT_LEFT_ASSIGN = 110,
+    SHIFT_RIGHT_ASSIGN = 111,
+    BYTE = 112
+};
+
+/- Un token: su clase, el texto EXACTO que lo formó y dónde empieza.
+
+   `lexema` es el texto crudo del fuente, comillas y prefijos incluidos
+   (`"hola"`, `f"x{a}"`, `'\n'`, `#import`). Resolver escapes o partir una
+   f-string en segmentos es trabajo de quien lo consuma; aquí el token solo
+   delimita. La V0 guarda además el valor ya convertido: aquí no hace falta
+   para comparar, y sin tipos suma no habría dónde ponerlo sin perder `==`.
+
+   `inicios` solo lo usa una cadena que resultó de UNIR varias ("a" "b"):
+   la columna donde empezaba cada literal, separadas por ';'. El parser la
+   necesita para ubicar cada `{expr}` de una f-string en su columna real,
+   aunque el literal estuviera en otra línea. Vacío en cualquier otro token.
+-/
+struct {
+    TType tipo;
+    str lexema;
+    int linea;
+    int col;
+    str inicios;
+} Token;
+
+public fn token(TType tipo, str lexema, int linea, int col) -> Token {
+    return Token{ tipo: tipo, lexema: lexema, linea: linea, col: col, inicios: "" };
+}
+
+/- La clase de un nombre: una palabra reservada, o `IDENTIFIER`.
+
+   Un `match` sobre `str` hace de tabla: el lenguaje todavía no tiene un
+   diccionario en su librería estándar. -/
+public fn palabra_clave(str nombre) -> TType {
+    match (nombre) {
+        case "char": { return TType.CHAR; }
+        case "int": { return TType.INT; }
+        case "float": { return TType.FLOAT; }
+        case "str": { return TType.STR; }
+        case "byte": { return TType.BYTE; }
+        case "bool": { return TType.BOOL; }
+        case "void": { return TType.VOID; }
+        case "true": { return TType.TRUE; }
+        case "false": { return TType.FALSE; }
+        case "null": { return TType.NULL; }
+        case "type": { return TType.TYPE; }
+        case "const": { return TType.CONST; }
+        case "var": { return TType.VAR; }
+        case "mutable": { return TType.MUTABLE; }
+        case "fn": { return TType.FUNCTION; }
+        case "struct": { return TType.STRUCT; }
+        case "enum": { return TType.ENUM; }
+        case "sizeof": { return TType.SIZEOF; }
+        case "public": { return TType.PUBLIC; }
+        case "private": { return TType.PRIVATE; }
+        case "internal": { return TType.INTERNAL; }
+        case "hook": { return TType.HOOK; }
+        case "dunder": { return TType.DUNDER_KW; }
+        case "error": { return TType.ERRORTYPE; }
+        case "try": { return TType.TRY; }
+        case "catch": { return TType.CATCH; }
+        case "throw": { return TType.THROW; }
+        case "finally": { return TType.FINALLY; }
+        case "with": { return TType.WITH; }
+        case "if": { return TType.IF; }
+        case "else": { return TType.ELSE; }
+        case "while": { return TType.WHILE; }
+        case "return": { return TType.RETURN; }
+        case "match": { return TType.MATCH; }
+        case "case": { return TType.CASE; }
+        case "break": { return TType.BREAK; }
+        case "continue": { return TType.CONTINUE; }
+        case "test": { return TType.TEST; }
+        case "move": { return TType.MOVE; }
+        case "free": { return TType.FREE; }
+        case "ptr": { return TType.POINTER; }
+        case "cast": { return TType.CAST; }
+        case "and": { return TType.AND; }
+        case "or": { return TType.OR; }
+        case "not": { return TType.NOT; }
+    }
+    return TType.IDENTIFIER;
+}
+
+/- ¿Es `nombre` una directiva que existe (`#import`, `#export`...)? -/
+public fn es_directiva(str nombre) -> bool {
+    return nombre == "import" or nombre == "export" or nombre == "extern"
+        or nombre == "test" or nombre == "from";
+}
+
+/- El nombre de una clase, para leer un volcado.
+
+   Es un `match` de una rama por clase porque `.name` se resuelve al
+   COMPILAR: vale sobre un item escrito (`TType.PLUS.name`), no sobre una
+   variable. Es la falencia más visible de este archivo (ver el readme). -/
+public fn nombre_de(TType t) -> str {
+    match (t) {
+        case TType.IDENTIFIER: { return TType.IDENTIFIER.name; }
+        case TType.CHAR_LIT: { return TType.CHAR_LIT.name; }
+        case TType.INT_LIT: { return TType.INT_LIT.name; }
+        case TType.FLOAT_LIT: { return TType.FLOAT_LIT.name; }
+        case TType.STRING_LIT: { return TType.STRING_LIT.name; }
+        case TType.TRUE: { return TType.TRUE.name; }
+        case TType.FALSE: { return TType.FALSE.name; }
+        case TType.NULL: { return TType.NULL.name; }
+        case TType.VOID: { return TType.VOID.name; }
+        case TType.BOOL: { return TType.BOOL.name; }
+        case TType.TYPE: { return TType.TYPE.name; }
+        case TType.INT: { return TType.INT.name; }
+        case TType.FLOAT: { return TType.FLOAT.name; }
+        case TType.CHAR: { return TType.CHAR.name; }
+        case TType.STR: { return TType.STR.name; }
+        case TType.CONST: { return TType.CONST.name; }
+        case TType.MUTABLE: { return TType.MUTABLE.name; }
+        case TType.FUNCTION: { return TType.FUNCTION.name; }
+        case TType.STRUCT: { return TType.STRUCT.name; }
+        case TType.ENUM: { return TType.ENUM.name; }
+        case TType.SIZEOF: { return TType.SIZEOF.name; }
+        case TType.DUNDER: { return TType.DUNDER.name; }
+        case TType.VAR: { return TType.VAR.name; }
+        case TType.PUBLIC: { return TType.PUBLIC.name; }
+        case TType.PRIVATE: { return TType.PRIVATE.name; }
+        case TType.INTERNAL: { return TType.INTERNAL.name; }
+        case TType.HOOK: { return TType.HOOK.name; }
+        case TType.DUNDER_KW: { return TType.DUNDER_KW.name; }
+        case TType.IF: { return TType.IF.name; }
+        case TType.ELSE: { return TType.ELSE.name; }
+        case TType.WHILE: { return TType.WHILE.name; }
+        case TType.RETURN: { return TType.RETURN.name; }
+        case TType.MATCH: { return TType.MATCH.name; }
+        case TType.CASE: { return TType.CASE.name; }
+        case TType.BREAK: { return TType.BREAK.name; }
+        case TType.CONTINUE: { return TType.CONTINUE.name; }
+        case TType.TEST: { return TType.TEST.name; }
+        case TType.MOVE: { return TType.MOVE.name; }
+        case TType.FREE: { return TType.FREE.name; }
+        case TType.POINTER: { return TType.POINTER.name; }
+        case TType.ADDRESS: { return TType.ADDRESS.name; }
+        case TType.NULLABLE: { return TType.NULLABLE.name; }
+        case TType.CAST: { return TType.CAST.name; }
+        case TType.ERRORTYPE: { return TType.ERRORTYPE.name; }
+        case TType.TRY: { return TType.TRY.name; }
+        case TType.CATCH: { return TType.CATCH.name; }
+        case TType.THROW: { return TType.THROW.name; }
+        case TType.FINALLY: { return TType.FINALLY.name; }
+        case TType.WITH: { return TType.WITH.name; }
+        case TType.PIPE: { return TType.PIPE.name; }
+        case TType.CARET: { return TType.CARET.name; }
+        case TType.TILDE: { return TType.TILDE.name; }
+        case TType.SHIFT_LEFT: { return TType.SHIFT_LEFT.name; }
+        case TType.SHIFT_RIGHT: { return TType.SHIFT_RIGHT.name; }
+        case TType.AMP_ASSIGN: { return TType.AMP_ASSIGN.name; }
+        case TType.PIPE_ASSIGN: { return TType.PIPE_ASSIGN.name; }
+        case TType.CARET_ASSIGN: { return TType.CARET_ASSIGN.name; }
+        case TType.SHIFT_LEFT_ASSIGN: { return TType.SHIFT_LEFT_ASSIGN.name; }
+        case TType.SHIFT_RIGHT_ASSIGN: { return TType.SHIFT_RIGHT_ASSIGN.name; }
+        case TType.BYTE: { return TType.BYTE.name; }
+        case TType.ASSIGN: { return TType.ASSIGN.name; }
+        case TType.PLUS: { return TType.PLUS.name; }
+        case TType.MINUS: { return TType.MINUS.name; }
+        case TType.MULTIPLY: { return TType.MULTIPLY.name; }
+        case TType.DIVIDE: { return TType.DIVIDE.name; }
+        case TType.EQUAL: { return TType.EQUAL.name; }
+        case TType.NOT_EQUAL: { return TType.NOT_EQUAL.name; }
+        case TType.LESS: { return TType.LESS.name; }
+        case TType.LESS_EQUAL: { return TType.LESS_EQUAL.name; }
+        case TType.GREATER: { return TType.GREATER.name; }
+        case TType.GREATER_EQUAL: { return TType.GREATER_EQUAL.name; }
+        case TType.ARROW: { return TType.ARROW.name; }
+        case TType.MODULO: { return TType.MODULO.name; }
+        case TType.PLUS_ASSIGN: { return TType.PLUS_ASSIGN.name; }
+        case TType.MINUS_ASSIGN: { return TType.MINUS_ASSIGN.name; }
+        case TType.AND: { return TType.AND.name; }
+        case TType.OR: { return TType.OR.name; }
+        case TType.NOT: { return TType.NOT.name; }
+        case TType.STAR_ASSIGN: { return TType.STAR_ASSIGN.name; }
+        case TType.SLASH_ASSIGN: { return TType.SLASH_ASSIGN.name; }
+        case TType.PERCENT_ASSIGN: { return TType.PERCENT_ASSIGN.name; }
+        case TType.INCREMENT: { return TType.INCREMENT.name; }
+        case TType.DECREMENT: { return TType.DECREMENT.name; }
+        case TType.L_PAREN: { return TType.L_PAREN.name; }
+        case TType.R_PAREN: { return TType.R_PAREN.name; }
+        case TType.L_BRACE: { return TType.L_BRACE.name; }
+        case TType.R_BRACE: { return TType.R_BRACE.name; }
+        case TType.L_BRACKET: { return TType.L_BRACKET.name; }
+        case TType.R_BRACKET: { return TType.R_BRACKET.name; }
+        case TType.DOT: { return TType.DOT.name; }
+        case TType.COMMA: { return TType.COMMA.name; }
+        case TType.SEMICOLON: { return TType.SEMICOLON.name; }
+        case TType.COLON: { return TType.COLON.name; }
+        case TType.DECORATOR: { return TType.DECORATOR.name; }
+        case TType.DIRECTIVE: { return TType.DIRECTIVE.name; }
+        case TType.RAW_BLOCK: { return TType.RAW_BLOCK.name; }
+        case TType.ERROR: { return TType.ERROR.name; }
+        case TType.EOF: { return TType.EOF.name; }
+    }
+    return "?";
+}
+
+#export as tokens

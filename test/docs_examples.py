@@ -218,9 +218,13 @@ class Banco:
             os.symlink(origen, destino)
         except (OSError, NotImplementedError):  # sistemas sin symlink
             shutil.copytree(origen, destino)
-        # ancla la raíz del proyecto al banco, no al CWD del proceso
-        shutil.copyfile(os.path.join(_REPO_ROOT, ".suriaX_config.yaml"),
-                        os.path.join(self.dir, ".suriaX_config.yaml"))
+        # ancla la raíz del proyecto al banco, no al CWD del proceso. Se
+        # ESCRIBE aquí en vez de copiar el de la raíz del repo: ese archivo
+        # está en .gitignore (es configuración local) y en un checkout limpio
+        # no existe — la CI reventaba con FileNotFoundError.
+        with open(os.path.join(self.dir, ".suriaX_config.yaml"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("version: 2\ntarget: interp\n")
 
     def cerrar(self) -> None:
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -233,7 +237,7 @@ class Banco:
         if ejemplo.modo == EJECUTA:
             cmd.append("--run")
         return subprocess.run(cmd, cwd=self.dir, capture_output=True,
-                              text=True, timeout=180)
+                              text=True, encoding="utf-8", errors="replace", timeout=180)
 
 
 def _diagnosticos(salida: str) -> List[str]:

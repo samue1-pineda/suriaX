@@ -1,0 +1,53 @@
+/- Excepciones 15: el repertorio estándar, para lanzar las propias.
+
+ La librería 'excepciones' no solo trae las que lanza el runtime: también
+ las de uso general, como las de Python, para no inventar un tipo por cada
+ error común. Solo llevan 'mensaje':
+
+     ValorInvalido    un valor inaceptable       (Python: ValueError)
+     NoEncontrado     se buscó algo que no está  (Python: KeyError)
+     NoImplementado   todavía no existe          (Python: NotImplementedError)
+     EstadoInvalido   no tiene sentido ahora     (Python: RuntimeError)
+
+ Se lanzan y se atrapan como cualquier valor, cada una en su rama.
+-/
+#from io #import stdp
+#import excepciones as exc
+
+fn edad_valida(int edad) -> int {
+    if (edad < 0) { throw exc.ValorInvalido{ mensaje: f"edad negativa: {edad}" }; };
+    return edad;
+}
+
+fn busca(str nombre) -> int {
+    if (nombre == "ana") { return 31; };
+    throw exc.NoEncontrado{ mensaje: f"no hay nadie llamado '{nombre}'" };
+    return 0;
+}
+
+fn exporta() -> void {
+    throw exc.NoImplementado{ mensaje: "exportar a PDF todavia no existe" };
+}
+
+fn prueba(int caso) -> void {
+    try {
+        if (caso == 0) { edad_valida(-3); };
+        if (caso == 1) { busca("luis"); };
+        if (caso == 2) { exporta(); };
+        if (caso == 3) { throw exc.EstadoInvalido{ mensaje: "la cola ya esta cerrada" }; };
+        stdp.println(f"  caso {caso}: sin error, {busca("ana")}");
+    }
+    catch (exc.ValorInvalido e) { stdp.println(f"  valor invalido: {e.mensaje}"); }
+    catch (exc.NoEncontrado e) { stdp.println(f"  no encontrado: {e.mensaje}"); }
+    catch (exc.NoImplementado e) { stdp.println(f"  no implementado: {e.mensaje}"); }
+    catch (exc.EstadoInvalido e) { stdp.println(f"  estado invalido: {e.mensaje}"); };
+}
+
+fn main() -> int {
+    var int i = 0;
+    while (i < 5) {
+        prueba(i);
+        i = i + 1;
+    };
+    return 0;
+}

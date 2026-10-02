@@ -8,13 +8,13 @@ name: CI
 # que solo se rompe en una máquina limpia — y son promesas concretas que el
 # proyecto hace por escrito:
 #
-#   1. "El frontend no depende de nada externo, solo la stdlib de Python."
-#      (README, how_to_run.md, ARCHITECTURE.md). Es fácil romperla sin notarlo:
-#      basta un 'import yaml' en el sitio equivocado, y en local funciona
-#      porque yaml está instalado.
-#   2. "Los stubs de protobuf se generan, no se commitean" (PROTOBUF_BRIDGE).
-#      'V0/src/HIR/gen/' está en .gitignore: si el .proto queda mal, en local
-#      nadie se entera porque el stub viejo sigue ahí.
+#   1. "El compilador corre solo con la stdlib de Python": frontend, HIR e
+#      intérprete (README, how_to_run.md, ARCHITECTURE.md). Es fácil romperla
+#      sin notarlo: basta un 'import yaml' en el sitio equivocado, y en local
+#      funciona porque yaml está instalado.
+#   2. "Lo que sí exige una dependencia lo dice": hoy solo '--init-config'
+#      (pyyaml). Tiene que salir con el código 3 y un mensaje, no con un
+#      traceback.
 #   3. "El .phir es reproducible." Localmente eso se prueba entre CORRIDAS;
 #      aquí se prueba entre MÁQUINAS y versiones de Python, que es la promesa
 #      de verdad (una caché de build por hash depende de ella).
@@ -23,6 +23,11 @@ name: CI
 #
 # Ninguna de las cuatro la puede contestar 'tests.yml', y las cuatro rompen
 # silenciosamente.
+#
+# El programa que se compila va ESCRITO AQUÍ (env PROGRAMA) y cada job lo
+# vuelca a disco. No depende de ningún archivo de prueba del repositorio: un
+# ejercicio local (como fue 'b.srcx', que estaba en .gitignore) no puede ser
+# dependencia de la CI — en un checkout limpio no existe.
 
 on:
   push:
@@ -33,9 +38,66 @@ on:
 permissions:
   contents: read
 
+env:
+  # Estructuras de datos de punta a punta: struct con métodos (@impl) y un
+  # hook, enum + match, try/catch, while y el vector GENÉRICO de la stdlib
+  # (#import de un paquete y de un submódulo). Devuelve 0: la salida se
+  # comprueba aparte, y un exit distinto de 0 haría fallar el paso.
+  PROGRAMA: |
+    #from io #import stdp
+    #import array.vector as vec
+
+    struct {
+        str nombre;
+        int saldo;
+    } Cuenta;
+
+    enum Estado { ACTIVA, VACIA };
+
+    @impl Cuenta {
+        fn deposita(Cuenta ptr mutable self, int cuanto) -> void {
+            if (cuanto <= 0) { throw "un deposito es positivo"; };
+            self.saldo = self.saldo + cuanto;
+        }
+        fn estado(Cuenta ptr self) -> Estado {
+            if (self.saldo == 0) { return Estado.VACIA; };
+            return Estado.ACTIVA;
+        }
+    }
+
+    hook fn __print__(Cuenta ptr c) -> void { stdp.println(f"{c.nombre}: {c.saldo}"); }
+
+    fn describe(Estado e) -> str {
+        match (e) {
+            case Estado.ACTIVA: { return "activa"; }
+            case Estado.VACIA: { return "vacia"; }
+        }
+        return "?";
+    }
+
+    fn main() -> int {
+        var Cuenta a = Cuenta{ nombre: "ahorro", saldo: 0 };
+        stdp.println(describe(a.estado()));
+        a.deposita(40);
+        print(a);
+        try { a.deposita(0); } catch (str e) { stdp.println(f"error: {e}"); };
+
+        var vec.Vector<int> v = vec.make<int>(4);
+        var int i = 1;
+        while (i <= 3) {
+            v.push(i * 10);
+            i = i + 1;
+        };
+        var int total = v.get(0) + v.get(1) + v.get(2);
+        stdp.println(f"total = {total}, len = {v.len()}");
+        return 0;
+    };
+  # Lo que el programa tiene que imprimir: si cambia, cambió el lenguaje.
+  SALIDA_ESPERADA: "total = 60, len = 3"
+
 jobs:
   sin-dependencias:
-    name: El frontend funciona sin dependencias externas
+    name: El compilador corre sin dependencias externas
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -47,21 +109,28 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Escribir el programa
+        run: printf '%s' "$PROGRAMA" > ci_programa.srcx
+
       # A PROPÓSITO no se instala nada: ni protobuf, ni pyyaml, ni protoc.
       # Ese es el experimento.
-      - name: Compilar sin instalar nada
+      - name: Compilar y ejecutar sin instalar nada
         run: |
-          python V0/main.py b.srcx
-          python V0/main.py test/manual/lexer/sample.srcx
+          salida=$(python V0/main.py ci_programa.srcx --run)
+          echo "$salida"
+          echo "$salida" | grep -qF "$SALIDA_ESPERADA" || {
+            echo "el programa no imprimió '$SALIDA_ESPERADA'"; exit 1; }
 
-      - name: Ningún módulo del frontend importa una dependencia externa
+      - name: Ningún módulo del compilador importa una dependencia externa
         run: |
           python - <<'PY'
+          import contextlib
+          import io
+          import os
           import sys
 
-          # Se bloquean ANTES de importar el compilador: si algún módulo del
-          # frontend las importa al cargarse, esto revienta con un mensaje
-          # que dice cuál y por qué.
+          # Se bloquean ANTES de importar el compilador: si algún módulo las
+          # importa al cargarse, esto revienta con un mensaje que dice cuál.
           #
           # 'find_spec', no 'find_module': el segundo se eliminó del sistema de
           # importación en Python 3.12 y ya no lo llama nadie, así que un
@@ -72,8 +141,8 @@ jobs:
               def find_spec(self, name, path=None, target=None):
                   if name.split(".")[0] in ("google", "yaml", "protobuf"):
                       raise ImportError(
-                          f"el frontend importó '{name}': tiene que funcionar "
-                          "solo con la stdlib (ver README y how_to_run.md)")
+                          f"el compilador importó '{name}': tiene que funcionar "
+                          "solo con la stdlib (ver how_to_run.md)")
                   return None
 
           sys.meta_path.insert(0, Bloqueo())
@@ -89,30 +158,28 @@ jobs:
                                "esta comprobación no estaría probando nada")
 
           sys.path[:0] = [".", "V0"]
+          from driver import CompileOptions, compile_source, execute
 
-          from src.frontend.lexer.lexer import Lexer
-          from src.frontend.parser.parser import Parser
-          from src.frontend.parser.typed_ast import resolve_types
-          from src.frontend.semantic import analyze
-
-          fuente = open("b.srcx", encoding="utf-8").read()
-          lx = Lexer(fuente, file="b.srcx")
-          tokens = lx.tokenize()
-          parser = Parser(tokens)
-          programa = parser.parse()
-          resolve_types(programa)
-          _tabla, errores = analyze(programa, source_path="b.srcx")
-          assert not lx.errors and not parser.ctx.errors and not errores, \
-              "el ejercicio del repositorio no compila"
-          print("frontend completo sin una sola dependencia externa: ok")
+          # El pipeline ENTERO en proceso, con el bloqueo puesto: frontend,
+          # HIR (codec propio, sin protobuf) e intérprete.
+          resultado = compile_source("ci_programa.srcx", CompileOptions(run=True))
+          assert resultado.ok, [f"{d.code}: {d.message}" for d in resultado.diagnostics]
+          assert resultado.phir_path, "no se emitió el .phir"
+          salida = io.StringIO()
+          with contextlib.redirect_stdout(salida):
+              codigo = execute(resultado)
+          assert codigo == 0, f"el programa terminó con {codigo}:\n{salida.getvalue()}"
+          assert os.environ["SALIDA_ESPERADA"] in salida.getvalue(), salida.getvalue()
+          print("compilador completo (frontend, HIR e intérprete) sin dependencias: ok")
           PY
 
-      - name: El compilador dice qué le falta, en vez de reventar
+      - name: Lo que sí exige una dependencia lo dice, en vez de reventar
         run: |
-          # Sin protobuf, pedir el HIR tiene que ser un error CLARO (código 3,
-          # dependencia faltante), no un traceback.
+          # '--init-config' escribe el yaml y necesita pyyaml: sin él tiene que
+          # salir con un error CLARO (código 3, dependencia faltante), no con
+          # un traceback.
           set +e
-          salida=$(python V0/main.py b.srcx --emit-hir 2>&1)
+          salida=$(python V0/main.py --init-config 2>&1)
           codigo=$?
           set -e
           echo "$salida"
@@ -121,6 +188,7 @@ jobs:
             echo "reventó en vez de diagnosticar"
             exit 1
           fi
+          echo "$salida" | grep -q "pyyaml" || { echo "el mensaje no nombra la dependencia"; exit 1; }
           echo "diagnóstico de dependencia correcto"
 
   version-minima:
@@ -141,26 +209,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-          cache: "pip"
 
-      - name: Dependencias
+      - name: Escribir el programa
+        run: printf '%s' "$PROGRAMA" > ci_programa.srcx
+
+      - name: El programa compila y corre
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-          python -m pip install --upgrade pip
-          pip install protobuf pyyaml
-
-      - name: Los stubs se REGENERAN desde el .proto
-        run: |
-          # 'V0/src/HIR/gen/' está en .gitignore: aquí no existe. Que el
-          # compilador arranque demuestra que protoc puede generarlo desde
-          # cero, que es la promesa de PROTOBUF_BRIDGE.md.
-          test ! -f V0/src/HIR/gen/hir_pb2.py || { echo "el stub venía commiteado"; exit 1; }
-          python V0/main.py b.srcx --emit-hir
-          test -f V0/src/HIR/gen/hir_pb2.py
-
-      - name: El ejercicio del repositorio compila y corre
-        run: python V0/main.py b.srcx --run
+          salida=$(python V0/main.py ci_programa.srcx --run)
+          echo "$salida"
+          echo "$salida" | grep -qF "$SALIDA_ESPERADA" || {
+            echo "el programa no imprimió '$SALIDA_ESPERADA'"; exit 1; }
 
       - name: Huella del .phir
         id: huella
@@ -169,9 +227,9 @@ jobs:
           # dejara la configuracion, y una segunda copia vieja habria dado una
           # huella equivocada sin que nada avisara.
           mkdir -p huella
-          python V0/main.py b.srcx --emit-hir huella/b.srcx.phir >/dev/null
-          test -f huella/b.srcx.phir || { echo "no se emitio el .phir"; exit 1; }
-          sha=$(sha256sum huella/b.srcx.phir | cut -d" " -f1)
+          python V0/main.py ci_programa.srcx --emit-hir huella/ci_programa.srcx.phir >/dev/null
+          test -f huella/ci_programa.srcx.phir || { echo "no se emitio el .phir"; exit 1; }
+          sha=$(sha256sum huella/ci_programa.srcx.phir | cut -d" " -f1)
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "huella en Python ${{ matrix.python }}: $sha"
 
@@ -179,7 +237,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: huella-py${{ matrix.python }}
-          path: huella/b.srcx.phir
+          path: huella/ci_programa.srcx.phir
           if-no-files-found: error
 
   reproducible:
@@ -199,7 +257,7 @@ jobs:
       # build por hash y los golden compartidos entre backends.
       - name: Comparar
         run: |
-          mapfile -t archivos < <(find huellas -name "b.srcx.phir" | sort)
+          mapfile -t archivos < <(find huellas -name "ci_programa.srcx.phir" | sort)
           test "${#archivos[@]}" -ge 2 || { echo "hacen falta 2 huellas"; exit 1; }
           primera=$(sha256sum "${archivos[0]}" | cut -d' ' -f1)
           for a in "${archivos[@]}"; do
@@ -237,7 +295,8 @@ jobs:
           faltan = [k for k in ("lang_info_version", "compiler_version",
                                 "keywords", "symbols",
                                 "hooks", "tokens", "errors", "directives",
-                                "severities", "stages") if k not in d]
+                                "severities", "stages", "syntax",
+                                "snippets") if k not in d]
           assert not faltan, f"la especificación perdió claves: {faltan}"
           assert d["keywords"] and d["symbols"] and d["errors"], \
               "la especificación viene vacía"
@@ -252,4 +311,20 @@ jobs:
           print(f"lang_info v{d['lang_info_version']} de suriaX {VERSION}: "
                 f"{len(d['keywords'])} keywords, {len(d['symbols'])} símbolos, "
                 f"{len(d['errors'])} códigos de error")
+          PY
+
+      # '--emit-index' es el canal de hover / ir a la definición / completar:
+      # un archivo con una función tiene que dar su símbolo, con firma.
+      - name: El índice del LSP responde
+        run: |
+          printf 'fn doble(int n) -> int { return n * 2; }\nfn main() -> int { return doble(2); }\n' \
+            | python V0/main.py probe.srcx --emit-index --stdin > index.json
+          python - <<'PY'
+          import json
+          d = json.load(open("index.json", encoding="utf-8"))
+          assert d["diagnostics"] == [], d["diagnostics"]
+          doble = [s for s in d["symbols"] if s["name"] == "doble"]
+          assert doble and doble[0]["detail"] == "fn doble(int n) -> int", d["symbols"]
+          print(f"index v{d['index_version']}: {len(d['symbols'])} símbolos, "
+                f"{len(d['references'])} referencias")
           PY

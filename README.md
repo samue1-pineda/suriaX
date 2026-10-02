@@ -44,21 +44,21 @@ suriaX is a programming language whit the following goals:
 
 **First version of the web documentation built**!
 
-<<<<<<< HEAD
-the project is currently a **Pre-Alpha Preview**.
-=======
-the project is currently a **Pre-Alpha Preview**
->>>>>>> 4496c5c ([implementation][hot take]: version 0.3.0 init)
+the project is currently a **Pre-Alpha Preview**. The exact number is the *Version* badge above: it comes from [`version.py`](version.py), the single source every consumer reads. Everything that is known to fail in the current version is listed in [c_errorstfix.md](c_errorstfix.md).
 
 [**x**] language syntax & EBNF grammar
 
-[**x**] frontend(lexer,parser and AST generation) 
+[**x**] frontend (lexer, parser, AST and typed AST, semantic analysis)
 
-[**/**] Intermediate Representations(HIR, MIR & lowering)
+[**x**] HIR (protobuf wire format, written with the Python standard library only) and a tree-walk interpreter that runs it
 
-[ ] Backend VM JIT
+[**x**] bootstrap: the compiler written in suriaX (`src/`, the V1) compiles itself, and every unit it produces is byte-identical to the Python compiler's (the fixed point) — diagnostics are next
 
-[ ] suriniX build system, web documentation & playground -**planned**
+[**/**] native backend in C++: HIR reader, MIR lowering (virtual registers + CFG), a register VM and ownership verification — no JIT and no native binaries yet
+
+[**/**] web target: a declared subset of the language compiled to WebAssembly
+
+[**/**] suriniX tooling: the `suri` command, a web playground that shows every compiler phase and the documentation site — the build system is still **planned**
 
 *For the  full list of tasks, see [ROADMAP.md](ROADMAP.md).*
 

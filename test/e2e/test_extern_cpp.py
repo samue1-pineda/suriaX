@@ -18,17 +18,13 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from helpers import run_project  # noqa: E402
+from helpers import omitir, run_project  # noqa: E402
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 if _REPO not in sys.path:
     sys.path.insert(0, _REPO)
 
 _COMPILER = os.path.join(_REPO, "V0", "main.py")
-
-
-def _skip(reason: str) -> None:
-    print(f"      (omitido: {reason})", file=sys.stderr)
 
 
 def _hay_cxx() -> bool:
@@ -50,7 +46,8 @@ def _correr(fuente: str, *, flags: str = "", stdin: str = "") -> str:
             fh.write(fuente)
         proc = subprocess.run(
             [sys.executable, _COMPILER, ruta, "--run"],
-            capture_output=True, text=True, cwd=tmp, timeout=300,
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace", cwd=tmp, timeout=300,
             input=stdin, env=entorno)
     return proc.stdout + proc.stderr
 
@@ -82,8 +79,7 @@ fn main() -> int {
 
 def test_el_bloque_se_compila_y_sus_prototipos_se_ligan():
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr(_CONSOLA)
     assert "[cpp] hola" in salida, salida
     assert "suriaX recibio 42" in salida, salida
@@ -93,8 +89,7 @@ def test_una_cadena_cruza_la_frontera_como_const_char():
     """El único marshalling de la frontera: en suriaX es texto Unicode y en C
     un ``const char*``, así que se codifica a UTF-8 al entrar."""
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr(_CONSOLA.replace('escribe("hola")', 'escribe("añ日")'))
     assert "[cpp] añ日" in salida, salida
 
@@ -104,8 +99,7 @@ def test_sin_extern_c_el_simbolo_no_se_liga_y_el_error_lo_dice():
     según la firma: sin 'extern "C"' el enlace falla por algo que no se ve en
     el código, así que el diagnóstico tiene que nombrarlo."""
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr('''\
 #extern cpp{
 void solitaria() { }
@@ -123,8 +117,7 @@ def test_un_tipo_sin_abi_se_omite_diciendo_por_que():
     """Un prototipo que no puede cruzar no se liga a medias: se dice cuál y
     por qué, y el intérprete sigue pudiendo cumplirlo por otra vía."""
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr('''\
 #extern cpp{
 #include <cstring>
@@ -189,8 +182,7 @@ def test_las_banderas_cambian_la_construccion_y_no_se_cachea_de_mas():
     clave de caché, añadir '-l...' no reconstruiría nada y la biblioteca
     vieja fallaría al cargar por un símbolo que ya debería estar."""
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     from runtime import extern_cpp
     sin_flags = extern_cpp._fuente([("a.srcx", "int x = 1;\n", 1)], [])
     con_flags = extern_cpp._fuente([("a.srcx", "int x = 1;\n", 1)], ["-lm"])
@@ -272,8 +264,7 @@ def test_la_memoria_de_suriax_cruza_a_cpp_y_vuelve():
     leer. Los datos cruzan en los dos sentidos sobre el mismo bloque.
     """
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr(_MEMORIA)
     assert "cpp escribio 0 1 4 9 16" in salida, salida
     # 100 + 1 + 4 + 9 + 16: C++ ve el cambio que hizo suriaX
@@ -286,8 +277,7 @@ def test_un_bloque_sin_representacion_de_maquina_lo_dice():
     'str' es una lista de objetos y no un buffer. Se dice con su porqué en
     vez de reventar con un volcado de pila."""
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     salida = _correr('''\
 #import mem
 #extern cpp{
@@ -314,13 +304,13 @@ def test_el_compilador_y_las_banderas_salen_del_yaml():
 
     config = {"toolchain": {
         "cxx_compiler": "clang++",
-        "include_c_paths": ["/tmp/inc"],
+        "include_c_paths": [os.path.join("terceros", "inc")],
         "cxx_flags": ["-Wall"],
         "c_flags": ["-lGL"],
     }}
     assert extern_cpp._compilador(config, "cpp") == "clang++"
     banderas = extern_cpp._banderas(config, "cpp")
-    assert "-I/tmp/inc" in banderas
+    assert "-I" + os.path.join("terceros", "inc") in banderas
     assert "-Wall" in banderas
     # una libreria de C la usa igual un bloque de C++ (OpenGL, X11...)
     assert "-lGL" in banderas
@@ -329,8 +319,7 @@ def test_el_compilador_y_las_banderas_salen_del_yaml():
 def test_sin_nada_escrito_se_detecta_el_compilador_del_sistema():
     from runtime import extern_cpp
     if not _hay_cxx():
-        _skip("no hay compilador de C++ (g++/clang++)")
-        return
+        omitir("no hay compilador de C++ (g++/clang++)")
     assert extern_cpp._compilador({}, "cpp") is not None
     assert extern_cpp._compilador({"toolchain": {}}, "cpp") is not None
 

@@ -1,4 +1,4 @@
-"""``struct_decl`` (EBNF secc. 1, tipos compuestos). Nombre AL FINAL (estilo C):
+"""``struct_decl`` (EBNF). Nombre AL FINAL (estilo C):
 
 ::
     struct_decl = "struct" "{" { field } "}" IDENTIFIER ";"

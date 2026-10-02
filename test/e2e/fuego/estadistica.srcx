@@ -1,0 +1,121 @@
+/- Ejercicio de fuego 5: numeros, tipos de libreria y pruebas integradas.
+
+ Flotantes con la libreria 'math', tipos de 'd_types' (int8 y sus rangos),
+ Vector<Vector<int>> (genericos anidados), 'error T' con throw/catch,
+ sizeof y bloques 'test' que ejecuta 'runtime/interpreter/main.py --test'.
+-/
+#from io #import stdp
+#import array.vector as vec
+#from math #import basic
+#from math #import constants
+#from d_types #import dt_variables as dt
+
+fn media(vec.Vector<float> ptr v) -> float {
+    var float suma = 0.0;
+    var int i = 0;
+    while (i < v.len()) {
+        suma = suma + v.get(i);
+        i = i + 1;
+    };
+    return suma / cast<float>(v.len());
+}
+
+fn varianza(vec.Vector<float> ptr v) -> float {
+    var float m = media(v);
+    var float acc = 0.0;
+    var int i = 0;
+    while (i < v.len()) {
+        var float d = v.get(i) - m;
+        acc = acc + d * d;
+        i = i + 1;
+    };
+    return acc / cast<float>(v.len());
+}
+
+fn raiz(float x) -> float {
+    // Newton: suficiente para el ejercicio
+    var float r = x;
+    var int i = 0;
+    while (i < 30) {
+        r = (r + x / r) / 2.0;
+        i = i + 1;
+    };
+    return r;
+}
+
+fn dividir(int a, int b) -> error int {
+    if (b == 0) { throw "division por cero"; };
+    return a / b;
+}
+
+// tabla de multiplicar como vector de vectores
+fn tabla(int n) -> vec.Vector<vec.Vector<int>> {
+    var vec.Vector<vec.Vector<int>> filas = vec.dynamic<vec.Vector<int>>(1);
+    var int i = 1;
+    while (i <= n) {
+        var vec.Vector<int> fila = vec.dynamic<int>(1);
+        var int j = 1;
+        while (j <= n) {
+            fila.push(i * j);
+            j = j + 1;
+        };
+        filas.push(fila);
+        i = i + 1;
+    };
+    return filas;
+}
+
+test "la media de 2 y 4 es 3" {
+    var vec.Vector<float> v = vec.dynamic<float>(2);
+    v.push(2.0);
+    v.push(4.0);
+    if (media(&v) != 3.0) { throw "media incorrecta"; };
+}
+
+test "dividir por cero lanza" {
+    var bool lanzo = false;
+    try { dividir(1, 0); } catch (str e) { lanzo = true; };
+    if (not lanzo) { throw "no lanzo"; };
+}
+
+fn main() -> int {
+    var vec.Vector<float> datos = vec.dynamic<float>(4);
+    datos.push(2.0);
+    datos.push(4.0);
+    datos.push(4.0);
+    datos.push(4.0);
+    datos.push(5.0);
+    datos.push(5.0);
+    datos.push(7.0);
+    datos.push(9.0);
+    stdp.println(f"media = {media(&datos)}");
+    stdp.println(f"desviacion = {raiz(varianza(&datos))}");
+    stdp.println(f"max(3.5, 2.0) = {basic.max(3.5, 2.0)}");
+    stdp.println(f"area del circulo r=2: {constants.PI * 4.0}");
+
+    var dt.int8 pequeno = 100;
+    stdp.println(f"int8 100 -> {cast<int>(pequeno)}, rango [{min(dt.int8)}, {max(dt.int8)}], {sizeof(dt.int8)} byte");
+    stdp.println(f"int8 de 300 (trunca): {cast<int>(cast<dt.int8>(300))}");
+
+    try {
+        stdp.println(f"10 / 3 = {dividir(10, 3)}");
+        stdp.println(f"1 / 0 = {dividir(1, 0)}");
+    } catch (str e) {
+        stdp.println(f"atrapado: {e}");
+    };
+
+    var vec.Vector<vec.Vector<int>> t = tabla(4);
+    var int i = 0;
+    while (i < t.len()) {
+        var vec.Vector<int> fila = t.get(i);
+        var str linea = "";
+        var int j = 0;
+        while (j < fila.len()) {
+            linea = linea + f"{fila.get(j)} ";
+            j = j + 1;
+        };
+        stdp.println(linea);
+        i = i + 1;
+    };
+    return 0;
+}

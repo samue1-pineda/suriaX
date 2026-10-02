@@ -1,0 +1,101 @@
+/- text — operaciones sobre cadenas que cuestan demasiado escritas a mano.
+
+ Sin esta librería un texto se arma carácter a carácter ('trozo' del
+ bootstrap) y cada '+' crea una cadena nueva: sacar un trozo o unir mil
+ partes era cuadrático. Aquí cada operación es UNA primitiva del host,
+ con el mismo contrato en el intérprete y en la VM:
+
+   text.slice("hola mundo", 5, 10)       // "mundo"
+   text.find("hola mundo", "mu")         // 5 (-1 si no está)
+   text.starts_with(s, "#"), text.ends_with(s, ".srcx")
+   text.join(&partes, ", ")              // un Vector<str> en una sola cadena
+   text.parse_int("-42")                 // -42 (excepciones.ConversionInvalida si no)
+   text.parse_float("2.5e-3")            // 0.0025, con redondeo CORRECTO
+   text.to_bytes("ñ")                    // sus bytes UTF-8: [195, 177]
+   text.from_bytes(&bytes)               // la vuelta (ConversionInvalida si no es UTF-8)
+
+ Los índices cuentan CARACTERES (code points), como 's[i]' y 'len(s)'; no
+ bytes. Un índice fuera de la cadena es 'excepciones.IndiceFueraDeRango'.
+
+ 'join' es también la forma de CONSTRUIR un texto largo: se van guardando
+ las partes en un 'Vector<str>' y se unen una sola vez al final (el
+ 'StringBuilder' de Java o el '"".join(...)' de Python).
+-/
+
+#import array.vector as vec
+#import mem
+
+// --- llamadas al host ------------------------------------------------------ //
+internal fn __trozo__(str s, int desde, int hasta) -> str;
+internal fn __buscar__(str s, str parte, int desde) -> int;
+internal fn __empieza__(str s, str prefijo) -> bool;
+internal fn __termina__(str s, str sufijo) -> bool;
+internal fn __unir__(str ptr partes, int n, str separador) -> str;
+internal fn __entero_de__(str s) -> int;
+internal fn __flotante_de__(str s) -> float;
+internal fn __utf8_largo__(str s) -> int;
+internal fn __utf8_a_bytes__(str s, byte ptr mutable destino, int n) -> void;
+internal fn __utf8_de_bytes__(byte ptr datos, int n) -> str;
+
+// El trozo de 's' entre los caracteres 'start' (incluido) y 'end' (no).
+// Tiene que valer 0 <= start <= end <= len(s): fuera de eso es
+// IndiceFueraDeRango, y no un trozo recortado en silencio (como en Python).
+public fn slice(str s, int start, int end) -> str {
+    return __trozo__(s, start, end);
+}
+
+// Dónde empieza la primera aparición de 'part' en 's', o -1.
+public fn find(str s, str part) -> int {
+    return __buscar__(s, part, 0);
+}
+
+// Como 'find', pero buscando desde el carácter 'start'.
+public fn find_from(str s, str part, int start) -> int {
+    return __buscar__(s, part, start);
+}
+
+public fn starts_with(str s, str prefix) -> bool {
+    return __empieza__(s, prefix);
+}
+
+public fn ends_with(str s, str suffix) -> bool {
+    return __termina__(s, suffix);
+}
+
+// Las partes, en orden, con 'separator' entre cada dos: una sola cadena nueva.
+public fn join(vec.Vector<str> ptr parts, str separator) -> str {
+    return __unir__(parts.data(), parts.len(), separator);
+}
+
+// El entero que escribe 's' en decimal ('42', '-7', '+3'). Sin espacios ni
+// otra base; tiene que caber en 'int'. Si no, excepciones.ConversionInvalida.
+public fn parse_int(str s) -> int {
+    return __entero_de__(s);
+}
+
+// El 'float' que escribe 's': '[+-]digitos[.digitos][e[+-]digitos]' ('3.25',
+// '-1e10', '2.5E-3'). El valor es el MAS CERCANO al decimal escrito (el
+// mismo 'double' que da Python), no una aproximacion calculada digito a
+// digito. Sin espacios, 'inf' ni 'nan'; si no se puede o no cabe,
+// excepciones.ConversionInvalida.
+public fn parse_float(str s) -> float {
+    return __flotante_de__(s);
+}
+
+// Los bytes UTF-8 de 's'.
+public fn to_bytes(str s) -> vec.Vector<byte> {
+    var int n = __utf8_largo__(s);
+    var int espacios = n;
+    if (espacios < 1) { espacios = 1; };
+    var byte ptr mutable bloque = mem.reserve<byte>(espacios);
+    __utf8_a_bytes__(s, bloque, n);
+    return vec.adopt<byte>(bloque, n, espacios);
+}
+
+// El texto que codifican unos bytes UTF-8. Si no son UTF-8 válido,
+// excepciones.ConversionInvalida.
+public fn from_bytes(vec.Vector<byte> ptr bytes) -> str {
+    return __utf8_de_bytes__(bytes.data(), bytes.len());
+}
+
+#export package as text

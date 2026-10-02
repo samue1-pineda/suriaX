@@ -1,183 +1,47 @@
-(* ============================================================================
-   Gramática de suriaX  (EBNF)
-   ----------------------------------------------------------------------------
-   Esta es la gramática VIGENTE del lenguaje: el parser
-   (V0/src/frontend/parser/grammar/, un módulo por grupo de reglas) implementa
-   lo que aquí está marcado [OK]. No es un documento de intenciones — cuando
-   una regla y el parser discrepan, es un bug de uno de los dos.
-
-   Marca de estado de cada regla:
-
-     [OK]    implementada de punta a punta: el parser la reconoce, la
-             Semántica la valida y viaja en el HIR.
-     [HIR-]  el parser la reconoce y la Semántica la valida, pero NO cruza al
-             HIR: el emisor la rechaza con HIR005. Hoy no hay ninguna: el
-             modelo por regiones, que era todo este grupo, se retiró del
-             lenguaje en v0.2.0 (ver documentation/source/memory_decision.rst)
-             y sus tags quedan 'reserved' en proto/hir.proto.
-     [TBD]   sintaxis diseñada, todavía no implementada.
-
-   Notación EBNF:
-     =        definición            |   alternativa
-     { }      cero o más            [ ]  opcional
-     ( )      agrupación            "x"  terminal literal
-     ?...?    descripción informal de un terminal léxico
-
-   Terminales = tipos de token (ver docs/gramar/t_types.md y V0/include/t_types.py).
-
-   Comprobar la gramática contra la realidad, para un archivo concreto:
-     python V0/main.py archivo.srcx --emit-tokens     (terminales)
-     python V0/main.py archivo.srcx --emit-ast-json   (árbol resultante)
-     python V0/main.py archivo.srcx --emit-diagnostics (errores, en JSON)
-   ============================================================================ *)
-
-
-(* ========================= 1. ESTRUCTURA SINTÁCTICA ====================== *)
-
-program        = { top_level } EOF ;                                (* [OK] *)
+program        = [ "#test" IDENTIFIER ] { top_level } EOF ;
 
 top_level      = directive
                | extern_block
                | test_decl
-               | decorator_decl                (* incluye '@trait' -> trait_decl *)
+               | decorated
                | [ visibility ] ( [ specifier ] function_decl
                                 | struct_decl
                                 | enum_decl
-                                | type_decl
                                 | statement ) ;
 
-(* RESERVAS de visibilidad: prefijo opcional de una declaracion top-level.   *)
-(* Sin token = 'public'. 'private' = mismo paquete; 'internal' = mismo        *)
-(* archivo. NO aplica a directivas ni a 'test'. El enforcement es semantico.  *)
-visibility     = "public" | "private" | "internal" ;                (* [OK] *)
+visibility     = "public" | "private" | "internal" ;
+specifier      = "hook" | "dunder" ;
 
-(* Especificador de metodo especial: el compilador YA NO adivina por la forma *)
-(* '__x__'. 'hook' = del set fijo (semantic/hooks.py), validado y despachado. *)
-(* 'dunder' = metodo especial LIBRE del usuario, indexado por (tipo, nombre)  *)
-(* como un hook (habilita los traits). Solo precede a 'fn'; un 'fn __x__' a   *)
-(* secas es una funcion corriente. Un 'dunder fn' toma 'T ptr self' (el tipo  *)
-(* dueño) como primer parametro y se despacha con 'x.__x__()'.                *)
-specifier      = "hook" | "dunder" ;                                 (* [OK] *)
-
-(* bloque de prueba nombrado (estilo Zig). Es una DECLARACIÓN de primer     *)
-(* nivel, no una función: no se invoca ni tiene firma. El runner del        *)
-(* intérprete lo ejecuta ('--test'); la compilación normal solo lo valida.  *)
-(* 'test' es keyword de declaración — ya NO una "función nativa" invocable. *)
-test_decl      = "test" STRING_LIT block [ ";" ] ;
-
-(* ----------------------------- directivas ------------------------------- *)
-(* El lexer emite DIRECTIVE('nombre'); el alias/objetivo son IDENTIFIER.    *)
-
-directive      = import_dir | export_dir | from_dir ;               (* [OK] *)
-
-(* "as" NO es palabra reservada: el lexer lo emite como IDENTIFIER cuyo      *)
-(* lexema es "as" (keyword contextual). El parser comprueba el lexema. Es    *)
-(* coherente con la filosofía libsrX (pocos tokens reservados).             *)
+directive      = import_dir | from_dir | export_dir ;
 import_dir     = "#import" lib_name [ "as" IDENTIFIER ] [ ";" ] ;
-export_dir     = "#export" ( [ "as" ] IDENTIFIER
-                           | "package" "as" IDENTIFIER ) [ ";" ] ;
-                                       (* cierra una .libsrx; el 'as' de la forma  *)
-                                       (* simple es OPCIONAL ('#export io' y       *)
-                                       (* '#export as io' son equivalentes). La    *)
-                                       (* forma 'package' declara el archivo PADRE *)
-                                       (* de un paquete y ahi 'as' es obligatorio. *)
-                                       (* Corolario: 'as' no puede ser un alias.   *)
-lib_name       = IDENTIFIER { "." IDENTIFIER } ;   (* 'io' | 'io.print' (submodulo) *)
 from_dir       = "#from" lib_name "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";" ] ;
+export_dir     = "#export" ( [ "as" ] IDENTIFIER | "package" "as" IDENTIFIER ) [ ";" ] ;
+lib_name       = IDENTIFIER { "." IDENTIFIER } ;
+extern_block   = "#extern" "cpp" [ "requires" "(" STRING_LIT { "," STRING_LIT } ")" ] RAW_BLOCK ;
+test_decl      = "test" STRING_LIT block ;
 
-(* interoperabilidad C++: el cuerpo se captura crudo (RAW_BLOCK).           *)
-(* "cpp" aquí = IDENTIFIER('cpp'), tampoco es keyword (ver lexer).          *)
-extern_block   = "#extern" "cpp" [ requires_cl ] RAW_BLOCK ;         (* [OK] *)
-requires_cl    = "requires" "(" STRING { "," STRING } ")" ;          (* [OK] *)
-                                       (* banderas que ESTA unidad necesita  *)
-                                       (* para compilar/enlazar su C++; el   *)
-                                       (* linker las suma a las del proyecto *)
-                 (* RAW_BLOCK = "{" ?texto C++ crudo, llaves balanceadas? "}" *)
+decorated      = DECORATOR [ "(" name { "," name } ")" ] [ visibility ]
+                 ( [ specifier ] function_decl | struct_decl | enum_decl )
+               | impl_block
+               | trait_decl ;
+impl_block     = "@impl" IDENTIFIER [ type_params ] "{" { method } "}" [ ";" ] ;
+method         = "fn" IDENTIFIER "(" param { "," param } ")" [ "->" type ] block ;
+trait_decl     = "@trait" [ visibility ]
+                 ( "struct" "{" { trait_method } "}" IDENTIFIER ";" | trait_method ) ;
+trait_method   = [ specifier ] "fn" name "(" [ type { "," type } ] ")" [ "->" type ] ";" ;
 
-(* ----------------------------- funciones -------------------------------- *)
+function_decl  = "fn" name [ type_params ] "(" [ param { "," param } ] ")"
+                 [ "->" type ] ( block | ";" ) ;
+param          = type name ;
+struct_decl    = "struct" "{" { type name ";" } "}" name [ type_params ] ";" ;
+enum_decl      = "enum" name "{" enum_item { "," enum_item } [ "," ] "}" ";" ;
+enum_item      = name ( "(" type { "," type } ")" | [ "=" expression ] ) ;
 
-(* DECORADORES GENERALIZADOS: el decorador va PRIMERO y es dueño de su       *)
-(* prefijo (visibilidad, especificador). Admite argumentos '@impl(iterable)'  *)
-(* y aplica a fn/struct/enum. '@trait' es especial: produce un 'trait_decl'.  *)
-decorator_decl = DECORATOR [ "(" [ deco_args ] ")" ] [ visibility ]
-                 ( trait_body | [ specifier ] ( function_decl | struct_decl | enum_decl ) ) ;
-deco_args      = ( IDENTIFIER | DUNDER ) { "," ( IDENTIFIER | DUNDER ) } ;
-
-(* TRAITS: contratos definidos por el usuario ('@trait'), verificados por el   *)
-(* compilador ('@impl(trait)'). Un trait agrupa firmas de metodo dunder; el    *)
-(* tipo que lo implementa debe proveerlas ('self' -> el tipo). Dos formas:     *)
-(*   struct: '@trait struct { <trait_method>... } Nombre;'                     *)
-(*   suelta: '@trait [dunder] fn __x__(<tipos>) -> T;'  (trait de un metodo)   *)
-(* La conformidad la verifica 'semantic/traits.py' (SEM021); '@impl' es un     *)
-(* decorador general con argumentos sobre un struct.                           *)
-trait_body     = "struct" "{" { trait_method } "}" IDENTIFIER ";"
-               | [ specifier ] "fn" ( IDENTIFIER | DUNDER )
-                 "(" [ trait_params ] ")" [ "->" type ] ";" ;
-trait_method   = [ specifier ] "fn" ( IDENTIFIER | DUNDER )
-                 "(" [ trait_params ] ")" [ "->" type ] ";" ;
-trait_params   = type { "," type } ;   (* TIPOS sin nombre; 'self' = el tipo que hara @impl *)
-
-function_decl  = "fn" ( IDENTIFIER | DUNDER ) type_params           (* [OK]  "->" = ARROW *)
-                 "(" [ param_list ] ")" [ "->" type ] ( block | ";" ) ;
-                                       (* 'type_params' hace la funcion GENERICA:     *)
-                                       (* 'fn make<T>(int n) -> Vector<T>'. Van pegados*)
-                                       (* al NOMBRE, como en struct/type. Aqui no hay  *)
-                                       (* ambiguedad con '<': es una DECLARACION.      *)
-                                       (* El 'specifier' opcional ('hook'/'dunder',  *)
-                                       (* secc. top_level) va DELANTE de 'fn' y EXIGE *)
-                                       (* que el nombre sea DUNDER ('__x__'). Un      *)
-                                       (* 'fn __x__' sin specifier es funcion normal  *)
-                                       (* (el compilador ya no adivina). '->'         *)
-                                       (* OPCIONAL: sin el, retorno 'void'. Un ';' en *)
-                                       (* vez del bloque declara un PROTOTIPO (solo   *)
-                                       (* firma; la implementa el backend/'#extern'). *)
-
-param_list     = param { "," param } ;
-param          = type IDENTIFIER ;                                  (* tipo nombre *)
-
-block          = "{" { statement } "}" ;
-
-(* --------------------- tipos compuestos (declaración) ------------------- *)
-
-(* struct: nombre al final (estilo C typedef), según test.srcx:
-     struct{
-         int len;
-         str str;
-     }__str__;                                                              *)
-struct_decl    = "struct" "{" { field } "}" IDENTIFIER ";" ;        (* [OK] *)
-field          = type IDENTIFIER ";" ;
-
-(* enum: estilo C++.                                                        *)
-enum_decl      = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}" ;  (* [OK] *)
-(* Dos formas de variante, EXCLUYENTES entre si:                            *)
-(*   UNIDAD  'ROJO' / 'ROJO = 5'   -> un entero (estilo C)                  *)
-(*   PAYLOAD 'Literal(int)'        -> lleva valores propios                 *)
-(* En cuanto UNA variante lleva payload, el enum pasa a ser un tipo SUMA y  *)
-(* sus valores dejan de ser enteros. Se construye invocando la variante     *)
-(* ('Nodo.Literal(5)') y se abre desestructurando en un 'case'              *)
-(* ('case Nodo.Literal(v)'): el patron tiene la MISMA forma que la          *)
-(* construccion, asi que no hizo falta sintaxis de patrones aparte — lo que *)
-(* cambia es que ahi sus argumentos son nombres que se LIGAN.               *)
-enum_item      = IDENTIFIER ( "(" type { "," type } [ "," ] ")"
-                            | [ "=" expression ] ) ;
-
-(* type: declara un TIPO NOMINAL OPACO -- con nombre y sin representación   *)
-(* escrita en suriaX (su layout lo aportan el backend o sus hooks). Es la    *)
-(* forma en que una librería publica tipos NO nativos:                       *)
-(*     const type int8;      const type float16;                            *)
-(* y el consumidor los usa como cualquier otro tipo ('const dt.int8 x;').   *)
-(* 'const' liga el nombre a ESE tipo para siempre; sin qualifier (o con      *)
-(* 'var') es redefinible -- mismo modelo que las variables, coherente con    *)
-(* que 'type' sea un tipo de primera clase (ver base_type, secc. 4).        *)
-(* El inicializador opcional es una expresión que PRODUZCA un tipo, p. ej.  *)
-(* una llamada a una 'fn ... -> type':  const type Blk = _block_def(4, c);  *)
-type_decl      = [ qualifier ] "type" IDENTIFIER [ "=" expression ] ";" ;  (* [OK] *)
-
-
-(* ============================== 2. SENTENCIAS =========================== *)
-
+block          = "{" { statement } "}" [ ";" ] ;
 statement      = var_decl
-               | type_decl                (* 'const type int8;' (secc. 1)  *)
+               | type_decl
+               | import_binding
+               | with_stmt
                | if_stmt
                | while_stmt
                | match_stmt
@@ -190,274 +54,140 @@ statement      = var_decl
                | try_stmt
                | expr_stmt ;
 
-(* manejo de errores por EXCEPCIONES. 'throw' inicia la propagación de un   *)
-(* valor por la pila de llamadas; el 'try' más cercano la intercepta, liga  *)
-(* el valor al nombre del 'catch' y ejecuta su bloque (el binding vive SOLO *)
-(* en ese bloque). Un throw que escapa de todo catch aborta la ejecución.   *)
-(* El TIPO 'error T' (sección 4) anota que un valor puede ser un error.     *)
-throw_stmt     = "throw" expression ";" ;                           (* [OK] *)
-(* Varias ramas 'catch', probadas EN ORDEN; gana la primera cuyo tipo       *)
-(* encaje. El tipo es opcional: sin el la rama atrapa cualquier valor. Lo   *)
-(* que ninguna rama entiende SIGUE propagandose, que es lo que hace util    *)
-(* filtrar — un catch que no sabe manejar el fallo no se lo queda.          *)
-try_stmt       = "try" block catch_clause { catch_clause } [ ";" ] ;
+qualifier      = "const" | "var" ;
+var_decl       = [ qualifier ] type [ qualified_name ] name [ "[" expression "]" ]
+                 [ "=" expression ] ";" ;
+type_decl      = [ qualifier ] "type" name [ type_params ] [ "=" expression ] ";" ;
+import_binding = [ qualifier ] IDENTIFIER "=" ( import_dir | from_dir ) ;
+with_stmt      = "with" "(" with_item { "," with_item } ")" block
+               | "with" qualified_name "(" qualifier type name { "," expression } ")" block ;
+with_item      = qualifier type name "=" expression
+               | expression ;
+if_stmt        = "if" "(" expression ")" block [ "else" ( if_stmt | block ) ] ;
+while_stmt     = "while" "(" expression ")" block ;
+match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" [ ";" ] ;
+case_arm       = "case" expression ( [ ":" ] block | ":" statement ) ;
+return_stmt    = "return" [ expression ] ";" ;
+break_stmt     = "break" ";" ;
+continue_stmt  = "continue" ";" ;
+move_stmt      = "move" expression ";" ;
+free_stmt      = "free" expression ";" ;
+throw_stmt     = "throw" expression ";" ;
+try_stmt       = "try" block ( catch_clause { catch_clause } [ "finally" block ]
+                             | "finally" block ) [ ";" ] ;
 catch_clause   = "catch" "(" [ type ] IDENTIFIER ")" block ;
+expr_stmt      = expression [ "++" | "--" ] ";" ;
 
-(* declaración de variable: 'tipo nombre = valor;'  El ';' es OBLIGATORIO.  *)
-(* var_decl y type_decl comparten prefijo y se distinguen con UN token: el   *)
-(* 'type' tras el qualifier arranca un type_decl.                           *)
-var_decl       = [ qualifier ] type IDENTIFIER [ "=" expression ] ";" ;   (* [OK] *)
-qualifier      = "const" | "var" ;    (* sin qualifier = 'var' (mutable, estilo C); *)
-                                      (* 'mutable' ya NO califica variables: solo   *)
-                                      (* punteros ('T ptr mutable', regla 'type')   *)
-
-(* memoria: ownership + move-semantics. Dos sentencias, sin sintaxis para la *)
-(* destruccion por defecto — esa ocurre al cerrar el ambito que posee el      *)
-(* valor, invocando el '__free__' de su tipo. Las arenas son un TIPO DE       *)
-(* LIBRERIA, no una construccion del lenguaje.                               *)
-(* 'move' es una SENTENCIA, no un operador de expresion: 'move y;'. Viaja en  *)
-(* el HIR (MoveStmt + Symbol.moved_at): el runtime hace cumplir el            *)
-(* use-after-move que el analisis estatico conservador no ve.                 *)
-(* 'free' (mas abajo) destruye ANTES del cierre del ambito.                  *)
-move_stmt      = "move" expression ";" ;                            (* [OK] *)
-(* ...y 'move' TAMBIEN es una expresion: 'var Buffer b = move origen;'.     *)
-(* Las dos formas transfieren; la diferencia es que la expresion ENTREGA el *)
-(* valor. Sin ella no habia forma de ligar a otro nombre algo que posee     *)
-(* recursos —ligarlo a secas deja dos duenos y su destructor corre dos      *)
-(* veces (SEM032)—, y el modelo de memoria documentado la usaba desde el    *)
-(* principio.                                                               *)
-move_expr      = "move" unary ;                                     (* [OK] *)
-
-if_stmt        = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ] ;  (* [OK] *)
-while_stmt     = "while" "(" expression ")" block ;                 (* [OK] *)
-
-match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" ;  (* [OK] *)
-(* el ':' es obligatorio SOLO cuando el cuerpo NO es un bloque: con llaves  *)
-(* se omite ('case X { ... }'), sin ellas se exige ('case X: stmt;'). Es la *)
-(* forma del corpus real (docs/examples/structs_and_control.md).            *)
-(* con llaves el ':' SOBRA, pero escribirlo se acepta: 'case X: { ... }' es *)
-(* la costumbre de C y un bloque no es un 'statement' de esta gramatica, asi *)
-(* que sin admitirlo el ':{' caia en 'expression' con un error que no        *)
-(* mencionaba el 'case'.                                                     *)
-case_arm       = "case" expression ( block | ":" ( block | statement ) ) ;
-
-return_stmt    = "return" [ expression ] ";" ;                      (* [OK] *)
-break_stmt     = "break" ";" ;                                      (* [OK] *)
-continue_stmt  = "continue" ";" ;                                   (* [OK] *)
-
-(* AZUCAR del parser: no hay nodo propio en el AST. 'n += 2' se construye   *)
-(* como 'n = n + 2' y 'n++' como 'n = n + 1', asi que ni la Semantica ni el *)
-(* HIR ni el interprete saben que existen. El incremento es SENTENCIA y no  *)
-(* expresion: como expresion habria que decidir si vale el valor viejo o el *)
-(* nuevo, y esa distincion no compra nada. El destino aparece dos veces en  *)
-(* la expansion, asi que tiene que poder evaluarse dos veces sin efectos.   *)
-expr_stmt      = expression [ "++" | "--" ] ";" ;                    (* [OK] *)
-
-
-(* ============================= 3. EXPRESIONES =========================== *)
-(* Precedencia de menor a mayor (el parser será descenso recursivo + Pratt).*)
-
-(* La ASIGNACION no aparece en esta cadena (el EBNF formal solo la usa      *)
-(* dentro de 'var_decl'), pero el parser la modela como el operador de      *)
-(* menor precedencia y asociativo a la DERECHA, junto con sus formas        *)
-(* compuestas '+=' '-=' '*=' '/=' '%=' — todas azucar de 'x = x op v'.      *)
-expression     = logic_or ;                                         (* [OK] *)
-
+expression     = logic_or [ assign_op expression ] ;
+assign_op      = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+               | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
 logic_or       = logic_and { "or" logic_and } ;
-logic_and      = equality  { "and" equality } ;
+logic_and      = equality { "and" equality } ;
 equality       = comparison { ( "==" | "!=" ) comparison } ;
-comparison     = term { ( "<" | "<=" | ">" | ">=" ) term } ;
+comparison     = bit_or { ( "<" | "<=" | ">" | ">=" ) bit_or } ;
+bit_or         = bit_xor { "|" bit_xor } ;
+bit_xor        = bit_and { "^" bit_and } ;
+bit_and        = shift { "&" shift } ;
+shift          = term { ( "<<" | ">>" ) term } ;
 term           = factor { ( "+" | "-" ) factor } ;
 factor         = unary { ( "*" | "/" | "%" ) unary } ;
-(* '%' es el RESTO de la division entera, con el signo del DIVIDENDO (como  *)
-(* C, no como Python): '-7 % 3' es -1. El backend nativo baja a la          *)
-(* instruccion de resto del hardware, que hace justo eso; si el interprete  *)
-(* usara el '%' de Python, los dos targets darian numeros distintos.        *)
-
-(* '&' produce un NODO PROPIO (AddrOf), no un UnaryOp genérico: sus reglas  *)
-(* (exige lvalue; la mutabilidad del puntero resultante se hereda del       *)
-(* binding — 'var' -> 'ptr mutable', 'const' -> 'ptr') son semántica de ese  *)
-(* nodo y viajan resueltas en el HIR.                                       *)
-unary          = ( "not" | "-" ) unary                       (* 'move' es sentencia, no unario *)
-               | "&" unary                                   (* addr_of *)
+unary          = ( "not" | "-" | "~" | "&" ) unary
                | postfix ;
-
-postfix        = ( primary | struct_literal )
-                 { ( "." IDENTIFIER
-                   | [ type_args ] "(" [ arg_list ] ")"
-                   | "[" expression "]" ) } ;
-                                       (* 'type_args' antes de '(' instancia una       *)
-                                       (* funcion generica: 'make<int>(4)'. Misma       *)
-                                       (* ambiguedad y misma resolucion que el literal  *)
-                                       (* de un generico (ver 'struct_literal').        *)
-
-(* instanciación de un struct nominal: ÚNICA forma nativa de construir un   *)
-(* valor de struct (sin 'alloc'). Se reconoce cuando un NOMBRE va          *)
-(* seguido de '{' — sin ambigüedad con los bloques, porque las condiciones  *)
-(* van entre paréntesis y un bloque es una sentencia, nunca sigue a un      *)
-(* nombre en posición de expresión. Coma final tolerada.                    *)
-(* El nombre puede ir CUALIFICADO por su módulo ('point.Point{ x: 1 }'):    *)
-(* un struct publicado por una librería se escribe igual en un literal que  *)
-(* en una anotación de tipo. La Semántica lo canonicaliza al nombre con     *)
-(* que la librería lo declaró.                                             *)
-(* Un GENERICO escribe sus argumentos: 'Caja<int>{ v: 1 }'. Es la UNICA     *)
-(* posicion del lenguaje donde '<' es ambiguo (comparacion vs argumentos de  *)
-(* tipo) y se resuelve mirando QUE HAY TRAS EL '>': un '{' abre un literal   *)
-(* y un '(' una llamada generica ('make<int>(4)'). Cualquier otra cosa y el   *)
-(* parser retrocede: el '<' vuelve a ser el operador que siempre fue.        *)
-struct_literal = IDENTIFIER { "." IDENTIFIER } [ type_args ]
-                 "{" [ field_init { "," field_init } [ "," ] ] "}" ;
-field_init     = IDENTIFIER ":" expression ;
-
-arg_list       = expression { "," expression } ;
-
-primary        = literal
-               | IDENTIFIER
-               | cast_expr
-               (* 'sizeof' toma un TIPO ('sizeof(int8)') o un NOMBRE de     *)
-               (* valor ('sizeof(a)': el tamano del tipo de 'a'). Las dos     *)
-               (* formas se escriben igual; cual es la decide la Semantica,   *)
-               (* que es la unica que sabe en que namespace vive el nombre.   *)
+postfix        = ( struct_literal | generic_call | primary )
+                 { "." name | "(" [ arguments ] ")" | "[" expression "]" } ;
+struct_literal = qualified_name [ type_args ]
+                 "{" [ name ":" expression { "," name ":" expression } [ "," ] ] "}" ;
+generic_call   = qualified_name type_args "(" [ arguments ] ")" ;
+arguments      = expression { "," expression } ;
+primary        = name
+               | literal
+               | "(" expression ")"
+               | "." name
                | "sizeof" "(" type ")"
-               | "(" expression ")" ;
-
-(* [RETIRADA] 'make T in r' construia un valor en una region. El modelo por  *)
-(* regiones se retiro del lenguaje en v0.2.0, y con el su hook '__make__'.    *)
-(* Ni 'make' ni 'alloc' son palabras clave: la construccion y la reserva las  *)
-(* aporta una libreria ('fn make(int n) -> vec' es la fabrica natural de una, *)
-(* y reservar el nombre solo impedia escribirla).                             *)
-
-(* conversión EXPLÍCITA de tipo: la ÚNICA vía (sin coerciones implícitas).   *)
-(* 'type_args' es la posición COMPARTIDA de argumentos de tipo: la usan      *)
-(* 'cast', las anotaciones de un genérico ('Vector<int> v') y su literal.    *)
-cast_expr      = "cast" type_args "(" expression ")" ;              (* cast<int8>(x) *)
-type_args      = "<" type { "," type } ">" ;
-
-(* PARAMETROS de un tipo generico, pegados a su NOMBRE en la declaracion:    *)
-(* 'struct { T ptr d; } Vector<T>;' / 'const type Caja<T>;'. Espeja a        *)
-(* type_args pero admite solo NOMBRES: un parametro es un nombre por ligar,  *)
-(* no un tipo ya escrito.                                                    *)
-type_params    = [ "<" IDENTIFIER { "," IDENTIFIER } ">" ] ;         (* [OK] *)
-(* [REVISAR] 'free' NO produce un valor útil; como expresión compondría en   *)
-(* aritmética ('free x + 1'). Se saca de make_expr y se modela como          *)
-(* sentencia propia (free_stmt) para que solo aparezca como 'free x;'.       *)
-free_stmt      = "free" expression ";" ;                           (* [OK] *)
-
-(* Los literales usan tokens *_LIT, distintos de las palabras clave de tipo   *)
-(* (INT/FLOAT/CHAR/STR). Es decir: 'int' = INT (tipo) vs 10 = INT_LIT.        *)
-literal        = INT_LIT | FLOAT_LIT | STRING_LIT | CHAR_LIT
+               | "cast" "<" type ">" "(" expression ")"
+               | "move" unary ;
+literal        = INT_LIT | FLOAT_LIT | CHAR_LIT | STRING_LIT | FSTRING_LIT
                | "true" | "false" | "null" ;
 
-
-(* =============================== 4. TIPOS ============================== *)
-
-type           = base_type { type_suffix } ;                        (* [OK] *)
-
-base_type      = "int" | "float" | "bool" | "char" | "str" | "void"
-               | "type"                (* METATIPO: el tipo de un tipo.            *)
-                                       (* 'fn f(int len) -> type' devuelve un TIPO  *)
-                                       (* como valor (ver type_decl, secc. 1).      *)
-               | error_type            (* unión valor-o-error (ver abajo)          *)
-               | "self"                (* placeholder: el tipo que hara @impl.     *)
-                                       (* NO es keyword (sigue usable como nombre); *)
-                                       (* solo valido en un prototipo de trait.     *)
-               | qualified_name ;      (* tipo nominal definido por usuario *)
-
-(* 'error T' = "un T, o un error"; 'error' sola = solo error. En el modelo   *)
-(* de EXCEPCIONES el tipo es transparente en la ruta de éxito (un 'error T'  *)
-(* se usa como T; el fallo viaja por throw/catch, no por el valor).          *)
-(* El inner es GREEDY: hay inner si el token siguiente arranca un tipo, así  *)
-(* 'error int n' = error<int> + nombre 'n', y 'fn f() -> error;' = error     *)
-(* sola. Corolario: un binding de tipo 'error' puro seguido de nombre        *)
-(* ('error n;') no es escribible — caso marginal, use 'error void n;'.       *)
-error_type     = "error" [ type ] ;
-
-(* nombre CUALIFICADO: un tipo publicado por una librería importada.        *)
-(*     #from d_types #import dt_variables as dt;                            *)
-(*     const dt.int8 abc;              -- 'int8' lo declara la librería      *)
-(* Así los tipos no nativos (int8/float16/...) se usan igual que un struct.  *)
-qualified_name = IDENTIFIER { "." IDENTIFIER } ;
-
-type_suffix    = "?"                    (* nullable: 'int?'                          *)
-               | "ptr" [ "mutable" ] ;  (* puntero POSTFIJO: 'char ptr' = 'char *'  *)
-                                       (* de C. 'T ptr' solo lectura a traves de el;*)
-                                       (* 'T ptr mutable' permite escribir. Los      *)
-                                       (* sufijos se aplican izq->der, asi que el    *)
-                                       (* orden desambigua: 'char ptr?' (ptr         *)
-                                       (* nullable) vs 'char? ptr' (ptr a nullable). *)
+type           = base_type { "?" | "ptr" [ "mutable" ] } ;
+base_type      = "int" | "float" | "bool" | "char" | "str" | "byte" | "void" | "type"
+               | "error" [ type ]
+               | "self"
+               | qualified_name [ type_args ] ;
+type_args      = "<" type { "," type } ">" ;
+type_params    = "<" IDENTIFIER { "," IDENTIFIER } ">" ;
+qualified_name = name { "." name } ;
+name           = IDENTIFIER | DUNDER ;
 
 
-(* ========================= 5. REGLAS LÉXICAS =========================== *)
-(* Cómo el lexer forma los terminales a partir de code points Unicode.      *)
+(* palabras reservadas: tipos *)
+type_kw        = "int" | "float" | "bool" | "char" | "str" | "byte" | "void"
+               | "type" | "error" | "ptr" | "mutable" ;
 
-IDENTIFIER     = ident_start { ident_continue } ;                   (* [OK] *)
-ident_start    = ?Unicode XID_Start? | "_" ;
-ident_continue = ?Unicode XID_Continue? | "_" ;
+(* palabras reservadas: declaraciones y modificadores *)
+decl_kw        = "fn" | "struct" | "enum" | "const" | "var" | "test"
+               | "public" | "private" | "internal" | "hook" | "dunder" ;
 
-INT_LIT        = digit { digit } ;                                 (* [OK] *)
-FLOAT_LIT      = digit { digit } "." digit { digit } ;             (* [OK] *)
-digit          = "0" … "9" ;
+(* palabras reservadas: control de flujo *)
+control_kw     = "if" | "else" | "while" | "match" | "case" | "return"
+               | "break" | "continue" | "with" ;
 
-(* cadena PLANA: sin interpolación; '{' y '}' son caracteres literales.      *)
-(* f-string: prefijo 'f' pegado a '"'. SOLO ella interpola: "...{expr}...",  *)
-(* con '{{' y '}}' como llave literal. OJO: el lexer NO parsea 'expression'  *)
-(* dentro de '{ }'; captura el texto crudo (Interp) y su análisis queda      *)
-(* para el parser. Ambas formas producen el mismo token STRING_LIT.          *)
-(*                                                                          *)
-(* CONCATENACIÓN: dos o más literales ADYACENTES forman uno solo (como en C, *)
-(* C++ y Python), y los funde el LEXER — es como se parte un mensaje largo   *)
-(* en varias líneas sin pagar una concatenación en ejecución. Cada literal   *)
-(* conserva SU regla: 'f"a{x}" "{y}"' interpola {x} y no {y}, porque la      *)
-(* interpolación ya se resolvió al escanear cada uno. Los CHAR_LIT NO se     *)
-(* concatenan (son otro token, igual que en C).                             *)
-STRING_LIT     = ( plain_string | f_string ) { plain_string | f_string } ;  (* [OK] *)
-plain_string   = '"' { plain_char | escape } '"' ;
-f_string       = "f" '"' { str_char | interp | escape } '"' ;
-interp         = "{" ?texto crudo de la expresión? "}" ;
-plain_char     = ?cualquier code point excepto '"', '\' y salto de línea? ;
-str_char       = ?cualquier code point excepto '"', '\', '{', '}' y salto de línea? ;
+(* palabras reservadas: memoria y conversiones *)
+memory_kw      = "move" | "free" | "sizeof" | "cast" ;
 
-CHAR_LIT       = "'" ( char_char | escape ) "'" ;                  (* [OK] un solo code point *)
-char_char      = ?cualquier code point excepto "'", '\' y salto de línea? ;
+(* palabras reservadas: excepciones *)
+error_kw       = "try" | "catch" | "throw" | "finally" ;
 
-escape         = "\" ( "n" | "t" | "r" | "0" | "\" | '"' | "'" ) ; (* [OK] *)
+(* palabras reservadas: operadores y literales *)
+word_op        = "and" | "or" | "not" ;
+word_lit       = "true" | "false" | "null" ;
 
-ARROW          = "->" ;                                            (* [OK] tipo de retorno de fn *)
+(* palabras contextuales: son IDENTIFIER, el parser compara su texto *)
+contextual     = "as" | "package" | "cpp" | "requires" | "self" ;
 
-DIRECTIVE      = "#" directive_name ;                               (* [OK] *)
-directive_name = "import" | "export" | "extern" | "test" | "from" ;
+(* operadores *)
+operator       = "+" | "-" | "*" | "/" | "%"
+               | "==" | "!=" | "<" | "<=" | ">" | ">="
+               | "&" | "|" | "^" | "~" | "<<" | ">>"
+               | "=" | "+=" | "-=" | "*=" | "/=" | "%="
+               | "&=" | "|=" | "^=" | "<<=" | ">>="
+               | "++" | "--" | "->" | "?" ;
 
-DECORATOR      = "@" IDENTIFIER ;                                   (* [OK] *)
+(* puntuación *)
+punctuation    = "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "." ;
 
+(* identificadores *)
+IDENTIFIER     = id_start { id_continue } ;
+DUNDER         = "__" id_continue { id_continue } "__" ;
+id_start       = ?letra Unicode? | "_" ;
+id_continue    = id_start | digit ;
 
-(* ======================= 6. COMENTARIOS Y ESPACIOS ===================== *)
-(* Reconocidos por el lexer y DESCARTADOS: no generan tokens.               *)
+(* literales *)
+INT_LIT        = digits
+               | "0x" hex_digit { [ "_" ] hex_digit }
+               | "0b" bin_digit { [ "_" ] bin_digit }
+               | "0o" oct_digit { [ "_" ] oct_digit } ;
+FLOAT_LIT      = digits "." digits ;
+digits         = digit { [ "_" ] digit } ;
+digit          = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+hex_digit      = digit | "a" | "b" | "c" | "d" | "e" | "f"
+                       | "A" | "B" | "C" | "D" | "E" | "F" ;
+bin_digit      = "0" | "1" ;
+oct_digit      = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+CHAR_LIT       = "'" ( char_item | escape ) "'" ;
+STRING_LIT     = '"' { char_item | escape } '"' ;
+FSTRING_LIT    = 'f"' { char_item | escape | "{{" | "}}"
+                      | "{" expression [ "!r" ] [ ":" format_spec ] "}" } '"' ;
+format_spec    = [ "0" ] [ digits ] [ "." digits ] [ "d" | "x" | "X" | "b" | "o" | "f" ] ;
+escape         = "\" ( "n" | "t" | "r" | "0" | "\" | '"' | "'" ) ;
+char_item      = ?cualquier code point salvo el delimitador, "\" y el salto de línea? ;
 
-line_comment   = "//" { ?cualquier code point excepto salto de línea? } ;  (* [OK] *)
-block_comment  = "/-" { ?cualquier code point? } "-/" ;            (* [OK] *)
-whitespace     = ?Unicode White_Space? ;                           (* [OK] *)
+(* directivas y decoradores *)
+DIRECTIVE      = "#" ( "import" | "export" | "extern" | "test" | "from" ) ;
+DECORATOR      = "@" IDENTIFIER ;
+RAW_BLOCK      = "{" ?código C++ crudo, con las llaves balanceadas? "}" ;
 
-
-(* ============================== 7. NOTAS =============================== *)
-(*
-   - El ';' es el terminador de sentencia OBLIGATORIO.
-   - 'printf' / 'print' NO son palabras reservadas: son IDENTIFIER resueltos
-     contra una librería (filosofía libsrX). Se invocan como 'alias.fn(args)'
-     tras '#import', p. ej. 'IO.printf("...");'.
-   - 'test' es keyword de DECLARACIÓN (test_decl: bloque de prueba estilo
-     Zig) y no tiene relación con la directiva '#test <fase>', que pide al
-     compilador volcar UNA fase (lexer/parser/ast/sem/hir) y terminar.
-   - Palabras clave de tipo vs literales: 'int'/'float'/'char'/'str' son los
-     tokens de TIPO (INT/FLOAT/CHAR/STR); los literales son tokens distintos
-     (INT_LIT/FLOAT_LIT/CHAR_LIT/STRING_LIT). Así el parser nunca confunde el
-     tipo 'str' con un literal de cadena "...".
-   - 'as' (import) y 'cpp' (#extern) son IDENTIFIER, no keywords reservadas.
-   - La verificación del modelo de memoria (lifetimes de región, validez de un
-     'move') NO es sintáctica: ocurre en semántica y en el lowering a MIR.
-   - Lo que el parser produce (AST) lo consumen, en orden: el AST-tipado, la
-     Semántica y el emisor del HIR. Una regla [OK] llega hasta el '.phir', y
-     de ahí la leen el intérprete, el backend C++ (MIR) y el target web (WIR).
-   - 'and'/'or' CORTOCIRCUITAN. Es una propiedad semántica, no sintáctica,
-     pero condiciona a los backends: el target web los emite como ramas, no
-     como 'i32.and'/'i32.or' (ver web/README.md).
-*)
+(* comentarios y espacios: no producen tokens *)
+line_comment   = "//" { ?cualquier code point salvo el salto de línea? } ;
+block_comment  = "/-" { ?cualquier code point? } "-/" ;
+whitespace     = ?Unicode White_Space? ;

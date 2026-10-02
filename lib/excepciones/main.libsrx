@@ -1,0 +1,82 @@
+/- excepciones: el repertorio de excepciones de suriaX, en un solo lugar.
+
+ Como el de Python: quien lee un programa sabe dónde buscar qué puede
+ fallar, y quien lo escribe no inventa un tipo nuevo para cada error común.
+ Hay dos grupos.
+
+ 1. Las que lanza el RUNTIME. Una operación sin resultado posible -dividir
+    entre cero, leer fuera de un índice- no termina el programa de golpe:
+    lanza uno de estos valores, igual que un 'throw' del usuario.
+
+     #import excepciones as exc
+
+     try { r = a / b; }
+     catch (exc.DivisionPorCero e) { stdp.println(e.mensaje); };
+
+    Traen el mensaje y la posición (línea, columna) de la operación que
+    falló. Si nadie las atrapa, el programa termina con su código (EXC001,
+    EXC002) y el mensaje.
+
+ 2. Las de USO GENERAL, para que el programa las lance:
+
+     if (edad < 0) { throw exc.ValorInvalido{ mensaje: "edad negativa" }; };
+
+    Solo llevan el mensaje: quien las lanza sabe qué pasó, no en qué línea
+    está (como 'raise ValueError("...")' en Python).
+
+ 'catch (e)' sin tipo atrapa cualquiera de las dos, sin importar esta
+ librería.
+
+ Es un PAQUETE: los tipos de siempre viven aquí, en su raíz, así que
+ 'exc.DivisionPorCero' no cambia (y los dos motores la lanzan por esa ruta).
+ Una familia nueva de excepciones entra como submódulo de esta carpeta
+ ('excepciones/<familia>.libsrx' con '#export as <familia>') sin tocar lo
+ que ya existe. Lo que NO se puede atrapar son los errores de la máquina (RT):
+ usar algo después de 'move', agotar la pila, un destructor que lanza.
+ Indican un programa roto, no una situación de la que recuperarse.
+-/
+
+// --------------------------------------------------------------------------- //
+// las que lanza el runtime
+// --------------------------------------------------------------------------- //
+
+// EXC001: 'a / b' o 'a % b' con enteros y 'b' igual a cero al ejecutar
+// (entre float, IEEE-754 da inf/nan; con un cero escrito no compila: SEM035).
+public struct { str mensaje; int linea; int columna; } DivisionPorCero;
+
+// EXC002: 'v[i]' o un acceso a memoria con 'i' fuera de [0, tamaño).
+public struct { str mensaje; int linea; int columna; } IndiceFueraDeRango;
+
+// EXC003: una operación de archivo de 'sistema' que no se pudo hacer (no
+// existe, es una carpeta, no es UTF-8, falta permiso). El mensaje nombra la
+// ruta y es el mismo en todas las máquinas. (Python: OSError.)
+public struct { str mensaje; int linea; int columna; } ErrorDeArchivo;
+
+// EXC004: un texto que no se puede convertir: 'text.parse_int("12a")', unos
+// bytes que no son UTF-8 ('text.from_bytes'). (Python: ValueError.)
+public struct { str mensaje; int linea; int columna; } ConversionInvalida;
+
+// EXC005: 'x << n' o 'x >> n' con 'n' fuera de [0, 64).
+public struct { str mensaje; int linea; int columna; } DesplazamientoInvalido;
+
+// --------------------------------------------------------------------------- //
+// las de uso general (como las de Python)
+// --------------------------------------------------------------------------- //
+
+// Un valor del tipo correcto pero inaceptable: una edad negativa, un texto
+// vacío donde hace falta uno. (Python: ValueError.)
+public struct { str mensaje; } ValorInvalido;
+
+// Se buscó algo que no está: una clave, un nombre, un elemento.
+// (Python: KeyError / LookupError.)
+public struct { str mensaje; } NoEncontrado;
+
+// Una operación declarada que todavía no tiene implementación.
+// (Python: NotImplementedError.)
+public struct { str mensaje; } NoImplementado;
+
+// La operación no tiene sentido en el estado actual: sacar de una pila
+// vacía, usar algo ya cerrado. (Python: RuntimeError.)
+public struct { str mensaje; } EstadoInvalido;
+
+#export package as excepciones

@@ -122,10 +122,18 @@ Un solo nivel: no hay subpaquetes anidados.
 
 ## Resolución de rutas
 
-Orden de búsqueda: **(1)** el directorio del fuente que importa, **(2)** las
-rutas de `libraries.libsrx_paths` del `.suriaX_config.yaml`, resueltas
-relativas a la **raíz del proyecto** (el directorio del yaml), nunca al CWD.
-Por defecto `./lib`.
+Orden de búsqueda: **(1)** el directorio del fuente que importa, **(2)** si
+ese directorio está dentro de un paquete, la carpeta que CONTIENE al paquete,
+**(3)** las rutas de `libraries.libsrx_paths` del `.suriaX_config.yaml`,
+resueltas relativas a la **raíz del proyecto** (el directorio del yaml), nunca
+al CWD (por defecto `./lib`), y **(4)** la librería estándar del compilador.
+
+El paso (2) es el que permite que un submódulo importe a su hermano
+(`pk/b.libsrx` con `#import pk.a`) y que un programa guardado dentro de su
+paquete lo encuentre (`src/aritmetica/calc.srcx`). Mientras un paquete se
+está cargando, pedir uno de sus submódulos carga solo ESE archivo (no el
+paquete otra vez); un ciclo real entre submódulos (`x` importa `y` e `y`
+importa `x`) sigue siendo `SEM010`.
 
 Preferencia por base: archivo `.libsrx` > paquete > `.srcx`. Un import
 **punteado** (`IO.print`) solo lo satisface un paquete. Un `.srcx` usado

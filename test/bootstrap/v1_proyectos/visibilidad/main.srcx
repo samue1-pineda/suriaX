@@ -1,0 +1,7 @@
+#import pk
+#import pk.b
+fn main() -> int {
+    var pk.a.A x = pk.a.crea();
+    pk.a.crea();
+    return x.v + b.usa();
+}

@@ -1,0 +1,17 @@
+# clang-tidy: las C++ Core Guidelines (cppcoreguidelines-*) más los grupos
+# que las complementan. Lo corre 'docs/quality/tools/quality.py cpp' contra
+# el compile_commands.json de un build (CMake con Ninja lo genera); NO es
+# parte de 'test/main.py'. Ver docs/quality/normas/cpp.md.
+#
+# No se desactiva ninguna regla de las Core Guidelines: el porcentaje de
+# cumplimiento se calcula sobre todas. Lo que no se cumple se reporta.
+Checks: >
+  -*,
+  cppcoreguidelines-*,
+  bugprone-*,
+  performance-*,
+  portability-*
+# solo las cabeceras del proyecto (no las de la biblioteca estándar)
+HeaderFilterRegex: '(backend|runtime)[/\].*'
+WarningsAsErrors: ''
+FormatStyle: none

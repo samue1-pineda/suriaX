@@ -1,0 +1,24 @@
+#from cosa #import Plano as P
+#from cosa #import Caja
+#from cosa #import Forma
+#from cosa #import id
+#from cosa #import caja as envuelve
+#from mem #import reserve
+#import cosa
+
+fn mide(P ptr p) -> int { return p.x; }
+
+fn main() -> int {
+    var P p = P{ x: 4 };
+    var cosa.Plano q = p;
+    var Caja<int> c = envuelve<int>(3);
+    var cosa.Caja<str> d = Caja<str>{ valor: "d" };
+    var Forma f = Forma.Circulo(id<int>(5) + id(1));
+    var int ptr mutable b = reserve<int>(2);
+    b[0] = c.valor;
+    match (f) {
+        case Forma.Circulo(r): { return r + mide(&q) + b[0]; }
+        case Forma.Nada: { return 0; }
+    };
+    return mide(&p);
+}

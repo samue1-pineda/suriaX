@@ -1,0 +1,18 @@
+/- Banco de la VM: ARITMETICA en un bucle.
+
+ Un 'while' con aritmetica entera y una comparacion por vuelta, sin llamadas
+ ni memoria. Es el caso que mas favorece a una maquina de registros: cada
+ vuelta son unas pocas instrucciones sobre enteros.
+-/
+#from io #import stdp
+
+fn main() -> int {
+    var int suma = 0;
+    var int i = 0;
+    while (i < 300000) {
+        suma = suma + (i * i) % 7;
+        i = i + 1;
+    };
+    stdp.println(f"suma = {suma}");
+    return 0;
+}

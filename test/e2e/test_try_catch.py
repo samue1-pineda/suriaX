@@ -335,3 +335,17 @@ def test_un_enum_suma_tambien_se_filtra():
     catch (e)        { __write__("NO\\n"); };
     return 0;""", "es un Estado\n",
          extra="enum Estado { Ok, Roto(int) };\n")
+
+
+# --------------------------------------------------------------------------- #
+# un destructor nunca lanza
+# --------------------------------------------------------------------------- #
+
+def test_un_throw_escrito_en_un_free_es_sem034():
+    """La parte que se ve al compilar. La indirecta (el __free__ llama a
+    algo que lanza) es RT021: ver excepciones/12_un_destructor_no_lanza."""
+    code, _out, err = run_program(
+        W + "struct { int v; } R;\n"
+            "hook fn __free__(R ptr r) -> void { throw r.v; }\n"
+            "fn main() -> int { var R r = R{ v: 1 }; return 0; };")
+    assert code != 0 and "SEM034" in err, err

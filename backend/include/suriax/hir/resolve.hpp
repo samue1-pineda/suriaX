@@ -32,6 +32,7 @@
 #include <ostream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "suriax/hir/loader.hpp"
@@ -76,6 +77,11 @@ struct Slot {
 
 // Un sitio de llamada ya decidido.
 struct Call {
+    //: el nodo 'Call' del HIR, propiedad de la Unit. Es la IDENTIDAD del
+    //: sitio: la posicion no lo es — dentro de un f-string todas las
+    //: llamadas llevan la posicion del f-string, y 'raiz(varianza(&v))'
+    //: confundia las dos.
+    const pb::Expr* node = nullptr;
     std::uint32_t line = 0;
     std::uint32_t col = 0;
     std::string name;               // como se escribio ('stdp.println')
@@ -110,6 +116,13 @@ struct Function {
     bool prototype = false;         // sin cuerpo: lo aporta el host
     std::vector<Call> calls;
     std::vector<Drop> drops;
+    // los nombres a los que el cuerpo les toma la DIRECCION ('&n'): si son
+    // escalares, el backend los guarda en una celda del monton, que es lo
+    // unico a lo que un puntero puede apuntar
+    std::vector<std::string> direcciones;
+    // los CAMPOS a los que el cuerpo les toma la direccion ('&p.x'): el
+    // operando de cada '&', propiedad de la Unit
+    std::vector<const pb::Expr*> direcciones_de_campo;
 };
 
 // La imagen entendida.
@@ -127,9 +140,22 @@ struct Program {
     // lo que no se pudo resolver, con su posicion. Vacia = el backend
     // entiende la imagen entera.
     std::vector<Call> unresolved;
+    // nodo 'Call' -> (funcion, sitio): el sitio de una llamada en O(1). Se
+    // llena al terminar 'resolve', cuando los vectores ya no crecen.
+    std::unordered_map<const pb::Expr*, std::pair<std::size_t, std::size_t>>
+        sites;
 
     static std::string key(const std::string& unit, const std::string& name);
+    // el sitio ya decidido de ese nodo, o nullptr si 'resolve' no lo vio
+    const Call* site_of(const pb::Expr& node) const;
 };
+
+// nombre local -> alias de la unidad que nombra, en 'unit'. Es la resolucion
+// que la Semantica YA hizo y que viaja en el HIR ('ImportDirective.binding'/
+// 'unit'), no una que el backend re-decida. La usan la resolucion de
+// llamadas y el MIR (rutas como 'tk.TType.PLUS' o 'constants.PI').
+using Bindings = std::unordered_map<std::string, std::string>;
+Bindings bindings_of(const Unit& unit);
 
 // Recorre la imagen y devuelve el programa resuelto.
 //

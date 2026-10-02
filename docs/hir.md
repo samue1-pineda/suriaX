@@ -69,7 +69,7 @@ python runtime/interpreter/main.py dumps/programa.srcx.phir
 
 build/bin/suriax-hir dumps/programa.srcx.phir --pretty
 #   el lector C++: las mismas dos vistas, byte a byte. Compararlas es el
-#   diferencial entre consumidores (test/e2e/test_backend_cpp.py).
+#   diferencial entre consumidores (test/backend/test_backend_cpp_*.py).
 
 build/bin/suriax-hir dumps/programa.srcx.phir --resolve
 #   el lector RESUELVE la imagen: cada función con sus slots, a qué se
@@ -92,7 +92,7 @@ commitean**: `V0/src/HIR/stubs.py` los genera con `protoc` en build (carpeta
 
 | Archivo | Responsabilidad |
 |---|---|
-| [`proto/hir.proto`](../V0/src/HIR/proto/hir.proto) | esquema v1 (compila con `protoc`) |
+| [`proto/hir.proto`](../V0/src/HIR/proto/hir.proto) | esquema (`schema_version` 2; `protoc` lo compila, pero el lado Python no lo necesita: codec propio en `schema.py`/`wire.py`) |
 | [`emmit_IR.py`](../V0/src/HIR/emmit_IR.py) | emisor explícito por clase: `(Program, SymbolTable)` → bytes; acumula `HIRError`, solo emite con cero errores |
 | [`stubs.py`](../V0/src/HIR/stubs.py) | generación en build + carga perezosa de `hir_pb2` |
 | [`PROTOBUF_BRIDGE.md`](../V0/src/HIR/PROTOBUF_BRIDGE.md) | diseño completo del puente (mapeos, decisiones, versionado) |

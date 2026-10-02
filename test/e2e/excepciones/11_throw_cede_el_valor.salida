@@ -1,0 +1,17 @@
+-- una variable local
+  atrapado local
+  libera local
+-- un parametro por valor
+  atrapado parametro
+  libera parametro
+-- un campo de un local (el resto se destruye igual)
+  atrapado campo
+  libera campo
+-- solo la rama que lanza cede el valor
+  no lanzo, sigo usando rama (lanza=false)
+  libera rama (lanza=false)
+  atrapado rama (lanza=true)
+  libera rama (lanza=true)
+-- escribir 'move' sigue siendo valido
+  atrapado con move explicito
+  libera con move explicito

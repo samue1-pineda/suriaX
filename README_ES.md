@@ -48,16 +48,22 @@ el proyecto es una **Pre-Alpha Preview**. El numero exacto es la medalla
 *Version* de arriba: sale de [`version.py`](version.py), la fuente unica que
 leen todos los consumidores (CMake, el sitio de documentacion,
 `suriaX --version` y el release), asi que no puede contradecir a lo publicado.
+Todo lo que se sabe que falla en la version vigente esta en
+[c_errorstfix.md](c_errorstfix.md).
 
 [**X**] definicion de la sintaxis del lenguaje y gramatica mediante EBNF
 
-[**X**] frontend(anilisis lexico, analisis sintantico y generacion del AST)
+[**X**] frontend (analisis lexico, analisis sintactico, AST y AST tipado, analisis semantico)
 
-[**/**] Representaciones intermedias(HIR, MIR & lowering)
+[**X**] HIR (formato protobuf, escrito solo con la biblioteca estandar de Python) y un interprete tree-walk que lo ejecuta
 
-[ ] Back-end VM JIT
+[**X**] bootstrap: el compilador escrito en suriaX (`src/`, la V1) se compila a si mismo, y cada unidad que produce es identica byte a byte a la del compilador en Python (el punto fijo) — siguen los diagnosticos
 
-[ ] suriniX build system, playground web y documentacion usado LLVM - **Planeado**
+[**/**] backend nativo en C++: lector del HIR, lowering a MIR (registros virtuales + CFG), una VM de registros y verificacion de propiedad — sin JIT y sin binarios nativos todavia
+
+[**/**] target web: un subconjunto declarado del lenguaje compilado a WebAssembly
+
+[**/**] tooling suriniX: el comando `suri`, un playground web que muestra cada fase del compilador y el sitio de documentacion — el build system sigue **planeado**
 
 *para un listado de todas las futuras implementaciones lease: [ROADMAP.md](ROADMAP.md).*
 

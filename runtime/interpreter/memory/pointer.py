@@ -134,7 +134,8 @@ def _select_cell():
     if pref == "1" and not native.AVAILABLE:
         raise RuntimeError(
             "SURIAX_NATIVE_MEM=1 pero el backend nativo 'memory_c' no cargó "
-            "(compílalo en runtime/logic_mem/build con el intérprete actual)"
+            f"({native.LOAD_ERROR}). Compílalo con el intérprete actual: "
+            "cmake -S . -B build && cmake --build build --target suriax-native"
         )
     return native.NativeCell if native.AVAILABLE else PyCell
 

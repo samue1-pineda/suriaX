@@ -54,9 +54,9 @@ def _compare(name: str, actual: str) -> None:
 _PROGRAMA = """\
 struct { int x; Nodo ptr? sig; } Nodo;
 
-fn crea(int v) -> Nodo ptr? {
-    var Nodo n = Nodo{ x: v, sig: null };
-    return &n;
+fn crea(Nodo ptr mutable n, int v) -> Nodo ptr? {
+    n.x = v;
+    return n;
 };
 
 fn suma(Nodo ptr? n) -> error int {
@@ -65,7 +65,8 @@ fn suma(Nodo ptr? n) -> error int {
 };
 
 fn main() -> int {
-    var Nodo ptr? cabeza = crea(7);
+    var Nodo base = Nodo{ x: 0, sig: null };
+    var Nodo ptr? cabeza = crea(&base, 7);
     try {
         var int t = suma(cabeza);
     } catch (e) { };
@@ -91,12 +92,11 @@ def test_snapshot_tabla_de_simbolos():
 
 
 def test_snapshot_hir_texto():
-    """El HIR en texto protobuf: el contrato con los targets (C++/intérprete)."""
-    try:
-        import google.protobuf  # noqa: F401
-    except ImportError:
-        return  # sin protobuf esta fase no aplica (el frontend no lo exige)
+    """El HIR en texto protobuf: el contrato con los targets (C++/intérprete).
 
+    Corre SIEMPRE: el HIR se serializa con el codec propio y no necesita
+    protobuf (antes se saltaba sin él, en silencio y contando como pasada).
+    """
     from src.HIR.emmit_IR import build_module, module_to_text
     program, table, errors = analyze(_PROGRAMA)
     assert not errors, errors
@@ -111,10 +111,6 @@ def test_snapshot_hir_texto():
 def test_esquema_hir_compila_y_su_version_es_estable():
     """``schema_version`` es el fail-fast de la frontera: si cambia, TODOS
     los lectores (C++ e intérprete) deben actualizarse a la vez."""
-    try:
-        import google.protobuf  # noqa: F401
-    except ImportError:
-        return
     from src.HIR.emmit_IR import SCHEMA_VERSION
     assert SCHEMA_VERSION == 2, (
         f"schema_version cambió a {SCHEMA_VERSION}: actualiza los lectores "

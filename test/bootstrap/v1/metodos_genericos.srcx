@@ -1,0 +1,36 @@
+#import mem
+struct { T ptr mutable datos; int len; } Lista<T>;
+fn crea<T>(int n) -> Lista<T> { return Lista<T>{ datos: mem.reserve<T>(n), len: 0 }; }
+@impl Lista<T> {
+    fn push(Lista<T> ptr mutable self, T x) -> void {
+        self.datos[self.len] = move x;
+        self.len = self.len + 1;
+    }
+    fn get(Lista<T> ptr self, int i) -> T { return self.datos[i]; }
+    fn primero(Lista<T> ptr self) -> T ptr { return &self.datos[0]; }
+    fn largo(Lista<T> ptr self) -> int { return self.len; }
+    fn saca(Lista<T> ptr mutable self) -> T {
+        self.len = self.len - 1;
+        return mem.take<T>(self.datos, self.len);
+    }
+}
+hook fn __index__(Lista<T> ptr self, int i) -> T { return self.datos[i]; }
+hook fn __index_set__(Lista<T> ptr mutable self, int i, T x) -> void { self.datos[i] = x; }
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+fn main() -> int {
+    var Lista<int> l = crea<int>(4);
+    l.push(1);
+    l.push(2);
+    l[0] = 5;
+    var int a = l[1] + l.get(0) + l.largo();
+    var Lista<str> s = crea<str>(2);
+    s.push("x");
+    var str t = s[0] + s.get(0);
+    var Lista<R> rs = crea<R>(2);
+    rs.push(R{ que: "r" });
+    var R ptr pr = rs.primero();
+    var R sacado = rs.saca();
+    rs.push(move sacado);
+    return a + l.saca();
+}

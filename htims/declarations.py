@@ -67,7 +67,7 @@ _ARGS_CXX = ("cxx", "logic")
 RESERVED_HOOKS: Tuple[str, ...] = (
     "__free__", "__sizeof__", "__print__", "__len__",
     "__cast__", "__index__", "__index_set__", "__eq__",
-    "__min__", "__max__",
+    "__min__", "__max__", "__hash__",
 )
 
 

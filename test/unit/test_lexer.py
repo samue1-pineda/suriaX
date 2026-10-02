@@ -143,3 +143,15 @@ def test_error_lexico_se_recupera_y_reporta():
     tokens, errors = lex("int x = §;")
     assert errors, "un carácter inválido debería reportarse"
     assert tokens[-1].type is TokenType.EOF, "el lexer debe llegar a EOF igual"
+
+
+def test_un_digito_que_no_es_ascii_es_caracter_inesperado():
+    """Regresion (ICE000): '²' y '٣' pasan 'str.isdigit()', asi que el lexer
+    los trataba como numero y 'int()' reventaba con un ValueError. Un literal
+    numerico de suriaX es solo de digitos ASCII; lo demas es LEX001.
+    (Lo encontro el lexer del bootstrap: al reescribirlo en suriaX hubo que
+    decidir QUE es un digito, y la V0 no lo habia decidido.)"""
+    for texto in ("x = \u00b2;", "x = \u0663;"):
+        tokens, errors = lex(texto)
+        assert [e.code for e in errors] == ["LEX001"], (texto, errors)
+        assert tokens[-1].type is TokenType.EOF

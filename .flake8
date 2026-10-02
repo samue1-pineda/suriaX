@@ -1,0 +1,25 @@
+# flake8: PEP 8 (pycodestyle, E/W), errores lógicos (pyflakes, F) y
+# complejidad (mccabe, C901). Lo corre 'docs/quality/tools/quality.py python';
+# NO es parte de 'test/main.py'. Ver docs/quality/normas/python.md.
+[flake8]
+# PEP 8 admite hasta 99 caracteres "si el equipo lo acuerda"; el mismo valor
+# que black y pylint (pyproject.toml). Desviación documentada: PEP 8 pide 72
+# en comentarios y docstrings, aquí rige el mismo 99.
+max-line-length = 99
+# PEP 20, "Simple is better than complex": una función con complejidad
+# ciclomática mayor que 15 se reporta (C901)
+max-complexity = 15
+# E203 contradice a black (el espacio antes de ':' en un slice)
+extend-ignore = E203
+exclude =
+    .git,
+    __pycache__,
+    build,
+    build-*,
+    node_modules,
+    web,
+    venv,
+    .venv,
+    V0/src/HIR/gen,
+    documentation/build,
+    suriax-*

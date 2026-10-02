@@ -1,0 +1,23 @@
+/- geo.figura: un enum con payload (tipo suma) y funciones sobre el -/
+
+enum Figura { Circulo(int), Rect(int, int), Nada };
+
+public fn area(Figura f) -> int {
+    match (f) {
+        case Figura.Circulo(r): { return 3 * r * r; }
+        case Figura.Rect(a, b): { return a * b; }
+        case Figura.Nada: { return 0; }
+    }
+    return -1;
+}
+
+public fn nombre(Figura f) -> str {
+    match (f) {
+        case Figura.Circulo(r): { return f"circulo de radio {r}"; }
+        case Figura.Rect(a, b): { return f"rectangulo {a}x{b}"; }
+        case Figura.Nada: { return "nada"; }
+    }
+    return "?";
+}
+
+#export as figura

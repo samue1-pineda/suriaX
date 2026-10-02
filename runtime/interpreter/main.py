@@ -30,6 +30,13 @@ for _p in (_REPO_ROOT, _V0_ROOT):
 
 from runtime.interpreter import loader  # noqa: E402
 
+# El MISMO margen de recursión que 'V0/main.py'. El tree-walk gasta varios
+# marcos de Python por cada llamada de suriaX, y con el límite por defecto
+# (1000) un programa que corre bien con 'suri' caía con RT019 a unos 200
+# marcos al ejecutar su .phir desde aquí: el mismo archivo daba dos
+# resultados según la puerta de entrada.
+sys.setrecursionlimit(10_000)
+
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
@@ -70,7 +77,13 @@ def main(argv: list[str]) -> int:
         "--trace-exec", action="store_true",
         help="traza la ejecucion (llamadas y retornos, con anidamiento)",
     )
-    args = parser.parse_args(argv[1:])
+    # lo que va después del primer '--' es del PROGRAMA (sistema.argumento)
+    propios = argv[1:]
+    del_programa: list[str] = []
+    if "--" in propios:
+        corte = propios.index("--")
+        propios, del_programa = propios[:corte], propios[corte + 1:]
+    args = parser.parse_args(propios)
 
     if not os.path.isfile(args.phir):
         print(f"archivo no encontrado: {args.phir}", file=sys.stderr)
@@ -83,6 +96,20 @@ def main(argv: list[str]) -> int:
         except loader.HIRLoadError as exc:
             print(f"error cargando HIR: {exc}", file=sys.stderr)
             return 3
+        # '#extern cpp' tambien desde aqui, como 'suriax-hir --run': los dos
+        # corredores de un .phir cumplen sus prototipos con el C++ del
+        # programa. Sin yaml (esta CLI no lo lee): manda el entorno.
+        from runtime import extern_cpp
+        reporte = extern_cpp.bind(image, dumps_dir=os.path.dirname(
+            os.path.abspath(args.phir)))
+        if reporte.error is not None:
+            print(f"#extern cpp: {reporte.error}", file=sys.stderr)
+        elif reporte.ligados:
+            print(f"#extern cpp: {len(reporte.ligados)} prototipo(s) ligado(s) "
+                  f"a C++ ({', '.join(reporte.ligados)})", file=sys.stderr)
+        for nombre, motivo in reporte.omitidos:
+            print(f"#extern cpp: '{nombre}' no se pudo ligar — {motivo}",
+                  file=sys.stderr)
         # config minima de la CLI directa; V0/main.py pasa la del yaml via
         # este mismo camino (mismos knobs, una sola forma).
         config = {"interpreter": {
@@ -90,6 +117,7 @@ def main(argv: list[str]) -> int:
             "trace_memory": args.trace_memory,
             "trace_exec": args.trace_exec,
             "max_steps": 0,
+            "argumentos": [args.phir, *del_programa],
         }}
         if args.run_tests:
             return interp.run_tests(image, config)

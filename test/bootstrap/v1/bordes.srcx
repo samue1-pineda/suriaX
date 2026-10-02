@@ -1,0 +1,26 @@
+fn vacia() -> void { }
+
+fn signo(int x) -> int {
+    if (x < 0) {
+        return -1;
+    } else if (x > 0) {
+        return 1;
+    };
+    return 0;
+}
+
+fn main() -> int {
+    var int cero = 0;
+    var str nada = "";
+    var bool no = false;
+    var bool si = true;
+    var float f0 = 0.0;
+    var char salto = '\n';
+    var int mascara = 0xFF;
+    var int grande = 1_000_000;
+    var int todo = 0xFFFFFFFFFFFFFFFF;
+    var int neg = -cero;
+    vacia();
+    if (no or si) { neg = -neg + signo(mascara - grande); };
+    return signo(todo) + neg;
+}

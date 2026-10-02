@@ -1,0 +1,4 @@
+// libreria de prueba para 07_librerias: OTRO 'Error', homonimo, con codigo
+struct { int codigo; } Error;
+public fn falla() -> void { throw Error{ codigo: 2 }; }
+#export as b

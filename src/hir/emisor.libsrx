@@ -1,0 +1,902 @@
+/- hir.emisor — el árbol analizado -> los bytes del `.phir`
+   (`V0/src/HIR/emmit_IR.py` + la serialización de `wire.py`).
+
+ La salida tiene que ser IDÉNTICA, byte a byte, a la de la V0. Dos reglas
+ de protobuf mandan, y por ellas el emisor trabaja en DOS pasadas:
+
+ 1. El POOL DE TIPOS (`Module.types`) numera cada tipo en el orden en que la
+    V0 lo encuentra al recorrer el árbol (`src/hir/contrato.md`, sección 2).
+    `numera_*` repite ESE recorrido y solo asigna números.
+ 2. Los bytes van en orden de NÚMERO DE CAMPO del esquema, que no es el del
+    recorrido (en `FunctionDecl`, `params` es el 2, `body` el 4 y
+    `return_type_id` el 7). `msg_*` escribe cada mensaje en ese orden, con
+    los números que asignó la pasada 1.
+
+ Y las reglas de presencia de proto3: un escalar que vale su defecto no se
+ escribe, salvo si es de un `oneof` (el valor de un literal, el texto de una
+ parte de f-string); un submensaje se escribe aunque esté vacío si la V0 lo
+ marcó presente (`SetInParent`: el cuerpo de una función, un bloque, un
+ `return;`, un `break`, un `&x`).
+
+ SUBCONJUNTO: ver `semantica.resolver`.
+-/
+
+#import frontend.arbol as ar
+#import semantica.nodos as nd
+#import semantica.tipos as tip
+#import semantica.simbolos as sim
+#import semantica.propiedad as prop
+#import semantica.resolver as res
+#import semantica.enlazador as enl
+#import hir.protobuf as pb
+#import array.vector as vec
+#import text
+
+//: `Module.schema_version` (`SCHEMA_VERSION` de la V0)
+public const int SCHEMA_VERSION = 2;
+
+struct {
+    vec.Vector<int> pool;    // Module.types: índices del universo, en orden (0 = vacío)
+    vec.Vector<int> mapa;    // universo -> posición en el pool (-1 = todavía no)
+} Numeracion;
+
+/- Los bytes del `.phir` del programa `raiz`, ya analizado en `r`.
+   `fuente` es la ruta tal como la recibió el compilador (`source_file`). -/
+public fn emite(vec.Vector<ar.Nodo> ptr a, int raiz, res.Analisis ptr r, str fuente)
+        -> vec.Vector<byte> {
+    var Numeracion num = Numeracion{ pool: vec.dynamic<int>(16),
+                                     mapa: vec.dynamic<int>(r.ctx.u.tipos.len()) };
+    var int i = 0;
+    while (i < r.ctx.u.tipos.len()) { num.mapa.push(-1); i = i + 1; };
+    num.pool.push(0);        // la entrada 0: el tipo vacío ("sin tipo")
+    num.mapa[0] = 0;
+    var vec.Vector<int> items = nd.hijos(a, raiz, "items");
+    i = 0;
+    while (i < items.len()) {
+        numera_item(a, items.get(i), r, &num);
+        i = i + 1;
+    };
+    return msg_modulo(a, &items, r, &num, fuente);
+}
+
+// ------------------------------------------------------------------------ //
+// pasada 1: numerar el pool en el orden de la V0
+// ------------------------------------------------------------------------ //
+
+fn id_de(Numeracion ptr mutable num, int t) -> int {
+    if (t <= 0) { return 0; };
+    if (num.mapa.get(t) < 0) {
+        num.mapa[t] = num.pool.len();
+        num.pool.push(t);
+    };
+    return num.mapa.get(t);
+}
+
+/- El número que ya tiene el tipo del nodo `n` (pasada 2). -/
+fn tid(Numeracion ptr num, res.Analisis ptr r, int n) -> int {
+    var int t = r.tipo_de.get(n);
+    if (t <= 0) { return 0; };
+    return num.mapa.get(t);
+}
+
+fn numera_item(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+               Numeracion ptr mutable num) -> void {
+    var str c = nd.clase(a, n);
+    if (c == "StructDecl") {
+        numera_tipos_de(a, n, "fields", r, num);
+        return;
+    };
+    if (c == "EnumDecl") {
+        var vec.Vector<int> items = nd.hijos(a, n, "items");
+        var int i = 0;
+        while (i < items.len()) {
+            numera_opcional(a, nd.hijo(a, items.get(i), "value"), r, num);
+            numera_tipos_de(a, items.get(i), "payload", r, num);
+            i = i + 1;
+        };
+        return;
+    };
+    if (c != "FunctionDecl") {
+        numera_sentencia(a, n, r, num);   // una sentencia del módulo
+        return;
+    };
+    numera_tipos_de(a, n, "params", r, num);
+    id_de(num, r.tipo_de.get(n));
+    var int cuerpo = nd.hijo(a, n, "body");
+    if (cuerpo >= 0) { numera_bloque(a, cuerpo, r, num); };
+}
+
+/- Los tipos anotados de los hijos `campo` de `n`, en orden. -/
+fn numera_tipos_de(vec.Vector<ar.Nodo> ptr a, int n, str campo, res.Analisis ptr r,
+                   Numeracion ptr mutable num) -> void {
+    var vec.Vector<int> hs = nd.hijos(a, n, campo);
+    var int i = 0;
+    while (i < hs.len()) {
+        id_de(num, r.tipo_de.get(hs.get(i)));
+        i = i + 1;
+    };
+}
+
+fn numera_bloque(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+                 Numeracion ptr mutable num) -> void {
+    var vec.Vector<int> ss = nd.hijos(a, n, "statements");
+    var int i = 0;
+    while (i < ss.len()) {
+        numera_sentencia(a, ss.get(i), r, num);
+        i = i + 1;
+    };
+}
+
+fn numera_sentencia(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+                    Numeracion ptr mutable num) -> void {
+    var str c = nd.clase(a, n);
+    if (c == "Block") { numera_bloque(a, n, r, num); return; };
+    if (c == "VarDecl") {
+        id_de(num, r.tipo_de.get(n));
+        numera_opcional(a, nd.hijo(a, n, "value"), r, num);
+        return;
+    };
+    if (c == "IfStmt") {
+        numera_expr(a, nd.hijo(a, n, "condition"), r, num);
+        numera_bloque(a, nd.hijo(a, n, "then_block"), r, num);
+        var int otro = nd.hijo(a, n, "else_branch");
+        if (otro >= 0) { numera_sentencia(a, otro, r, num); };
+        return;
+    };
+    if (c == "WhileStmt") {
+        numera_expr(a, nd.hijo(a, n, "condition"), r, num);
+        numera_bloque(a, nd.hijo(a, n, "body"), r, num);
+        return;
+    };
+    if (c == "MatchStmt") {
+        numera_expr(a, nd.hijo(a, n, "subject"), r, num);
+        var vec.Vector<int> ramas = nd.hijos(a, n, "cases");
+        var int i = 0;
+        while (i < ramas.len()) {
+            numera_expr(a, nd.hijo(a, ramas.get(i), "pattern"), r, num);
+            numera_sentencia(a, nd.hijo(a, ramas.get(i), "body"), r, num);
+            i = i + 1;
+        };
+        return;
+    };
+    if (c == "ReturnStmt") { numera_opcional(a, nd.hijo(a, n, "value"), r, num); return; };
+    if (c == "ExprStmt") { numera_expr(a, nd.hijo(a, n, "expr"), r, num); return; };
+    if (c == "MoveStmt" or c == "FreeStmt") {
+        numera_expr(a, nd.hijo(a, n, "target"), r, num);
+        return;
+    };
+    if (c == "ThrowStmt") { numera_expr(a, nd.hijo(a, n, "value"), r, num); return; };
+    if (c == "TryStmt") {
+        // el bloque protegido, cada 'catch' (su tipo viaja inline: no entra
+        // al pool) y el 'finally'
+        numera_bloque(a, nd.hijo(a, n, "try_block"), r, num);
+        var vec.Vector<int> ramas = nd.hijos(a, n, "catches");
+        var int i = 0;
+        while (i < ramas.len()) {
+            numera_bloque(a, nd.hijo(a, ramas.get(i), "block"), r, num);
+            i = i + 1;
+        };
+        var int final = nd.hijo(a, n, "finally_block");
+        if (final >= 0) { numera_bloque(a, final, r, num); };
+        return;
+    };
+}
+
+fn numera_opcional(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+                   Numeracion ptr mutable num) -> void {
+    if (n >= 0) { numera_expr(a, n, r, num); };
+}
+
+/- Una expresión: SU tipo primero, después los de sus hijos, en el orden en
+   que la V0 los emite. -/
+fn numera_expr(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+               Numeracion ptr mutable num) -> void {
+    id_de(num, r.tipo_de.get(n));
+    var str c = nd.clase(a, n);
+    if (c == "BinaryOp") {
+        numera_expr(a, nd.hijo(a, n, "left"), r, num);
+        numera_expr(a, nd.hijo(a, n, "right"), r, num);
+    } else if (c == "UnaryOp" or c == "AddrOf" or c == "MoveExpr") {
+        numera_expr(a, nd.hijo(a, n, "operand"), r, num);
+    } else if (c == "Assignment") {
+        numera_expr(a, nd.hijo(a, n, "target"), r, num);
+        numera_expr(a, nd.hijo(a, n, "value"), r, num);
+    } else if (c == "Call") {
+        numera_expr(a, nd.hijo(a, n, "callee"), r, num);
+        numera_lista(a, n, "args", r, num);
+    } else if (c == "MemberAccess") {
+        // 'X.Y.name' viaja como el literal que es: sin objeto
+        if (not r.nombre_de_item.contains(n)) {
+            numera_expr(a, nd.hijo(a, n, "obj"), r, num);
+        };
+    } else if (c == "Index") {
+        numera_expr(a, nd.hijo(a, n, "obj"), r, num);
+        numera_expr(a, nd.hijo(a, n, "index"), r, num);
+    } else if (c == "CastExpr") {
+        numera_expr(a, nd.hijo(a, n, "value"), r, num);
+    } else if (c == "StructLiteral") {
+        numera_lista(a, n, "values", r, num);
+    } else if (c == "InterpolatedString") {
+        var vec.Vector<int> partes = nd.hijos(a, n, "parts");
+        var int i = 0;
+        while (i < partes.len()) {
+            var int p = partes.get(i);
+            if (nd.clase(a, p) == "FormattedValue") {
+                numera_expr(a, nd.hijo(a, p, "value"), r, num);
+            } else if (nd.clase(a, p) != "") {
+                numera_expr(a, p, r, num);
+            };
+            i = i + 1;
+        };
+    };
+}
+
+fn numera_lista(vec.Vector<ar.Nodo> ptr a, int n, str campo, res.Analisis ptr r,
+                Numeracion ptr mutable num) -> void {
+    var vec.Vector<int> hs = nd.hijos(a, n, campo);
+    var int i = 0;
+    while (i < hs.len()) {
+        numera_expr(a, hs.get(i), r, num);
+        i = i + 1;
+    };
+}
+
+// ------------------------------------------------------------------------ //
+// pasada 2: los mensajes, en orden de número de campo
+// ------------------------------------------------------------------------ //
+
+/- Un escalar de texto que no se escribe si está vacío (proto3). -/
+fn texto_si(vec.Vector<byte> ptr mutable out, int campo, str valor) -> void {
+    if (valor != "") { pb.campo_texto(out, campo, valor); };
+}
+
+/- Un escalar entero (o enum, o bool) que no se escribe si vale 0. -/
+fn varint_si(vec.Vector<byte> ptr mutable out, int campo, int valor) -> void {
+    if (valor != 0) { pb.campo_varint(out, campo, valor); };
+}
+
+/- Un submensaje: siempre presente, aunque esté vacío. -/
+fn sub(vec.Vector<byte> ptr mutable out, int campo, vec.Vector<byte> ptr m) -> void {
+    pb.campo_bytes(out, campo, m);
+}
+
+fn tiene(res.Analisis ptr r, int n, int bit) -> bool {
+    return (r.bandera.get(n) & bit) != 0;
+}
+
+fn msg_modulo(vec.Vector<ar.Nodo> ptr a, vec.Vector<int> ptr items, res.Analisis ptr r,
+              Numeracion ptr num, str fuente) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    pb.campo_varint(&out, 1, SCHEMA_VERSION);
+    texto_si(&out, 2, fuente);
+    var vec.Vector<byte> tabla = msg_tabla(r);
+    if (tabla.len() > 0) { sub(&out, 3, &tabla); };
+    var int i = 0;
+    while (i < items.len()) {
+        var vec.Vector<byte> d = msg_decl(a, items.get(i), r, num);
+        sub(&out, 4, &d);
+        i = i + 1;
+    };
+    // libraries (5): cada unidad que importa, por su '<unidad>.phir'
+    i = 0;
+    while (i < r.librerias.len()) {
+        var str unidad = enl.lib(r.ctx, r.librerias.get(i)).unidad;
+        var vec.Vector<byte> ref = pb.buffer();
+        texto_si(&ref, 1, unidad);
+        texto_si(&ref, 2, unidad + ".phir");
+        sub(&out, 5, &ref);
+        i = i + 1;
+    };
+    i = 0;
+    while (i < num.pool.len()) {
+        var vec.Vector<byte> t = msg_tipo(&r.ctx.u, num.pool.get(i));
+        sub(&out, 6, &t);
+        i = i + 1;
+    };
+    return out;
+}
+
+/- Un `Type` completo (con su `inner` y sus `args` dentro, no en el pool:
+   así viajan en la tabla de símbolos, en un `cast` y en cada entrada del
+   pool). -/
+fn msg_tipo(tip.Universo ptr u, int t) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    if (t <= 0) { return out; };
+    varint_si(&out, 1, tip.clase_de(u, t));
+    texto_si(&out, 2, tip.nombre_de(u, t));
+    var int inner = tip.inner_de(u, t);
+    if (inner > 0) {
+        var vec.Vector<byte> m = msg_tipo(u, inner);
+        sub(&out, 3, &m);
+    };
+    if (tip.mut_de(u, t)) { pb.campo_varint(&out, 4, 1); };
+    var int k = 0;
+    while (k < tip.n_args_de(u, t)) {
+        var vec.Vector<byte> m = msg_tipo(u, tip.arg_de(u, t, k));
+        sub(&out, 5, &m);
+        k = k + 1;
+    };
+    return out;
+}
+
+// --- tabla de símbolos --------------------------------------------------- //
+
+/- `SymbolTable`: `types` (1) y `values` (2) ORDENADOS POR CLAVE —el orden de
+   un diccionario no es parte del dato, y la V0 lo fija para que el `.phir`
+   sea reproducible— y `hooks` (3), en orden de declaración. -/
+fn msg_tabla(res.Analisis ptr r) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    var vec.Vector<str> tipos = r.tabla.tipos.keys();
+    mapa_de_simbolos(r, &out, 1, &tipos, true);
+    var vec.Vector<str> valores = r.tabla.valores.keys();
+    mapa_de_simbolos(r, &out, 2, &valores, false);
+    var int i = 0;
+    while (i < r.tabla.hooks.len()) {
+        var int h = r.tabla.hooks.get(i);
+        var sim.Simbolo s = sim.simbolo(&r.tabla, h);
+        var vec.Vector<byte> e = pb.buffer();
+        texto_si(&e, 1, s.hook_owner);
+        varint_si(&e, 2, s.hook_kind);
+        var vec.Vector<byte> m = msg_simbolo(r, h);
+        sub(&e, 3, &m);
+        sub(&out, 3, &e);
+        i = i + 1;
+    };
+    return out;
+}
+
+/- Un `map<string, Symbol>`: una entrada `{clave (1), símbolo (2)}` por
+   nombre, en orden de clave. -/
+fn mapa_de_simbolos(res.Analisis ptr r, vec.Vector<byte> ptr mutable out, int campo,
+                    vec.Vector<str> ptr mutable nombres, bool de_tipos) -> void {
+    ordena(nombres);
+    var int i = 0;
+    while (i < nombres.len()) {
+        var int s = sim.busca_valor(&r.tabla, nombres.get(i));
+        if (de_tipos) { s = sim.busca_tipo(&r.tabla, nombres.get(i)); };
+        entrada(r, out, campo, nombres.get(i), s);
+        i = i + 1;
+    };
+}
+
+fn entrada(res.Analisis ptr r, vec.Vector<byte> ptr mutable out, int campo, str clave,
+           int s) -> void {
+    var vec.Vector<byte> e = pb.buffer();
+    pb.campo_texto(&e, 1, clave);
+    var vec.Vector<byte> m = msg_simbolo(r, s);
+    sub(&e, 2, &m);
+    sub(out, campo, &e);
+}
+
+/- Ordena los textos (inserción: son pocos, y el orden es el de sus puntos
+   de código, el mismo que `sorted` de Python). -/
+fn ordena(vec.Vector<str> ptr mutable v) -> void {
+    var int i = 1;
+    while (i < v.len()) {
+        var str x = v.get(i);
+        var int j = i - 1;
+        while (j >= 0 and v.get(j) > x) {
+            v[j + 1] = v.get(j);
+            j = j - 1;
+        };
+        v[j + 1] = x;
+        i = i + 1;
+    };
+}
+
+fn msg_simbolo(res.Analisis ptr r, int g) -> vec.Vector<byte> {
+    var sim.Simbolo s = sim.simbolo(&r.tabla, g);
+    var vec.Vector<byte> out = pb.buffer();
+    texto_si(&out, 1, s.nombre);
+    varint_si(&out, 2, s.clase);
+    varint_si(&out, 3, s.linea);
+    varint_si(&out, 4, s.col);
+    if (s.tipo > 0) {
+        var vec.Vector<byte> t = msg_tipo(&r.ctx.u, s.tipo);
+        sub(&out, 5, &t);
+    };
+    if (s.es_mutable) { pb.campo_varint(&out, 6, 1); };
+    var int k = 0;
+    while (k < s.n_params) {
+        var vec.Vector<byte> t = msg_tipo(&r.ctx.u, sim.param_de(&r.tabla, g, k));
+        sub(&out, 9, &t);
+        k = k + 1;
+    };
+    if (s.n_miembros > 0 and s.clase != sim.IMPORT) {
+        // members (10): otro map, por nombre (un IMPORT viaja OPACO: sus
+        // exports están en el .phir de su propia unidad)
+        var vec.Vector<str> nombres = vec.dynamic<str>(s.n_miembros + 1);
+        k = 0;
+        while (k < s.n_miembros) {
+            nombres.push(sim.simbolo(&r.tabla, sim.miembro_de(&r.tabla, g, k)).nombre);
+            k = k + 1;
+        };
+        ordena(&nombres);
+        k = 0;
+        while (k < nombres.len()) {
+            entrada(r, &out, 10, nombres.get(k),
+                    sim.busca_miembro(&r.tabla, g, nombres.get(k)));
+            k = k + 1;
+        };
+    };
+    varint_si(&out, 11, s.hook_kind);
+    texto_si(&out, 12, s.hook_owner);
+    return out;
+}
+
+/- Un `HookRef`: el dueño y la clase del hook (la clave del lector). -/
+fn msg_ref_hook(str dueno, int kind) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    texto_si(&out, 1, dueno);
+    varint_si(&out, 2, kind);
+    return out;
+}
+
+/- El `HookRef` del símbolo de hook `h`. -/
+fn ref_de_simbolo(res.Analisis ptr r, int h) -> vec.Vector<byte> {
+    var sim.Simbolo s = sim.simbolo(&r.tabla, h);
+    return msg_ref_hook(s.hook_owner, s.hook_kind);
+}
+
+// --- declaraciones ------------------------------------------------------- //
+
+fn msg_decl(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+            Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    varint_si(&out, 1, nd.linea(a, n));
+    varint_si(&out, 2, nd.col(a, n));
+    var str c = nd.clase(a, n);
+    if (c == "FunctionDecl") {
+        var vec.Vector<byte> f = msg_funcion(a, n, r, num);
+        sub(&out, 10, &f);
+    } else if (c == "StructDecl") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "name"));
+        var vec.Vector<int> campos = nd.hijos(a, n, "fields");
+        var int i = 0;
+        while (i < campos.len()) {
+            var vec.Vector<byte> f = pb.buffer();
+            texto_si(&f, 2, nd.atributo(a, campos.get(i), "name"));
+            varint_si(&f, 3, tid(num, r, campos.get(i)));
+            sub(&m, 2, &f);
+            i = i + 1;
+        };
+        // type_params (3): en el orden escrito ('Par<A, B>')
+        textos(&m, 3, nd.lista(a, n, "type_params"));
+        sub(&out, 11, &m);
+    } else if (c == "EnumDecl") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "name"));
+        var vec.Vector<int> items = nd.hijos(a, n, "items");
+        var int i = 0;
+        while (i < items.len()) {
+            var int it = items.get(i);
+            var vec.Vector<byte> e = pb.buffer();
+            texto_si(&e, 1, nd.atributo(a, it, "name"));
+            expr_si(a, &e, 2, nd.hijo(a, it, "value"), r, num);
+            // payload_type_ids (3): un 'repeated uint32' EMPAQUETADO
+            var vec.Vector<int> payload = nd.hijos(a, it, "payload");
+            if (payload.len() > 0) {
+                var vec.Vector<byte> ids = pb.buffer();
+                var int k = 0;
+                while (k < payload.len()) {
+                    pb.varint(&ids, tid(num, r, payload.get(k)));
+                    k = k + 1;
+                };
+                sub(&e, 3, &ids);
+            };
+            sub(&m, 2, &e);
+            i = i + 1;
+        };
+        sub(&out, 12, &m);
+    } else if (c == "ImportDirective") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "lib"));
+        texto_si(&m, 2, nd.atributo(a, n, "alias"));
+        if (r.unidad_de.contains(n)) { texto_si(&m, 3, r.unidad_de.get(n)); };
+        if (r.ligadura_de.contains(n)) { texto_si(&m, 4, r.ligadura_de.get(n)); };
+        sub(&out, 15, &m);
+    } else if (c == "ExportDirective") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "alias"));
+        if (nd.atributo(a, n, "package") == "true") { pb.campo_varint(&m, 2, 1); };
+        sub(&out, 16, &m);
+    } else if (c == "FromDirective") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "lib"));
+        texto_si(&m, 2, nd.atributo(a, n, "name"));
+        texto_si(&m, 3, nd.atributo(a, n, "alias"));
+        if (r.unidad_de.contains(n)) { texto_si(&m, 4, r.unidad_de.get(n)); };
+        sub(&out, 17, &m);
+    } else {
+        // una sentencia suelta del módulo (una variable global): 'Decl.statement'
+        var vec.Vector<byte> s = msg_sentencia(a, n, r, num);
+        sub(&out, 14, &s);
+    };
+    return out;
+}
+
+fn msg_funcion(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+               Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    texto_si(&out, 1, nd.atributo(a, n, "name"));
+    var vec.Vector<int> params = nd.hijos(a, n, "params");
+    var int i = 0;
+    while (i < params.len()) {
+        var int p = params.get(i);
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 2, nd.atributo(a, p, "name"));
+        varint_si(&m, 3, tid(num, r, p));
+        sub(&out, 2, &m);
+        i = i + 1;
+    };
+    var int cuerpo = nd.hijo(a, n, "body");
+    if (cuerpo >= 0) {
+        // presente aunque esté vacío: sin cuerpo sería un PROTOTIPO
+        var vec.Vector<byte> b = msg_bloque(a, cuerpo, r, num);
+        sub(&out, 4, &b);
+    };
+    texto_si(&out, 5, nd.atributo(a, n, "dunder"));
+    varint_si(&out, 7, tid(num, r, n));
+    // type_params (8): los del '@impl' de un método PRIMERO y después los
+    // propios, en orden ('fn make<T>')
+    textos(&out, 8, nd.lista(a, n, "impl_type_params"));
+    textos(&out, 8, nd.lista(a, n, "type_params"));
+    return out;
+}
+
+/- Un `repeated string`: cada elemento, en orden. -/
+fn textos(vec.Vector<byte> ptr mutable out, int campo, vec.Vector<str> v) -> void {
+    var int i = 0;
+    while (i < v.len()) {
+        pb.campo_texto(out, campo, v.get(i));
+        i = i + 1;
+    };
+}
+
+// --- sentencias ---------------------------------------------------------- //
+
+fn msg_bloque(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+              Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    var vec.Vector<int> ss = nd.hijos(a, n, "statements");
+    var int i = 0;
+    while (i < ss.len()) {
+        var vec.Vector<byte> s = msg_sentencia(a, ss.get(i), r, num);
+        sub(&out, 1, &s);
+        i = i + 1;
+    };
+    // drops (2): lo que muere al cerrar, en el orden que decidió la Semántica
+    var int k = 0;
+    while (k < r.drops_n.get(n)) {
+        var prop.Drop d = r.drops.drops.get(r.drops_desde.get(n) + k);
+        var vec.Vector<byte> m = pb.buffer();
+        var int j = 0;
+        while (j < d.n_ruta) {
+            pb.campo_texto(&m, 1, r.drops.rutas.get(d.ruta_desde + j));
+            j = j + 1;
+        };
+        if (d.por_tipo) {
+            pb.campo_varint(&m, 3, 1);
+        } else if (d.destructor >= 0) {
+            var vec.Vector<byte> h = ref_de_simbolo(r, d.destructor);
+            sub(&m, 2, &h);
+        };
+        sub(&out, 2, &m);
+        k = k + 1;
+    };
+    return out;
+}
+
+fn msg_sentencia(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+                 Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    varint_si(&out, 1, nd.linea(a, n));
+    varint_si(&out, 2, nd.col(a, n));
+    var str c = nd.clase(a, n);
+    if (c == "Block") {
+        var vec.Vector<byte> b = msg_bloque(a, n, r, num);
+        sub(&out, 10, &b);
+    } else if (c == "VarDecl") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "qualifier"));
+        texto_si(&m, 3, nd.atributo(a, n, "name"));
+        expr_si(a, &m, 4, nd.hijo(a, n, "value"), r, num);
+        varint_si(&m, 5, tid(num, r, n));
+        sub(&out, 11, &m);
+    } else if (c == "IfStmt") {
+        var vec.Vector<byte> m = msg_if(a, n, r, num);
+        sub(&out, 13, &m);
+    } else if (c == "WhileStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "condition"), r, num);
+        var vec.Vector<byte> b = msg_bloque(a, nd.hijo(a, n, "body"), r, num);
+        sub(&m, 2, &b);
+        sub(&out, 14, &m);
+    } else if (c == "MatchStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "subject"), r, num);
+        var vec.Vector<int> ramas = nd.hijos(a, n, "cases");
+        var int i = 0;
+        while (i < ramas.len()) {
+            var vec.Vector<byte> caso = pb.buffer();
+            expr_si(a, &caso, 1, nd.hijo(a, ramas.get(i), "pattern"), r, num);
+            var vec.Vector<byte> cuerpo = msg_sentencia(a, nd.hijo(a, ramas.get(i), "body"),
+                                                        r, num);
+            sub(&caso, 2, &cuerpo);
+            sub(&m, 2, &caso);
+            i = i + 1;
+        };
+        sub(&out, 15, &m);
+    } else if (c == "ReturnStmt") {
+        // presente aunque no lleve valor ('return;')
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "value"), r, num);
+        if (tiene(r, n, res.TRANSFERS)) { pb.campo_varint(&m, 2, 1); };
+        sub(&out, 16, &m);
+    } else if (c == "BreakStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        sub(&out, 17, &m);
+    } else if (c == "ContinueStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        sub(&out, 18, &m);
+    } else if (c == "MoveStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "target"), r, num);
+        sub(&out, 19, &m);
+    } else if (c == "FreeStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "target"), r, num);
+        ref_si(r, &m, 2, n);
+        sub(&out, 20, &m);
+    } else if (c == "ExprStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "expr"), r, num);
+        sub(&out, 21, &m);
+    } else if (c == "ThrowStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        var int valor = nd.hijo(a, n, "value");
+        if (r.mueve.contains(n)) {
+            // 'throw r' -> 'throw move r': el 'move' que la V0 inserta, en la
+            // posición y con el tipo del valor
+            var vec.Vector<byte> mv = pb.buffer();
+            varint_si(&mv, 1, nd.linea(a, valor));
+            varint_si(&mv, 2, nd.col(a, valor));
+            varint_si(&mv, 4, tid(num, r, valor));
+            var vec.Vector<byte> op = pb.buffer();
+            expr_si(a, &op, 1, valor, r, num);
+            sub(&mv, 26, &op);
+            sub(&m, 1, &mv);
+        } else {
+            expr_si(a, &m, 1, valor, r, num);
+        };
+        sub(&out, 24, &m);
+    } else if (c == "TryStmt") {
+        var vec.Vector<byte> m = pb.buffer();
+        var vec.Vector<byte> protegido = msg_bloque(a, nd.hijo(a, n, "try_block"), r, num);
+        sub(&m, 1, &protegido);
+        var vec.Vector<int> ramas = nd.hijos(a, n, "catches");
+        var int i = 0;
+        while (i < ramas.len()) {
+            var int rama = ramas.get(i);
+            var vec.Vector<byte> cl = pb.buffer();
+            texto_si(&cl, 1, nd.atributo(a, rama, "name"));
+            var vec.Vector<byte> b = msg_bloque(a, nd.hijo(a, rama, "block"), r, num);
+            sub(&cl, 2, &b);
+            if (nd.hijo(a, rama, "type") >= 0) {
+                var vec.Vector<byte> t = msg_tipo(&r.ctx.u, r.tipo_de.get(rama));
+                sub(&cl, 3, &t);
+            };
+            sub(&m, 4, &cl);
+            i = i + 1;
+        };
+        var int final = nd.hijo(a, n, "finally_block");
+        if (final >= 0) {
+            // presente aunque esté vacío
+            var vec.Vector<byte> f = msg_bloque(a, final, r, num);
+            sub(&m, 5, &f);
+        };
+        sub(&out, 25, &m);
+    };
+    return out;
+}
+
+/- `IfStmt`; un `else if` es otro `IfStmt` DIRECTO (sin `Stmt` que lo
+   envuelva) en el campo 4, y un `else` un bloque en el 3. -/
+fn msg_if(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+          Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> m = pb.buffer();
+    expr_si(a, &m, 1, nd.hijo(a, n, "condition"), r, num);
+    var vec.Vector<byte> b = msg_bloque(a, nd.hijo(a, n, "then_block"), r, num);
+    sub(&m, 2, &b);
+    var int otro = nd.hijo(a, n, "else_branch");
+    if (otro >= 0) {
+        if (nd.clase(a, otro) == "IfStmt") {
+            var vec.Vector<byte> x = msg_if(a, otro, r, num);
+            sub(&m, 4, &x);
+        } else {
+            var vec.Vector<byte> x = msg_bloque(a, otro, r, num);
+            sub(&m, 3, &x);
+        };
+    };
+    return m;
+}
+
+// --- expresiones --------------------------------------------------------- //
+
+/- La expresión `n` en el campo `campo`, si existe. -/
+fn expr_si(vec.Vector<ar.Nodo> ptr a, vec.Vector<byte> ptr mutable out, int campo, int n,
+           res.Analisis ptr r, Numeracion ptr num) -> void {
+    if (n < 0) { return; };
+    var vec.Vector<byte> e = msg_expr(a, n, r, num);
+    sub(out, campo, &e);
+}
+
+/- El `HookRef` que la Semántica ligó al nodo `n` (una llamada, un `free`),
+   si lo hay. -/
+fn ref_si(res.Analisis ptr r, vec.Vector<byte> ptr mutable out, int campo, int n) -> void {
+    var int i = r.ref_hook.get(n);
+    if (i < 0) { return; };
+    var res.RefHook h = r.refs.get(i);
+    var vec.Vector<byte> m = msg_ref_hook(h.owner, h.kind);
+    sub(out, campo, &m);
+}
+
+/- `temp_drop` (4) y `temp_by_type` (5) de un temporal: una llamada o un
+   literal de struct cuyo valor nadie se queda. -/
+fn temporal(res.Analisis ptr r, vec.Vector<byte> ptr mutable out, int n) -> void {
+    var int h = r.temp_hook.get(n);
+    if (h >= 0) {
+        var vec.Vector<byte> m = ref_de_simbolo(r, h);
+        sub(out, 4, &m);
+    };
+    if (tiene(r, n, res.TEMP_POR_TIPO)) { pb.campo_varint(out, 5, 1); };
+}
+
+fn msg_expr(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r,
+            Numeracion ptr num) -> vec.Vector<byte> {
+    var vec.Vector<byte> out = pb.buffer();
+    varint_si(&out, 1, nd.linea(a, n));
+    varint_si(&out, 2, nd.col(a, n));
+    varint_si(&out, 4, tid(num, r, n));
+    var str c = nd.clase(a, n);
+    if (c == "Literal") {
+        var vec.Vector<byte> m = msg_literal(a, n);
+        sub(&out, 10, &m);
+    } else if (c == "InterpolatedString") {
+        var vec.Vector<byte> m = pb.buffer();
+        var vec.Vector<int> partes = nd.hijos(a, n, "parts");
+        var int i = 0;
+        while (i < partes.len()) {
+            var int p = partes.get(i);
+            var str pc = nd.clase(a, p);
+            var vec.Vector<byte> parte = pb.buffer();
+            if (pc == "") {
+                pb.campo_texto(&parte, 1, nd.texto_de_parte(a, p));   // oneof
+            } else if (pc == "FormattedValue") {
+                expr_si(a, &parte, 2, nd.hijo(a, p, "value"), r, num);
+                if (nd.atributo(a, p, "conversion") == "r") { pb.campo_varint(&parte, 3, 1); };
+                texto_si(&parte, 4, nd.atributo(a, p, "format_spec"));
+            } else {
+                expr_si(a, &parte, 2, p, r, num);
+            };
+            sub(&m, 1, &parte);
+            i = i + 1;
+        };
+        sub(&out, 11, &m);
+    } else if (c == "Identifier") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "name"));
+        sub(&out, 12, &m);
+    } else if (c == "UnaryOp") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "operator"));
+        expr_si(a, &m, 2, nd.hijo(a, n, "operand"), r, num);
+        sub(&out, 13, &m);
+    } else if (c == "BinaryOp") {
+        var vec.Vector<byte> m = pb.buffer();
+        texto_si(&m, 1, nd.atributo(a, n, "operator"));
+        expr_si(a, &m, 2, nd.hijo(a, n, "left"), r, num);
+        expr_si(a, &m, 3, nd.hijo(a, n, "right"), r, num);
+        sub(&out, 14, &m);
+    } else if (c == "Assignment") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "target"), r, num);
+        expr_si(a, &m, 2, nd.hijo(a, n, "value"), r, num);
+        if (tiene(r, n, res.DROPS_OLD)) { pb.campo_varint(&m, 3, 1); };
+        sub(&out, 15, &m);
+    } else if (c == "Call") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "callee"), r, num);
+        var vec.Vector<int> args = nd.hijos(a, n, "args");
+        var int i = 0;
+        while (i < args.len()) {
+            expr_si(a, &m, 2, args.get(i), r, num);
+            i = i + 1;
+        };
+        ref_si(r, &m, 3, n);
+        temporal(r, &m, n);
+        sub(&out, 17, &m);
+    } else if (c == "Index") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "obj"), r, num);
+        expr_si(a, &m, 2, nd.hijo(a, n, "index"), r, num);
+        sub(&out, 18, &m);
+    } else if (c == "MemberAccess") {
+        if (r.nombre_de_item.contains(n)) {
+            // 'X.Y.name' se resolvió al compilar: viaja como su literal
+            var vec.Vector<byte> m = pb.buffer();
+            pb.campo_texto(&m, 1, "str");
+            pb.campo_texto(&m, 4, r.nombre_de_item.get(n));
+            sub(&out, 10, &m);
+        } else {
+            var vec.Vector<byte> m = pb.buffer();
+            expr_si(a, &m, 1, nd.hijo(a, n, "obj"), r, num);
+            texto_si(&m, 2, nd.atributo(a, n, "member"));
+            sub(&out, 19, &m);
+        };
+    } else if (c == "AddrOf") {
+        // presente aunque 'mut' sea falso
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "operand"), r, num);
+        if (tiene(r, n, res.MUT)) { pb.campo_varint(&m, 2, 1); };
+        sub(&out, 23, &m);
+    } else if (c == "CastExpr") {
+        var vec.Vector<byte> m = pb.buffer();
+        var int t = r.tipo_de.get(n);
+        if (t > 0) {
+            var vec.Vector<byte> tt = msg_tipo(&r.ctx.u, t);   // el tipo DENTRO del cast
+            sub(&m, 1, &tt);
+        };
+        expr_si(a, &m, 2, nd.hijo(a, n, "value"), r, num);
+        sub(&out, 24, &m);
+    } else if (c == "StructLiteral") {
+        var vec.Vector<byte> m = pb.buffer();
+        var str tipo = nd.atributo(a, n, "type_name");
+        if (r.nombre_canonico.contains(n)) { tipo = r.nombre_canonico.get(n); };
+        texto_si(&m, 1, tipo);
+        var vec.Vector<str> nombres = nd.lista(a, n, "field_names");
+        var int i = 0;
+        while (i < nombres.len()) {
+            pb.campo_texto(&m, 2, nombres.get(i));
+            i = i + 1;
+        };
+        var vec.Vector<int> valores = nd.hijos(a, n, "values");
+        i = 0;
+        while (i < valores.len()) {
+            expr_si(a, &m, 3, valores.get(i), r, num);
+            i = i + 1;
+        };
+        temporal(r, &m, n);
+        sub(&out, 25, &m);
+    } else if (c == "MoveExpr") {
+        var vec.Vector<byte> m = pb.buffer();
+        expr_si(a, &m, 1, nd.hijo(a, n, "operand"), r, num);
+        sub(&out, 26, &m);
+    };
+    return out;
+}
+
+/- `Literal`: su clase y su valor. El valor es de un `oneof`, así que se
+   escribe SIEMPRE, aunque sea 0, `false` o "": omitirlo lo convertiría en
+   `null`. -/
+fn msg_literal(vec.Vector<ar.Nodo> ptr a, int n) -> vec.Vector<byte> {
+    var vec.Vector<byte> m = pb.buffer();
+    var str clase = nd.atributo(a, n, "literal_kind");
+    var str valor = nd.atributo(a, n, "value");
+    texto_si(&m, 1, clase);
+    if (clase == "int") {
+        pb.campo_varint(&m, 2, text.parse_int(valor));
+    } else if (clase == "float") {
+        pb.campo_double(&m, 3, text.parse_float(valor));
+    } else if (clase == "str" or clase == "char") {
+        pb.campo_texto(&m, 4, valor);
+    } else if (clase == "bool") {
+        var int b = 0;
+        if (valor == "true") { b = 1; };
+        pb.campo_varint(&m, 5, b);
+    };
+    return m;
+}
+
+#export as emisor

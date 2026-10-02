@@ -22,6 +22,33 @@ for _p in (_REPO_ROOT, _V0):
 
 
 # --------------------------------------------------------------------------- #
+# omitir una prueba: SIEMPRE de forma explícita
+# --------------------------------------------------------------------------- #
+
+class Omitida(Exception):
+    """Una prueba que NO se ejecutó, con el motivo.
+
+    Existe porque la forma anterior de saltarse una prueba era ``return``:
+    el runner la contaba como PASADA. Así, una suite corrida sin node, sin el
+    binario C++ o sin ``memory_c`` daba el mismo verde que una que lo había
+    ejecutado todo, y la medalla sumaba como probado lo que nadie probó.
+
+    El runner (``test/main.py``) la cuenta aparte y la lista con su motivo.
+    No hace fallar la corrida: una máquina sin node no es un error del
+    compilador, pero tiene que quedar a la vista.
+    """
+
+
+def omitir(motivo: str) -> None:
+    """Termina la prueba actual como OMITIDA por ``motivo``.
+
+    El motivo dice qué falta en la máquina y, si aplica, cómo conseguirlo:
+    es lo único que verá quien lea el resumen.
+    """
+    raise Omitida(motivo)
+
+
+# --------------------------------------------------------------------------- #
 # fases del frontend, en proceso (rápido: sin lanzar subprocesos)
 # --------------------------------------------------------------------------- #
 
@@ -106,7 +133,8 @@ def run_source(source: str, *, args: Optional[List[str]] = None,
             fh.write(source)
         cmd = [sys.executable, os.path.join(_V0, "main.py"), src_path]
         cmd += args or []
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=tmp,
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", cwd=tmp,
                               timeout=120)
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -137,7 +165,8 @@ def run_project(files: dict, *, main: str = "main.srcx",
         cmd = [sys.executable, os.path.join(_V0, "main.py"),
                os.path.join(tmp, *main.split("/"))]
         cmd += args or []
-        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=tmp,
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", cwd=tmp,
                               timeout=120)
         return proc.returncode, proc.stdout, proc.stderr
 
@@ -162,8 +191,101 @@ def assert_output(source: str, expected: str, **kwargs) -> None:
 
 
 __all__ = [
+    "Omitida", "omitir",
     "lex", "parse", "typed", "analyze", "error_codes",
     "assert_ok", "assert_has_code",
     "run_source", "run_program", "assert_output",
     "run_project", "assert_project_output",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# portabilidad: lo que cambia de un sistema operativo a otro, en un solo lugar
+# --------------------------------------------------------------------------- #
+
+def hir_binary() -> Optional[str]:
+    """El ejecutable ``suriax-hir`` (la VM), o ``None`` si no está construido.
+
+    Orden: ``SURIAX_HIR_BIN`` (una ruta relativa se toma desde la raíz del
+    repositorio, no desde el directorio temporal de cada prueba), después
+    ``build/bin`` y después los otros ``build-*/bin`` (los de ASan al final:
+    son más lentos). En Windows el ejecutable lleva ``.exe``; se prueban los
+    dos nombres en todos los sistemas.
+    """
+    escrito = os.environ.get("SURIAX_HIR_BIN")
+    if escrito:
+        if not os.path.isabs(escrito):
+            escrito = os.path.join(_REPO_ROOT, escrito)
+        candidatas = [escrito]
+    else:
+        carpetas = sorted(
+            (c for c in os.listdir(_REPO_ROOT)
+             if c.startswith("build-") and os.path.isdir(os.path.join(_REPO_ROOT, c))),
+            key=lambda c: (_carpeta_sanitizada(c), c))
+        candidatas = [os.path.join(_REPO_ROOT, c, "bin", "suriax-hir")
+                      for c in ["build", *carpetas]]
+    for base in candidatas:
+        for ruta in (base, base + ".exe"):
+            if os.path.isfile(ruta) and os.access(ruta, os.X_OK):
+                return ruta
+    return None
+
+
+def _carpeta_sanitizada(nombre: str) -> bool:
+    """¿La carpeta de build es de un sanitizador? Es la convención de
+    ``docs/quality/tools/sanitizers.py``: ``build-asan``, ``build-ubsan``."""
+    return "san" in nombre
+
+
+def vm_sanitizada(ruta: str) -> bool:
+    """¿El ``suriax-hir`` de ``ruta`` es el de un sanitizador (vive en
+    ``build-asan/bin`` o ``build-ubsan/bin``)? Una VM así es MUCHO más lenta
+    —el punto fijo del bootstrap tarda unas 2 h por etapa con ASan en Debug,
+    frente a 11 s—, y las pruebas largas la saltan diciéndolo."""
+    carpeta = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(ruta))))
+    return _carpeta_sanitizada(carpeta)
+
+
+def run_with_timeout(fn, seconds: float, message: str):
+    """Llama ``fn()`` y falla con ``message`` si no termina en ``seconds``.
+
+    Reemplaza a ``signal.alarm``, que solo existe en POSIX. La llamada corre
+    en un hilo daemon: si se cuelga, la prueba falla igual y el hilo no
+    impide que el proceso termine. Una excepción de ``fn`` se propaga.
+    """
+    import threading
+
+    resultado: dict = {}
+
+    def _correr() -> None:
+        try:
+            resultado["valor"] = fn()
+        except BaseException as exc:  # se relanza en el hilo de la prueba
+            resultado["error"] = exc
+
+    hilo = threading.Thread(target=_correr, daemon=True)
+    hilo.start()
+    hilo.join(seconds)
+    if hilo.is_alive():
+        raise AssertionError(message)
+    if "error" in resultado:
+        raise resultado["error"]
+    return resultado.get("valor")
+
+
+def link_lib(destination: str) -> None:
+    """Pone la ``lib/`` del repositorio dentro de ``destination``: un enlace
+    simbólico si el sistema lo permite y, si no, una copia. Windows exige un
+    privilegio para crear enlaces (WinError 1314); sin la copia, las pruebas
+    fallaban ahí antes de tocar lo que probaban.
+
+    Solo para pruebas que LEEN la librería: con un enlace, escribir dentro
+    de ``lib`` escribiría en el repositorio."""
+    import shutil
+
+    origen = os.path.join(_REPO_ROOT, "lib")
+    enlace = os.path.join(destination, "lib")
+    try:
+        os.symlink(origen, enlace, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        shutil.copytree(origen, enlace)

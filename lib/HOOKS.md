@@ -27,7 +27,7 @@ sobre tu tipo. **No tocas el compilador**: basta declararlo en tu `.libsrx`.
 
 ### 1.1 Glosario: todos los hooks de hoy
 
-Estos nueve los trae el compilador y los dispara la **sintaxis** del lenguaje.
+Estos once los trae el compilador y los dispara la **sintaxis** del lenguaje.
 Tu proyecto puede añadir los suyos (§5): esos se invocan por su nombre, como un
 método. Cada fila dice qué escribir, qué lo dispara, de qué tipo pasa a ser el
 hook y si ejecuta hoy.
@@ -44,12 +44,18 @@ hook y si ejecuta hoy.
 | `__eq__` | `hook fn __eq__(T ptr a, T ptr b) -> bool` | `a == b` | 1.er parámetro | ✅ |
 | `__min__` | `hook fn __min__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
 | `__max__` | `hook fn __max__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
+| `__hash__` | `hook fn __hash__(T ptr x) -> int` | `hash(x)` | 1.er parámetro | ✅ |
 
 Qué significa cada uno, con algo más de detalle:
 
 - **`__print__`** — cómo se muestra tu tipo. Es el único punto por el que
   `print(x)` sabe qué hacer con algo que no es un primitivo. Debe devolver
   `void` y recibir exactamente un receptor.
+- **`__hash__`** — un entero que resume el valor, para guardarlo en un
+  `collections.Dictionary`. La regla es una sola: dos valores iguales (según
+  tu `__eq__`) tienen que dar el mismo hash; al revés no hace falta. Sobre
+  `int`, `bool`, `char` y `str`, `hash(x)` es nativo (no se declara); un
+  `float` no tiene hash, porque NaN no es igual a sí mismo.
 - **`__len__`** — el "tamaño lógico" (elementos de una lista, caracteres de una
   cadena). Devuelve `int`. Es cosa tuya qué cuenta: el compilador no supone
   nada.

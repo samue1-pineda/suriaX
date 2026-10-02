@@ -1,5 +1,5 @@
 """Directivas (``#import``/``#export``/``#from``) e interoperabilidad
-(``#extern cpp{}``) -- EBNF secc. 1.
+(``#extern cpp{}``) -- EBNF.
 
 ::
     import_dir   = "#import" lib_name [ "as" IDENTIFIER ] [ ";" ]

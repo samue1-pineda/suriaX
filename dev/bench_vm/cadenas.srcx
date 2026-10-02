@@ -1,0 +1,26 @@
+/- Banco de la VM: CADENAS.
+
+ Construye una cadena por concatenacion y despues la recorre caracter a
+ caracter, que es exactamente lo que hace un lexer. La concatenacion repetida
+ es cuadratica en los dos motores (cada '+' copia la cadena entera); el
+ recorrido no deberia serlo.
+-/
+#from io #import stdp
+
+fn main() -> int {
+    var str s = "";
+    var int i = 0;
+    while (i < 3000) {
+        s = s + "abcde";
+        i = i + 1;
+    };
+    var int vocales = 0;
+    var int j = 0;
+    while (j < len(s)) {
+        var char c = s[j];
+        if (c == 'a' or c == 'e') { vocales = vocales + 1; };
+        j = j + 1;
+    };
+    stdp.println(f"{len(s)} caracteres, {vocales} vocales");
+    return 0;
+}

@@ -1,0 +1,71 @@
+/- Excepciones 6: se puede lanzar desde cualquier sitio.
+
+ Un metodo, un hook, una funcion generica, el brazo de un 'match' o la
+ mitad de una expresion: el mecanismo es el mismo. Si el throw ocurre a
+ mitad de una expresion, lo que faltaba por calcular no se calcula y la
+ asignacion no ocurre.
+-/
+#from io #import stdp
+
+struct { int n; } Contador;
+
+@impl Contador {
+    fn baja(Contador ptr mutable self) -> int {
+        if (self.n == 0) { throw "el contador ya esta en cero"; };
+        self.n = self.n - 1;
+        return self.n;
+    }
+}
+
+struct { int v; } Punto;
+hook fn __print__(Punto ptr p) -> void {
+    if (p.v < 0) { throw p.v; };
+    stdp.println(f"  Punto({p.v})");
+}
+
+enum Orden { Seguir, Parar(str) };
+
+fn ejecuta(Orden o) -> int {
+    match (o) {
+        case Orden.Seguir: { return 1; }
+        case Orden.Parar(motivo): { throw motivo; }
+    }
+    return 0;
+}
+
+fn identidad_que_falla<T>(T v) -> T {
+    throw 99;
+    return v;
+}
+
+fn falla() -> int { throw 7; return 0; }
+
+fn main() -> int {
+    stdp.println("-- desde un metodo");
+    var Contador c = Contador{ n: 2 };
+    try {
+        stdp.println(f"  quedan {c.baja()}");
+        stdp.println(f"  quedan {c.baja()}");
+        stdp.println(f"  quedan {c.baja()}");
+    } catch (str e) { stdp.println(f"  {e}"); };
+
+    stdp.println("-- desde un hook (__print__)");
+    var Punto bien = Punto{ v: 3 };
+    var Punto mal = Punto{ v: -4 };
+    try { print(bien); print(mal); }
+    catch (int e) { stdp.println(f"  el hook lanzo {e}"); };
+
+    stdp.println("-- desde el brazo de un match");
+    try { ejecuta(Orden.Seguir); ejecuta(Orden.Parar("sin permiso")); }
+    catch (str e) { stdp.println(f"  {e}"); };
+
+    stdp.println("-- desde una funcion generica");
+    try { identidad_que_falla<str>("hola"); }
+    catch (int e) { stdp.println(f"  atrapado {e}"); };
+
+    stdp.println("-- a mitad de una expresion: la asignacion no ocurre");
+    var int s = 1;
+    try { s = s + falla(); }
+    catch (int e) { stdp.println(f"  s sigue en {s}"); };
+    return 0;
+}

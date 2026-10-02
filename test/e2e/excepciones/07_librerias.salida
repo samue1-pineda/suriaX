@@ -1,0 +1,5 @@
+-- cada tipo homonimo cae en su rama
+  a.Error: desde a
+  b.Error con codigo 2
+-- el valor de la libreria se lee por sus campos
+  mensaje de largo 7

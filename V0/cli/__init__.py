@@ -19,9 +19,10 @@ import json
 import sys
 
 from config import compilerconfig
-from driver import (EXIT_MISSING_DEPENDENCY, EXIT_OK, CompileOptions,
-                    compile_source, execute, finish_report)
+from driver import (EXIT_INTERNAL_ERROR, EXIT_MISSING_DEPENDENCY, EXIT_OK,
+                    CompileOptions, compile_source, execute, finish_report)
 from driver import inspect as driver_inspect
+from error_handler.InternalCompilerError import InternalCompilerError
 
 from .args import build_parser
 from .report import (TerminalReporter, print_file_not_found, print_result,
@@ -67,6 +68,12 @@ def _cmd_diagnostics(source: str, *, from_stdin: bool) -> int:
     return EXIT_OK
 
 
+def _cmd_index(source: str, *, from_stdin: bool) -> int:
+    payload = driver_inspect.emit_index(source, from_stdin=from_stdin)
+    print(json.dumps(payload, ensure_ascii=False))
+    return EXIT_OK   # como '--emit-diagnostics': lo que importa va en el JSON
+
+
 def _cmd_compile(args) -> int:
     """Compilar y —si el target lo pide— ejecutar.
 
@@ -93,7 +100,9 @@ def _cmd_compile(args) -> int:
 
     print_result(result)
     exit_code = execute(result, trace_exec=args.trace_exec,
-                        trace_memory=args.trace_memory, reporter=reporter)
+                        trace_memory=args.trace_memory, reporter=reporter,
+                        argumentos=[args.source,
+                                    *getattr(args, "argumentos_del_programa", [])])
 
     if options.collect_times:
         print_times(result)
@@ -104,10 +113,76 @@ def _cmd_compile(args) -> int:
 
 
 def main(argv: list[str]) -> int:
-    """Punto de entrada de la línea de comandos."""
-    parser = build_parser()
-    args = parser.parse_args(argv[1:])
+    """Punto de entrada de la línea de comandos.
 
+    Un fallo DEL COMPILADOR no sale como traceback suelto con exit 1 (que se
+    lee "tu programa tiene errores"): se muestra al estilo de Python —traza
+    de la excepción original, y luego código, fase y archivo— y el proceso
+    termina con ``EXIT_INTERNAL_ERROR`` (6).
+    """
+    parser = build_parser()
+    # 'suri prog.srcx -- a b c': lo que va después del primer '--' es del
+    # PROGRAMA, no del compilador. Se separa antes de parsear para que una
+    # bandera del programa ('-- --verbose') no la interprete argparse.
+    propios, del_programa = _separar_argumentos(argv[1:])
+    args = parser.parse_args(normalizar_run(propios))
+    args.argumentos_del_programa = del_programa
+    try:
+        return _despachar(parser, args)
+    except InternalCompilerError as ice:
+        print(ice.render(), file=sys.stderr)
+        return EXIT_INTERNAL_ERROR
+    except Exception as exc:  # noqa: BLE001 - se reporta como ICE, nunca se traga
+        # un fallo fuera del driver (un comando de consulta, el formato de la
+        # salida): la fase es el comando que se estaba atendiendo.
+        ice = InternalCompilerError.desde(exc, phase=_comando(args),
+                                          file=args.source)
+        print(ice.render(), file=sys.stderr)
+        return EXIT_INTERNAL_ERROR
+
+
+def normalizar_run(argv: list[str]) -> list[str]:
+    """'--run compiler' -> '--run=compiler', y '--run' solo -> '--run='.
+
+    '--run' lleva un valor OPCIONAL, y con argparse eso se come lo que venga
+    detras: 'suri --run prog.srcx' tomaria 'prog.srcx' por el motor. Aqui
+    solo se juntan los dos valores que existen; cualquier otra cosa queda
+    como estaba.
+    """
+    salida: list[str] = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--run":
+            if i + 1 < len(argv) and argv[i + 1] in ("compiler", "interpreter"):
+                salida.append("--run=" + argv[i + 1])
+                i += 2
+                continue
+            salida.append("--run=")
+        else:
+            salida.append(argv[i])
+        i += 1
+    return salida
+
+
+def _separar_argumentos(argv: list[str]) -> tuple[list[str], list[str]]:
+    """(argumentos del compilador, argumentos del programa)."""
+    if "--" not in argv:
+        return list(argv), []
+    corte = argv.index("--")
+    return list(argv[:corte]), list(argv[corte + 1:])
+
+
+def _comando(args) -> str:
+    """Nombre legible del comando que atendía la CLI (para un ICE)."""
+    for bandera in ("emit_lang_info", "check", "init_config", "emit_extensions",
+                    "emit_stage", "emit_diagnostics", "emit_index"):
+        if getattr(args, bandera, None):
+            return "cli --" + bandera.replace("_", "-")
+    return "cli (compilar)"
+
+
+def _despachar(parser, args) -> int:
+    """Atiende el comando pedido y devuelve el código de salida."""
     if args.emit_lang_info:
         return _cmd_lang_info()
     if args.check:
@@ -126,6 +201,8 @@ def main(argv: list[str]) -> int:
                           from_stdin=args.from_stdin)
     if args.emit_diagnostics:
         return _cmd_diagnostics(args.source, from_stdin=args.from_stdin)
+    if args.emit_index:
+        return _cmd_index(args.source, from_stdin=args.from_stdin)
     return _cmd_compile(args)
 
 

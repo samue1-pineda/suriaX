@@ -33,6 +33,7 @@ class TypeKind(Enum):
     META = auto()        # 'type': el tipo de un TIPO (ver META_TYPE)
     ERROR = auto()       # 'error T' (inner) o 'error' solo (inner None): union T-o-error
     SELF = auto()        # placeholder 'self' en la firma de un trait (ver SELF_TYPE)
+    BYTE = auto()        # 'byte': entero SIN signo de 8 bits (0..255)
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,6 +85,7 @@ PRIMITIVE_TYPES: dict[str, Type] = {
     "float": Type(TypeKind.FLOAT),
     "char": Type(TypeKind.CHAR),
     "str": Type(TypeKind.STR),
+    "byte": Type(TypeKind.BYTE),
 }
 
 #: El METATIPO: el tipo que tiene un TIPO cuando se usa como valor.

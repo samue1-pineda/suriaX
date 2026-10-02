@@ -1,0 +1,26 @@
+#from io #import stdp
+#import array.vector as vec
+#import collections.dictionary as dic
+#import sistema.archivos as arch
+#import sistema.proceso as proc
+#import sistema.rutas as rt
+#import excepciones as exc
+#import text
+
+fn main() -> int {
+    var vec.Vector<str> v = vec.dynamic<str>(2);
+    v.push("a");
+    v.push("b");
+    var dic.Dictionary<str, int> d = dic.make<str, int>(4);
+    d.put("uno", 1);
+    var int n = v.len() + d.get("uno");
+    if (d.contains("dos")) { n = n + 1; };
+    try {
+        d.get("tres");
+    } catch (exc.NoEncontrado e) {
+        stdp.println(e.mensaje);
+    };
+    var str s = text.join(&v, ",") + rt.separador();
+    stdp.println(f"{s} {n} {proc.argumentos()}");
+    return 0;
+}

@@ -28,6 +28,17 @@
  —listas que no saben su tamaño de antemano— está 'dynamic'.
 
  El indexado 'v[i]' funciona en las dos formas (hooks __index__/__index_set__).
+
+ ELEMENTOS CON DESTRUCTOR ('Vector<R>' con 'R' que declara '__free__'): el
+ vector es su dueño y los destruye al morir. Todo lo que COPIARIA un
+ elemento —'get', 'v[i]', 'v[i] = x'— es SEM038 con un 'R' (la copia y el
+ elemento serian dos dueños). Para esos estan:
+
+   v.push(move r);        // el vector se lo queda
+   v.at(i)                // PRESTA el elemento: un 'R ptr', sin copiarlo
+   v.take(i)              // lo SACA (los siguientes se corren) y es tuyo
+   v.pop()                // saca el ultimo
+   v.set(i, move r);      // reemplaza: el viejo se destruye
 -/
 
 #import mem
@@ -68,6 +79,13 @@ fn dynamic<T>(int inicial) -> Vector<T> {
                       fija: false };
 }
 
+// un vector que se hace DUEÑO de un bloque que ya tiene 'len' elementos (de
+// 'cap' espacios). Es como se entrega lo que un host llenó —los bytes de un
+// archivo— sin copiarlo; crece como uno de 'dynamic'.
+fn adopt<T>(T ptr mutable bloque, int len, int cap) -> Vector<T> {
+    return Vector<T>{ datos: bloque, len: len, cap: cap, fija: false };
+}
+
 // métodos del tipo: 'v.push(x)', 'v.pop()', ... (receptor explícito 'self').
 @impl Vector<T> {
     // agrega 'x' al final. Si está lleno: LANZA si la capacidad es fija,
@@ -77,36 +95,61 @@ fn dynamic<T>(int inicial) -> Vector<T> {
             if (self.fija) { throw "push sobre un vector lleno (capacidad fija)"; }
             self.grow();
         }
-        self.datos[self.len] = x;
+        self.datos[self.len] = move x;
         self.len = self.len + 1;
     }
 
-    // reserva el doble, copia lo que hay y SUELTA el bloque viejo.
+    // reserva el doble, MUEVE lo que hay y SUELTA el bloque viejo.
     //
     // El 'release' no es opcional: sin él cada duplicación abandonaría un
     // bloque, y un lenguaje cuyo modelo es la propiedad no puede fugar en su
-    // contenedor más usado. Va al final a propósito — mientras se copia, el
-    // bloque viejo todavía es el único que tiene los datos.
+    // contenedor más usado. Mover y no copiar: cada elemento sigue teniendo
+    // UN dueño, y el bloque viejo se suelta vacío (no destruye nada).
     fn grow(Vector<T> ptr mutable self) -> void {
         var int nueva = self.cap * 2;
         var T ptr mutable mayor = mem.reserve<T>(nueva);
-        mem.copy<T>(mayor, self.datos, self.len);
+        mem.transfer<T>(mayor, self.datos, self.len);
         var T ptr mutable viejo = self.datos;
         self.datos = mayor;
         self.cap = nueva;
         mem.release<T>(viejo);
     }
 
-    // quita y devuelve el último; 'throw' si el vector está vacío.
+    // quita y devuelve el último; 'throw' si el vector está vacío. Lo SACA
+    // (no lo copia): el que lo recibe es su único dueño.
     fn pop(Vector<T> ptr mutable self) -> T {
         if (self.len == 0) { throw "pop sobre un vector vacío"; }
         self.len = self.len - 1;
-        return self.datos[self.len];
+        return mem.take<T>(self.datos, self.len);
     }
 
-    // elemento en 'i' (mem verifica límites: RT013 si i está fuera de rango).
+    // una COPIA del elemento en 'i' (mem verifica límites: EXC002 si i está
+    // fuera de rango). Con un elemento que tiene destructor es SEM038: usa
+    // 'at' (préstamo) o 'take'.
     fn get(Vector<T> ptr self, int i) -> T {
         return self.datos[i];
+    }
+
+    // PRESTA el elemento en 'i': un puntero al que está en el vector, sin
+    // copiarlo. Vale para elementos que son objetos (structs); el préstamo
+    // deja de valer si el elemento sale del vector o el vector muere.
+    fn at(Vector<T> ptr self, int i) -> T ptr {
+        if (i < 0 or i >= self.len) { throw "at fuera de rango"; }
+        return &self.datos[i];
+    }
+
+    // SACA el elemento en 'i' y corre los siguientes una posición: el que
+    // lo recibe es su único dueño.
+    fn take(Vector<T> ptr mutable self, int i) -> T {
+        if (i < 0 or i >= self.len) { throw "take fuera de rango"; }
+        var T sacado = mem.take<T>(self.datos, i);
+        var int k = i;
+        while (k < self.len - 1) {
+            self.datos[k] = mem.take<T>(self.datos, k + 1);
+            k = k + 1;
+        }
+        self.len = self.len - 1;
+        return sacado;
     }
 }
 
@@ -117,16 +160,16 @@ hook fn __index__(Vector<T> ptr self, int i) -> T {
 }
 
 // escritura por indice 'v[i] = x' (dentro del rango ya reservado; mem verifica
-// limites con RT013). Complementa __index__ para un indexado completo.
+// limites con EXC002). Complementa __index__ para un indexado completo.
 hook fn __index_set__(Vector<T> ptr mutable self, int i, T x) -> void {
     self.datos[i] = x;
 }
 
 @impl Vector<T> {
 
-    // reemplaza el elemento en 'i' por 'x'.
+    // reemplaza el elemento en 'i' por 'x' (el que había se destruye).
     fn set(Vector<T> ptr mutable self, int i, T x) -> void {
-        self.datos[i] = x;
+        self.datos[i] = move x;
     }
 
     // cantidad de elementos en uso.
@@ -137,6 +180,13 @@ hook fn __index_set__(Vector<T> ptr mutable self, int i, T x) -> void {
     // espacios reservados ahora mismo (en uno dinámico, sube al crecer).
     fn cap(Vector<T> ptr self) -> int {
         return self.cap;
+    }
+
+    // PRESTA el bloque con los elementos (los 'len' primeros), como
+    // 'std::vector::data': para pasárselo a quien lee memoria contigua (un
+    // host, un '#extern cpp'). Deja de valer si el vector crece o muere.
+    fn data(Vector<T> ptr self) -> T ptr {
+        return self.datos;
     }
 
     // ¿su capacidad es un límite? 'true' en los de 'make', 'false' en los de

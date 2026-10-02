@@ -8,7 +8,7 @@ el fallo aparece en la misma corrida que los demás.
 
 Requisitos y degradación: node ejecuta los ``.ts`` borrando los tipos —
 nativo desde la v23, tras la bandera ``--experimental-strip-types`` en la
-v22. Sin node (o con uno anterior), estos tests **se saltan con aviso** en
+v22. Sin node (o con uno anterior), estos tests **se OMITEN (``helpers.omitir``)** en
 vez de fallar: el backend web no es una dependencia del compilador y la CI
 del frontend no puede quedar roja por no tener node instalado.
 """
@@ -20,6 +20,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+# helpers.omitir: la única forma de saltarse una prueba (el runner la cuenta
+# como OMITIDA, nunca como pasada).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from helpers import omitir  # noqa: E402
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 # 'V0' en el path: sin el, 'src.HIR' no importa y la prueba del
@@ -47,6 +52,7 @@ def _node_major() -> int | None:
         return None
     try:
         out = subprocess.run([node, "--version"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace",
                              timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
@@ -57,19 +63,13 @@ def _node_major() -> int | None:
         return None
 
 
-def _skip(reason: str) -> None:
-    print(f"      (omitido: {reason})", file=sys.stderr)
-
-
 def test_suite_del_backend_web():
     """Corre ``node --test test/web/*.test.ts`` y exige que pase entera."""
     major = _node_major()
     if major is None:
-        _skip("node no está instalado; la suite del backend web no se ejecuta")
-        return
+        omitir("node no está instalado; la suite del backend web no se ejecuta")
     if major < _MIN_NODE_MAJOR:
-        _skip(f"node v{major} no ejecuta TypeScript (se necesita v{_MIN_NODE_MAJOR}+)")
-        return
+        omitir(f"node v{major} no ejecuta TypeScript (se necesita v{_MIN_NODE_MAJOR}+)")
 
     cmd = ["node", "--test"]
     if major < _STRIP_TYPES_BY_DEFAULT:
@@ -78,6 +78,7 @@ def test_suite_del_backend_web():
     cmd.append("*.test.ts")
 
     result = subprocess.run(cmd, cwd=_WEB_TESTS, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace",
                             timeout=300)
     if result.returncode != 0:
         # la salida del runner de node ya dice qué test falló y por qué.
@@ -105,8 +106,7 @@ def test_el_reserializador_produce_protobuf_valido():
     """
     major = _node_major()
     if major is None or major < _MIN_NODE_MAJOR:
-        _skip("node no disponible para re-serializar")
-        return
+        omitir("node no disponible para re-serializar")
     from src.HIR.stubs import load_hir_pb2
     from src.HIR.wire import message_to_text
     pb = load_hir_pb2()
@@ -118,7 +118,8 @@ def test_el_reserializador_produce_protobuf_valido():
         if major < _STRIP_TYPES_BY_DEFAULT:
             cmd.append("--experimental-strip-types")
         cmd += [os.path.join(_WEB_DIR, "main.ts"), original, "--reencode", reescrito]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", timeout=120)
         assert result.returncode == 0, (
             f"el re-serializador falló:\n{result.stdout}\n{result.stderr}")
 
@@ -156,21 +157,20 @@ def test_los_fixtures_phir_estan_VERSIONADOS():
     estos (``!test/web/fixtures/*.phir``), así que olvidarse de añadirlos es
     fácil y no lo nota nadie hasta que la CI corre en otro sitio.
 
-    Se salta (con aviso) si no hay git o esto no es un repositorio: la suite
+    Se OMITE si no hay git o esto no es un repositorio: la suite
     tiene que poder correr sobre una copia desempaquetada.
     """
     git = shutil.which("git")
     if git is None:
-        _skip("git no está instalado")
-        return
+        omitir("git no está instalado")
     fixtures = os.path.join(_WEB_TESTS, "fixtures")
     resultado = subprocess.run(
         [git, "ls-files", "--", fixtures],
-        capture_output=True, text=True, cwd=_REPO_ROOT, timeout=60,
+        capture_output=True, text=True,
+        encoding="utf-8", errors="replace", cwd=_REPO_ROOT, timeout=60,
     )
     if resultado.returncode != 0:
-        _skip("no es un repositorio git")
-        return
+        omitir("no es un repositorio git")
     versionados = {os.path.basename(line) for line in
                    resultado.stdout.splitlines() if line}
     esperados = {"prog.srcx", "prog.phir", "calc.srcx", "calc.phir",

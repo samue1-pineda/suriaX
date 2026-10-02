@@ -65,10 +65,9 @@ class HookKind(Enum):
     EQ = auto()        # __eq__:     fn __eq__(T ptr a, T ptr b) -> bool  (a == b)
     MIN = auto()       # __min__:    fn __min__(T ptr x) -> int   (cota inferior)
     MAX = auto()       # __max__:    fn __max__(T ptr x) -> int   (cota superior)
+    HASH = auto()      # __hash__:   fn __hash__(T ptr x) -> int  (hash(x))
     EXTENDED = auto()  # hook DECLARADO POR EL PROYECTO (HTIMS): su identidad
                        # es el NOMBRE, no este miembro. Ver semantic/extensions.py
-
-
 @dataclass(slots=True, frozen=True)
 class HookSpec:
     """Convención de firma de un hook: qué exige y cómo se asocia a su tipo.
@@ -120,6 +119,10 @@ HOOK_SPECS: dict[str, HookSpec] = {
     # implicita de un LITERAL es exacta: cabe o es un error que dice el rango.
     "min":    HookSpec(HookKind.MIN,    owner_from_return=False, return_primitive="int",   exact_params=1),
     "max":    HookSpec(HookKind.MAX,    owner_from_return=False, return_primitive="int",   exact_params=1),
+    # __hash__: 'hash(x)'. Con '__eq__' es lo que hace falta para ser clave de
+    # un 'collections.Dictionary'. Dos valores iguales tienen que dar el
+    # mismo hash; al reves no hace falta.
+    "hash":   HookSpec(HookKind.HASH,   owner_from_return=False, return_primitive="int",   exact_params=1),
 }
 
 # compatibilidad con el vocabulario anterior (nombre -> HookKind)
@@ -138,6 +141,7 @@ CALL_HOOKS: dict[str, HookKind] = {
     # un literal), asi que la llamada se pliega al entero que devuelven.
     "min": HookKind.MIN,
     "max": HookKind.MAX,
+    "hash": HookKind.HASH,
 }
 
 

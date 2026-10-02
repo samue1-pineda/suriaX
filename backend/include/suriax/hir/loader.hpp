@@ -33,7 +33,9 @@
 #include <utility>
 #include <vector>
 
-#include "hir.pb.h"
+// El modelo del HIR: GENERADO desde hir.proto por backend/tools/gen_hir_cpp.py
+// (sin libprotobuf; misma API que las clases de protoc).
+#include "suriax/hir/hir_modelo.hpp"
 
 namespace suriax::hir {
 

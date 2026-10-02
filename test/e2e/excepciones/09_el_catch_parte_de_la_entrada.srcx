@@ -1,0 +1,34 @@
+/- Excepciones 9: que sabe el 'catch' de lo que paso en el 'try'.
+
+ Nada con certeza: el throw pudo saltar en CUALQUIER punto del try. Por eso
+ el compilador analiza cada 'catch' desde el estado de ENTRADA del try. Aqui
+ 'verifica' lanza antes de que 'r' se ceda, asi que en el catch 'r' sigue
+ siendo nuestro, y el programa es valido.
+
+ Antes el catch se analizaba desde el FINAL del try y este programa se
+ rechazaba con SEM004 ("se usa despues de move"): el analisis al compilar
+ nunca debe rechazar un programa valido. Si el move SI hubiera ocurrido, lo
+ detecta la ejecucion (ver 10_move_en_el_try_y_uso_en_el_catch).
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"libera {r.que}"); }
+
+fn toma(Recurso r) -> void { stdp.println(f"toma {r.que}"); }
+
+fn verifica(int x) -> void {
+    if (x > 0) { throw x; };
+}
+
+fn main() -> int {
+    var Recurso r = Recurso{ que: "recurso" };
+    try {
+        verifica(1);
+        toma(move r);
+    } catch (int e) {
+        stdp.println(f"fallo {e} antes de ceder: {r.que} sigue siendo mio");
+    };
+    stdp.println("fin de main");
+    return 0;
+}

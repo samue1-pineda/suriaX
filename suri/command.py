@@ -62,10 +62,15 @@ def forward(argv: List[str]) -> List[str]:
 
     ``argv`` NO incluye el nombre del programa.
     """
-    hay_fuente = any(not a.startswith("-") for a in argv)
-    es_subcomando = any(a in _SIN_RUN for a in argv)
-    if hay_fuente and not es_subcomando and "--run" not in argv:
-        return [*argv, "--run"]
+    # lo que va despues de '--' es del PROGRAMA: no cuenta, y el '--run' va
+    # antes (si no, el programa lo recibia como un argumento suyo)
+    corte = argv.index("--") if "--" in argv else len(argv)
+    propios = argv[:corte]
+    hay_fuente = any(not a.startswith("-") for a in propios)
+    es_subcomando = any(a in _SIN_RUN for a in propios)
+    pide_run = any(a == "--run" or a.startswith("--run=") for a in propios)
+    if hay_fuente and not es_subcomando and not pide_run:
+        return [*argv[:corte], "--run", *argv[corte:]]
     return list(argv)
 
 

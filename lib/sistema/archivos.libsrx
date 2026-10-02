@@ -1,0 +1,154 @@
+/- sistema.archivos: leer, escribir y listar.
+
+ Reglas que valen igual en el intérprete y en la VM:
+ - Un archivo se lee y se escribe como texto UTF-8, sin traducir los fines
+   de línea: un '\r\n' llega como '\r\n'.
+ - Todo fallo lanza 'excepciones.ErrorDeArchivo' (EXC003), con un mensaje
+   que nombra la ruta y es el mismo en todas las máquinas.
+ - 'listar' devuelve los nombres (no las rutas) ORDENADOS: el orden del
+   sistema de archivos no está definido.
+ - Un archivo BINARIO se lee y se escribe como bytes, sin interpretarlos:
+   'read_bytes' y 'write_bytes', con un 'vec.Vector<byte>'.
+-/
+#import array.vector as vec
+#import mem
+
+// llamadas al host
+internal fn __leer_archivo__(str ruta) -> str;
+internal fn __escribir_archivo__(str ruta, str texto) -> void;
+internal fn __existe__(str ruta) -> bool;
+internal fn __entradas__(str ruta) -> int;
+internal fn __entrada__(str ruta, int i) -> str;
+// binario: la memoria la reserva el lenguaje; el host solo copia bytes
+internal fn __tamano__(str ruta) -> int;
+internal fn __leer_bytes__(str ruta, byte ptr mutable destino, int n) -> void;
+internal fn __escribir_bytes__(str ruta, byte ptr datos, int n) -> void;
+
+// El contenido entero de un archivo de texto UTF-8.
+public fn leer(str ruta) -> str {
+    return __leer_archivo__(ruta);
+}
+
+// Escribe 'texto' en 'ruta', reemplazando lo que hubiera.
+public fn escribir(str ruta, str texto) -> void {
+    __escribir_archivo__(ruta, texto);
+}
+
+// Los bytes de un archivo, tal cual (sin decodificar). En la VM ocupan un
+// byte cada uno.
+public fn read_bytes(str path) -> vec.Vector<byte> {
+    var int n = __tamano__(path);
+    var int espacios = n;
+    if (espacios < 1) { espacios = 1; };
+    var byte ptr mutable bloque = mem.reserve<byte>(espacios);
+    try {
+        __leer_bytes__(path, bloque, n);
+    } catch (exc.ErrorDeArchivo e) {
+        // el bloque todavía no tiene dueño: se suelta antes de seguir
+        mem.release<byte>(bloque);
+        throw e;
+    };
+    return vec.adopt<byte>(bloque, n, espacios);
+}
+
+// Escribe los bytes de 'data' en 'path', reemplazando lo que hubiera.
+public fn write_bytes(str path, vec.Vector<byte> ptr data) -> void {
+    __escribir_bytes__(path, data.data(), data.len());
+}
+
+// ¿Existe un archivo o una carpeta con esa ruta?
+public fn existe(str ruta) -> bool {
+    return __existe__(ruta);
+}
+
+// Los nombres de lo que hay en una carpeta, ordenados.
+public fn listar(str carpeta) -> vec.Vector<str> {
+    var int n = __entradas__(carpeta);
+    var vec.Vector<str> nombres = vec.dynamic<str>(n + 1);
+    var int i = 0;
+    while (i < n) {
+        nombres.push(__entrada__(carpeta, i));
+        i = i + 1;
+    };
+    return nombres;
+}
+
+// --------------------------------------------------------------------------- //
+// File: un archivo abierto, para usarlo con 'with'
+// --------------------------------------------------------------------------- //
+//
+//     with open(var File f, "notas.txt", "w") {
+//         f.write("hola\n");
+//     };                          // aqui se cierra: su '__free__'
+//
+// Los modos son los de Python: "r" (leer), "w" (escribir desde cero) y "a"
+// (agregar al final). Debajo estan las mismas llamadas al host de arriba, que
+// son de archivo ENTERO: "r" lee todo al abrir y "w"/"a" escriben todo al
+// cerrar. Para un archivo de texto es lo mismo; no sirve para uno que no cabe
+// en memoria.
+//
+// Cerrar puede fallar (el disco se lleno, la carpeta no existe). 'close()'
+// lanza 'excepciones.ErrorDeArchivo' como todo lo de arriba; el cierre
+// automatico del '__free__' no puede lanzar —un destructor nunca lanza
+// (RT021)—, asi que un fallo ahi se escribe en la salida de errores en vez
+// de perderse. Para atraparlo, cierra con 'f.close()' dentro del 'with'.
+
+#import excepciones as exc
+
+internal fn __escribir_error__(str texto) -> void;
+
+public struct { str path; str mode; str content; bool open; } File;
+
+// Abre 'path' en 'mode' ("r", "w" o "a").
+public fn open(str path, str mode) -> File {
+    if (mode == "r") {
+        return File{ path: path, mode: mode, content: __leer_archivo__(path), open: true };
+    }
+    if (mode == "w") {
+        return File{ path: path, mode: mode, content: "", open: true };
+    }
+    if (mode == "a") {
+        var str previo = "";
+        if (__existe__(path)) { previo = __leer_archivo__(path); };
+        return File{ path: path, mode: mode, content: previo, open: true };
+    }
+    throw exc.ValorInvalido{ mensaje: f"modo de archivo '{mode}': los modos son \"r\", \"w\" y \"a\"" };
+}
+
+@impl File {
+    // Todo el contenido (modo "r").
+    fn read(File ptr self) -> str {
+        if (not self.open) { throw exc.ValorInvalido{ mensaje: f"'{self.path}' ya esta cerrado" }; };
+        if (self.mode != "r") {
+            throw exc.ValorInvalido{ mensaje: f"'{self.path}' se abrio para escribir (\"{self.mode}\"), no para leer" };
+        };
+        return self.content;
+    }
+
+    // Agrega 'text' a lo que se escribira al cerrar (modos "w" y "a").
+    fn write(File ptr mutable self, str text) -> void {
+        if (not self.open) { throw exc.ValorInvalido{ mensaje: f"'{self.path}' ya esta cerrado" }; };
+        if (self.mode == "r") {
+            throw exc.ValorInvalido{ mensaje: f"'{self.path}' se abrio para leer (\"r\"), no para escribir" };
+        };
+        self.content = self.content + text;
+    }
+
+    // Cierra: escribe lo pendiente. Lanza 'ErrorDeArchivo' si no puede.
+    fn close(File ptr mutable self) -> void {
+        if (not self.open) { return; };
+        self.open = false;
+        if (self.mode != "r") { __escribir_archivo__(self.path, self.content); };
+    }
+}
+
+hook fn __free__(File ptr f) -> void {
+    if (not f.open or f.mode == "r") { return; };
+    try {
+        __escribir_archivo__(f.path, f.content);
+    } catch (exc.ErrorDeArchivo e) {
+        __escribir_error__(f"no se pudo cerrar '{f.path}': {e.mensaje}\n");
+    };
+}
+
+#export as archivos

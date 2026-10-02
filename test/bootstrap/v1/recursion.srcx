@@ -1,0 +1,16 @@
+fn fib(int n) -> int {
+    if (n < 2) { return n; };
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() -> int {
+    var int total = 0;
+    var int i = 0;
+    while (i < 10) {
+        total = total + fib(i) % 7 * 3 / 2;
+        i = i + 1;
+    };
+    const bool vacio = "" == "";
+    if (vacio) { total = total + 0; };
+    return total;
+}

@@ -1,0 +1,15 @@
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+fn abre(str q) -> R { return R{ que: q }; }
+struct { int ancho; int alto; } Ventana;
+@impl Ventana { fn area(Ventana ptr self) -> int { return self.ancho * self.alto; } }
+fn main() -> int {
+    var int n = 0;
+    with (var R r = abre("a")) { n = n + len(r.que); }
+    with abre(var R s, "bb") { n = n + len(s.que); }
+    with (abre("guardia")) { n = n + 1; }
+    var Ventana v = Ventana{ ancho: 1, alto: 2 };
+    with (v) { .ancho = 3; n = n + .area(); }
+    with (var R a = abre("x"), var R b = abre("y")) { n = n + 1; }
+    return n;
+}

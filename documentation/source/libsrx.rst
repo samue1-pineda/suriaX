@@ -45,6 +45,25 @@ Importar
 
 El nombre puede ser punteado para llegar a un submódulo: ``#import io.stdp``.
 
+``#from`` trae un miembro con su nombre local: una función (también una
+genérica, que conserva sus parámetros de tipo), una constante, un submódulo
+o un **tipo**. Un ``struct`` o un ``enum`` traído así se usa como uno propio,
+y es el MISMO tipo que su forma calificada:
+
+.. code-block:: srcx
+   :class: fragmento
+
+   #import geom
+   #from geom #import Punto as P
+   #from mem #import reserve
+
+   fn main() -> int {
+       var P p = P{ x: 1, y: 2 };
+       var geom.Punto q = p;                  // el mismo tipo
+       var int ptr mutable b = reserve<int>(4);
+       return q.x;
+   }
+
 .. _paquetes:
 
 Paquetes

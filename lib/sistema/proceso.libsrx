@@ -1,0 +1,34 @@
+/- sistema.proceso: los argumentos, la salida de errores y el código de
+ salida del programa.
+
+ 'salir' termina AHORA, sin desenrollar: los '__free__' pendientes no corren
+ (como 'std::exit' en C++). Para terminar limpiamente, 'return' desde 'main'.
+-/
+
+// llamadas al host
+internal fn __argumentos__() -> int;
+internal fn __argumento__(int i) -> str;
+internal fn __salir__(int codigo) -> void;
+internal fn __escribir_error__(str texto) -> void;
+
+// Cuántos argumentos recibió el programa (el 0 es el archivo que se ejecuta).
+public fn argumentos() -> int {
+    return __argumentos__();
+}
+
+// El argumento 'i' (EXC002 si no existe).
+public fn argumento(int i) -> str {
+    return __argumento__(i);
+}
+
+// Escribe en la salida de ERRORES (stderr), no en la normal.
+public fn escribir_error(str texto) -> void {
+    __escribir_error__(texto);
+}
+
+// Termina el programa ahora con 'codigo', sin desenrollar.
+public fn salir(int codigo) -> void {
+    __salir__(codigo);
+}
+
+#export as proceso

@@ -1,0 +1,72 @@
+/- Excepciones 5: el desenrollado destruye lo que deja atras.
+
+ Mientras un throw sube, cada ambito que abandona destruye sus valores
+ (corre su '__free__'), del mas interno al mas externo, ANTES de que el
+ 'catch' empiece. Es lo que en C++ se llama "stack unwinding" y en Python
+ hace un 'finally'.
+
+ El valor lanzado es otra cosa: pasa al 'catch' que lo atrapa, y se
+ destruye UNA vez, al cerrar ese catch. Un temporal ('throw R{...}') ya
+ no tiene otro dueno, y una variable se cede sola: 'throw r;' (ver 11).
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"  libera {r.que}"); }
+
+fn con_guardia(int x) -> int {
+    var Recurso guardia = Recurso{ que: f"guardia {x}" };
+    if (x > 0) { throw x; };
+    return 0;
+}
+
+fn nivel(int n) -> int {
+    var Recurso r = Recurso{ que: f"nivel {n}" };
+    if (n == 0) { throw "fondo"; };
+    return nivel(n - 1);
+}
+
+fn cede() -> void {
+    var Recurso r = Recurso{ que: "cedido" };
+    throw r;
+}
+
+fn primera_vuelta_par() -> int {
+    var int i = 1;
+    while (i < 10) {
+        var Recurso r = Recurso{ que: f"vuelta {i}" };
+        try { if (i % 2 == 0) { return i; }; }
+        catch (int e) { stdp.println("  no se ve"); };
+        i = i + 1;
+    };
+    return -1;
+}
+
+fn main() -> int {
+    stdp.println("-- el local se libera antes de entrar al catch");
+    try { con_guardia(5); }
+    catch (int e) { stdp.println(f"  atrapado {e}"); };
+
+    stdp.println("-- varios marcos, del mas interno al mas externo");
+    try { nivel(2); }
+    catch (str e) { stdp.println(f"  atrapado {e}"); };
+
+    stdp.println("-- lanzar un temporal: una sola destruccion, al cerrar el catch");
+    try { throw Recurso{ que: "temporal" }; }
+    catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- lanzar una variable la cede (sin escribir move)");
+    try { cede(); }
+    catch (Recurso r) { stdp.println(f"  atrapado {r.que}"); };
+
+    stdp.println("-- lo declarado dentro de un catch se destruye al cerrarlo");
+    try { throw 1; }
+    catch (int e) {
+        var Recurso local = Recurso{ que: "local del catch" };
+        stdp.println("  dentro del catch");
+    };
+
+    stdp.println("-- return dentro de un try dentro de un bucle");
+    stdp.println(f"  devolvio {primera_vuelta_par()}");
+    return 0;
+}

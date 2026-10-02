@@ -395,6 +395,7 @@ class RestrictionChecker {
       case "try":
         this.#checkBlock(node.tryBlock);
         for (const rama of node.catches) this.#checkBlock(rama.block);
+        if (node.finallyBlock !== null) this.#checkBlock(node.finallyBlock);
         return;
       case "importBinding":
         this.#checkUnitName("", node.lib, stmt);

@@ -1,0 +1,21 @@
+-- el local se libera antes de entrar al catch
+  libera guardia 5
+  atrapado 5
+-- varios marcos, del mas interno al mas externo
+  libera nivel 0
+  libera nivel 1
+  libera nivel 2
+  atrapado fondo
+-- lanzar un temporal: una sola destruccion, al cerrar el catch
+  atrapado temporal
+  libera temporal
+-- lanzar una variable la cede (sin escribir move)
+  atrapado cedido
+  libera cedido
+-- lo declarado dentro de un catch se destruye al cerrarlo
+  dentro del catch
+  libera local del catch
+-- return dentro de un try dentro de un bucle
+  libera vuelta 1
+  libera vuelta 2
+  devolvio 2

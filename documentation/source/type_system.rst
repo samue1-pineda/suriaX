@@ -63,6 +63,7 @@ estar vacía": aceptar ``if (1)`` sería una conversión implícita, y la única
 vía de conversión del lenguaje es ``cast<T>(x)``.
 
 .. code-block:: srcx
+   :class: fragmento
 
    if (n != 0) { ... }      // así
    if (n) { ... }           // error: la condición es 'int'
@@ -83,10 +84,12 @@ Mezclarlas —cociente hacia abajo y resto con el signo del dividendo— la romp
 La regla vale para **todos los ejecutores**: intérprete, target web y backend
 nativo dan el mismo número para el mismo programa.
 
-Dividir por cero **entre enteros** no tiene respuesta: es un error de
-ejecución (``RT016``). Entre ``float`` sí la tiene y es la de IEEE-754
-(``1.0 / 0.0`` es ``+inf``, ``0.0 / 0.0`` es ``NaN``), así que ahí no hay
-error que reportar.
+Dividir por cero **entre enteros** no tiene respuesta. Si el cero está
+escrito (``x / 0``), el programa no compila (``SEM035``); si el divisor vale
+cero al ejecutar, es una excepción que se puede atrapar
+(``excepciones.DivisionPorCero``, ``EXC001``). Entre ``float`` sí hay
+respuesta y es la de IEEE-754 (``1.0 / 0.0`` es ``+inf``, ``0.0 / 0.0`` es
+``NaN``), así que ahí no hay error que reportar.
 
 .. code-block:: srcx
 
@@ -238,6 +241,25 @@ Los valores se numeran solos desde cero, y un literal explícito reancla la
 cuenta: aquí ``ROJO`` vale 0, ``VERDE`` 5 y ``AZUL`` 6. Los items se leen
 cualificados (``Color.VERDE``) y también pelados (``VERDE``).
 
+En un f-string un enum se escribe por el **nombre** de su variante:
+``f"{c}"`` con ``c = Color.VERDE`` da ``VERDE``, no ``5``, y una variante con
+payload da ``Circulo(2.5)``. En ejecución un enum sin payload es un entero, así
+que el nombre sale del tipo que el compilador ya conoce; un entero que no es
+ninguna variante (el de un ``cast``) se escribe como número.
+
+El formato de una interpolación es el de Python: ``{x!r}`` pide la
+**representación** —una cadena con sus comillas y escapes (``"hola
+"``), un
+``char`` entre apóstrofes, un enum con su tipo (``Color.VERDE``,
+``Figura.Circulo(2.5)``)— y ``{x:espec}`` un especificador
+``[0][ancho][.precisión][tipo]``: ``d x X b o`` para un ``int`` o un ``byte``
+(``{n:08b}``, ``{n:x}``), ``f`` con su precisión para un ``float``
+(``{x:.2f}``), y el ancho para cualquier valor (un número se alinea a la
+derecha, lo demás a la izquierda). Un formato que no corresponde al tipo es un
+error de compilación. Un struct se escribe con sus campos,
+``Punto{x: 1, y: 2}``; si lleva un puntero, su representación podría no
+terminar y se rechaza.
+
 .. _enum-suma:
 
 Variantes con datos: el enum como tipo suma
@@ -304,9 +326,11 @@ Reglas, y cada una tiene su diagnóstico:
 * una variante no puede contenerse a sí misma por valor (``SEM026``): la
   recursión va por puntero, que se refiere en vez de contener;
 * ``void`` no puede ser un payload (``SEM025``);
-* un payload **no puede poseer recursos** todavía (``SEM029``) — destruirlo
-  exigiría decidir en ejecución qué variante se está destruyendo, y eso no
-  existe. Un puntero sí vale: no posee.
+* un payload **puede poseer recursos**: el valor se destruye con él, por la
+  variante que tenga al morir (destruir por tipo; hasta la 0.3.1 era
+  ``SEM029``). Lo que liga ``case Nodo.A(x)`` es el payload **prestado**:
+  sigue siendo del enum, así que cederlo (``move x``, ``return x``) es
+  ``SEM036``. Un payload puntero no posee.
 
 En cuanto **una** variante lleva payload, el enum entero es un tipo suma. Un
 enum de solo variantes unidad sigue siendo exactamente lo de antes: enteros
@@ -442,9 +466,117 @@ propagándose** hacia el ``try`` de más afuera. Eso es lo que hace útil filtra
 —un ``catch`` que no sabe manejar un fallo no se lo queda— y es la diferencia
 con capturar todo y volver a lanzar a mano.
 
-El filtro es una pregunta que se resuelve en **ejecución**: ``throw`` acepta
-cualquier valor, así que el tipo dinámico de lo lanzado es lo único que hay
-para decidir. Funciona con structs, con enums y con primitivos.
+El filtro compara **tipos**, no valores: cada ``throw`` lleva el tipo
+**estático** de su expresión —el que decidió el compilador— y una rama encaja
+si su tipo es exactamente ese, con su nombre completo. Por eso ``char`` y un
+``str`` de un carácter no se confunden, y ``catch (b.Error e)`` no atrapa el
+``Error`` homónimo de otra librería ``a``. Funciona con structs, con enums y
+con primitivos, igual en el intérprete que en la VM.
+
+El valor lanzado pasa a manos del ``catch`` que lo atrapa, que lo destruye al
+cerrar su bloque. Igual que ``return r;``, un ``throw r;`` **cede** ``r`` sin
+escribir ``move``: después del ``throw`` la variable no puede volver a usarse,
+así que el ``move`` no diría nada nuevo. El compilador lo inserta y el HIR lo
+muestra (``throw move r``). Un ``__free__`` nunca puede lanzar (``SEM034`` si
+está escrito, ``RT021`` si ocurre al ejecutar). La serie ``test/e2e/excepciones/`` tiene un programa
+comentado por cada aspecto (propagación, filtros, relanzar, control de flujo,
+destrucción durante el desenrollado, librerías, un ``throw`` no capturado,
+``finally``).
+
+.. _finally:
+
+``finally``: lo que corre por cualquier salida
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Un ``try`` puede terminar con un bloque ``finally`` (con o sin ramas
+``catch``). Corre **siempre** que el control sale del ``try`` o de un
+``catch``: al terminar normalmente, con un ``return``, con un ``break`` o
+``continue`` que lo atraviesa, y con una excepción que nadie atrapó —que,
+después del ``finally``, sigue subiendo—.
+
+.. code-block:: srcx
+   :class: fragmento
+
+   fn guarda(str ruta) -> void {
+       try {
+           escribe(ruta);
+       } catch (ErrorDeArchivo e) {
+           stdp.println(e.mensaje);
+       } finally {
+           stdp.println("cerrando");    // en los tres caminos
+       };
+   }
+
+Reglas:
+
+- El valor de un ``return`` se calcula **antes** del ``finally``: cambiar la
+  variable dentro de él no cambia lo devuelto.
+- Lo declarado dentro del ``try`` se destruye (corre su ``__free__``)
+  **antes** del ``finally``. Un ``finally`` anidado corre antes que el de
+  afuera.
+- Del ``finally`` no se sale con ``return``, ni con un ``break``/``continue``
+  que salga de él (``PAR027``): reemplazaría la salida que ya estaba en curso
+  y, si viajaba una excepción, se la tragaría en silencio (la regla de PEP 765
+  en Python). Un bucle **dentro** del ``finally`` sí puede usarlos.
+- Si el ``finally`` lanza mientras ya sube otra excepción, habría dos a la
+  vez: el programa termina con ``RT022``, como un destructor que lanza. Sin
+  otra en vuelo, un ``throw`` en el ``finally`` es uno más.
+
+Para liberar un recurso **no hace falta** ``finally``: su ``__free__`` ya
+corre en toda salida del ámbito. ``finally`` es para lo que no es de un
+valor (un mensaje, un contador, restaurar un estado). No hay una variante que
+corra solo al fallar (el ``errdefer`` de Zig): eso ya lo dice un ``catch``
+que relanza.
+
+.. _with:
+
+``with``: un recurso, un guardián o un receptor con ámbito
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``with`` abre un bloque con uno o más valores que viven hasta que el bloque
+termina, por cualquier camino. No hay un protocolo nuevo (el
+``__enter__``/``__exit__`` de Python): lo que pasa al salir es el
+``__free__`` de cada valor, en orden inverso. Es azúcar: el parser lo convierte
+en un bloque con sus declaraciones.
+
+.. code-block:: srcx
+   :class: fragmento
+
+   // un RECURSO con nombre (varios, separados por coma)
+   with (var arch.File f = arch.open("notas.txt", "w")) {
+       f.write("hola\n");
+   };                                  // aquí se cierra
+
+   // lo mismo, con la declaración como primer argumento de la llamada
+   with arch.open(var arch.File f, "notas.txt", "r") {
+       stdp.println(f.read());
+   };
+
+   // un GUARDIÁN sin nombre: su __free__ deshace el cambio al salir
+   with (cambiar_idioma("en")) {
+       imprimir_reporte();
+   };
+
+   // un RECEPTOR: '.campo' es un campo (o un método) del valor del with
+   with (ventana) {
+       .ancho = 900;
+       .alto = 600;
+       .show();
+   };
+
+Reglas:
+
+- ``with f(var T x, a, b)`` es exactamente ``with (var T x = f(a, b))``, con
+  cualquier función.
+- Un valor sin nombre que es un **lugar** (``ventana``, ``a.b``) es el receptor
+  tal cual: no se copia (un struct es un valor, y cambiar una copia no cambiaría
+  la ventana) y el ``with`` no lo destruye, porque no es suyo. Uno que es un
+  **temporal** (``cambiar_idioma("en")``) vive hasta el final del bloque. Es el
+  único binding del lenguaje sin tipo escrito: no hay nombre que anotar.
+- ``.campo`` exige un ``with`` de **un** valor alrededor (``PAR028``). Con el
+  punto delante, un campo del receptor no se confunde con una variable: el
+  ``with`` de nombres pelados de Pascal (y de JavaScript) cambiaba de
+  significado en silencio cuando aparecía un local con el mismo nombre.
 
 .. _conversiones:
 

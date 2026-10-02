@@ -82,7 +82,7 @@ package suriax.hir.v0;
 message Module {
   // versión del ESQUEMA (no del compilador). Se incrementa ante cualquier
   // cambio incompatible; el lector valida antes de tocar nada más.
-  uint32 schema_version = 1;   // == 1
+  uint32 schema_version = 1;   // == 2 (ver SCHEMA_VERSION en emmit_IR.py)
   string source_file = 2;      // ruta del .srcx de origen (diagnósticos)
 
   SymbolTable symbols = 3;
@@ -139,6 +139,8 @@ enum TypeKind {
   NOMINAL = 9;   // 'name'  = struct/enum/type por nombre (tipado nominal)
   META = 10;     // 'type': el tipo de un TIPO ('const type int8;')
   ERROR = 11;    // 'error T' (inner) o 'error' solo: union valor-o-error
+  BYTE = 12;     // entero SIN signo de 8 bits (0..255). Un bloque de 'byte'
+                 // es compacto en la VM: un byte por celda
 }
 
 message Type {
@@ -199,6 +201,10 @@ enum HookKind {
                // los lee el COMPILADOR (el literal de su 'return') para decidir
                // si un literal cabe en un tipo numérico de librería; viajan al
                // HIR como cualquier otro hook, no los dispara ninguna sintaxis
+  HASH = 12;   // __hash__: fn __hash__(T ptr x) -> int — se dispara con
+               // 'hash(x)'. Sobre int/bool/char/str es NATIVO (dueño: el
+               // primitivo) y sobre un parametro de tipo lo decide el backend
+               // con el tipo concreto
 
   // hook DECLARADO POR EL USUARIO (HTIMS). No tiene número propio porque su
   // identidad es el NOMBRE ('hook_name'), no un valor del enum: el
@@ -328,6 +334,11 @@ message InterpolatedString {
       string text = 1;
       Expr expr = 2;
     }
+    // solo con 'expr': '{x!r}' pide la REPRESENTACION y '{x:08b}' un formato
+    // '[0][ancho][.precision][tipo]' (tipo: d x X b o | f), ya validado
+    // contra el tipo por la Semantica
+    bool repr = 3;
+    string spec = 4;
   }
   repeated Part parts = 1;
 }
@@ -335,7 +346,15 @@ message InterpolatedString {
 message Identifier { string name = 1; }
 message UnaryOp    { string op = 1; Expr operand = 2; }  // op: 'not' | '-'
 message BinaryOp   { string op = 1; Expr left = 2; Expr right = 3; }
-message Assignment { Expr target = 1; Expr value = 2; }
+message Assignment {
+  Expr target = 1;
+  Expr value = 2;
+  // el destino POSEE recursos (o es un 'T' de un generico): el valor que
+  // tenia muere al recibir el nuevo, destruido por su tipo concreto (ver
+  // 'Drop.by_type'). Sin esto 'a = R{...}' perdia el destructor del viejo.
+  // El nuevo se evalua ANTES: 'a = f(a)' todavia puede leer el viejo.
+  bool drops_old = 3;
+}
 
 // '&expr' — dirección de un lvalue. Nodo propio (no un UnaryOp con string):
 // los consumidores despachan por caso y la REGLA de mutabilidad ya viene
@@ -354,6 +373,10 @@ message Call {
   // en el caso normal. Quien decide es el frontend: saber si un tipo posee es
   // una pregunta sobre el TIPO.
   HookRef temp_drop = 4;
+  // TEMPORAL que se destruye POR SU TIPO (ver 'Drop.by_type'): posee solo por
+  // sus campos o su payload (no declara '__free__'), o es un 'T' de un
+  // generico. Excluyente con 'temp_drop'.
+  bool temp_by_type = 5;
 }
 
 // 'move x' en posicion de EXPRESION: transfiere la propiedad Y entrega el
@@ -388,6 +411,7 @@ message StructLiteral {
   // en el caso normal. Quien decide es el frontend: saber si un tipo posee es
   // una pregunta sobre el TIPO.
   HookRef temp_drop = 4;
+  bool temp_by_type = 5;   // como en 'Call'
 }
 
 // ---------------------------------------------------------------------- //
@@ -435,6 +459,15 @@ message Drop {
   // pregunta sobre el TIPO, y el consumidor no tiene por que rehacerla.
   repeated string path = 1;
   HookRef hook = 2;   // '__free__' de lo que hay al final de la ruta
+  // DESTRUIR POR TIPO ('drop glue'): el frontend no puede aplanar lo que hay
+  // al final de la ruta —un 'T' de un generico, el binding de un 'catch (e)'
+  // sin tipo, un bloque de 'mem' que es de un campo—, asi que 'hook' va
+  // vacio y el consumidor lo destruye por su TIPO CONCRETO: si declara
+  // '__free__', ese; si no, sus campos que poseen, en orden inverso; un
+  // bloque propio, sus celdas no vacias. Es la misma regla que aplana el
+  // frontend, aplicada donde el tipo recien se conoce (el interprete en
+  // ejecucion, la VM al monomorfizar).
+  bool by_type = 3;
 }
 
 message Block {
@@ -505,6 +538,12 @@ message CatchClause {
 message TryStmt {                      // intercepta la propagación
   Block try_block = 1;
   repeated CatchClause catches = 4;
+  // 'finally': corre al salir del try por CUALQUIER camino (su final, un
+  // catch, un return/break/continue que lo atraviesa o una excepcion que
+  // nadie atrapo, que despues sigue). Ausente = sin 'finally'. Dentro no hay
+  // return/break/continue que salgan de el (PAR027); si lanza mientras ya
+  // viajaba otra excepcion, el programa termina (RT022).
+  Block finally_block = 5;
   // v2 tenía una sola rama sin tipo, inline. Al pasar a N ramas filtradas sus
   // tags quedan 'reserved': un lector viejo NO puede leer un try multi-rama
   // como si fuera de una, que es justo la degradación silenciosa que el
@@ -574,6 +613,12 @@ message FunctionDecl {
                           // el backend / #extern)
   string dunder = 5;      // nombre sin guiones si es hook/dunder ("" = normal)
   string decorator = 6;   // "@decorador" aplicado, si lo hay ("" = ninguno)
+  // PARAMETROS DE TIPO de un generico ('fn make<T>' -> ["T"]), incluidos los
+  // del '@impl Vector<T>' de un metodo, en orden. Dentro de la funcion un
+  // parametro aparece como un NOMINAL con ese nombre. Sin esta lista un
+  // consumidor no distingue 'T' de un tipo que no conoce, y no puede
+  // monomorfizar (el backend C++ baja una copia por tipo concreto).
+  repeated string type_params = 8;
 
   reserved 3;             // 'Type return_type' inline: v1
   reserved "return_type";
@@ -586,7 +631,14 @@ message Field {
   reserved 1;
   reserved "type";
 }
-message StructDecl { string name = 1; repeated Field fields = 2; }
+message StructDecl {
+  string name = 1;
+  repeated Field fields = 2;
+  // PARAMETROS DE TIPO en ORDEN ('struct {...} Par<A, B>' -> ["A", "B"]): es
+  // lo que casa 'Par<int, str>' con sus campos. El orden no se puede deducir
+  // de los campos (pueden usar B antes que A).
+  repeated string type_params = 3;
+}
 
 // Una variante de enum. Dos formas EXCLUYENTES:
 //   - variante UNIDAD: 'value' es su entero (explicito o auto-numerado).

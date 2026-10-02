@@ -266,13 +266,20 @@ function decodeLiteral(r: Reader): Literal {
 
 function decodeInterpPart(r: Reader): InterpPart {
   let part: InterpPart = { case: "text", text: "" };
+  let repr = false;
+  let spec = "";
   while (!r.eof) {
     const tag = r.readUint32();
     switch (tag) {
       case 10: part = { case: "text", text: r.readString() }; break;
       case 18: part = { case: "expr", expr: r.readMessage(decodeExpr) }; break;
+      case 24: repr = r.readUint32() !== 0; break;
+      case 34: spec = r.readString(); break;
       default: r.skip(tag);
     }
+  }
+  if (part.case === "expr" && (repr || spec !== "")) {
+    return { case: "expr", expr: part.expr, repr, spec };
   }
   return part;
 }
@@ -734,6 +741,7 @@ function decodeThrow(r: Reader): StmtNode {
 
 function decodeTry(r: Reader): StmtNode {
   let tryBlock: Block | null = null;
+  let finallyBlock: Block | null = null;
   const catches: CatchClause[] = [];
   while (!r.eof) {
     const tag = r.readUint32();
@@ -743,10 +751,11 @@ function decodeTry(r: Reader): StmtNode {
       // de un catch unico a N ramas filtradas: se ignoran, nunca se leen como
       // si fueran una rama.
       case 34: catches.push(r.readMessage(decodeCatch)); break;
+      case 42: finallyBlock = r.readMessage(decodeBlock); break;
       default: r.skip(tag);
     }
   }
-  return { case: "try", tryBlock: tryBlock ?? EMPTY_BLOCK, catches };
+  return { case: "try", tryBlock: tryBlock ?? EMPTY_BLOCK, catches, finallyBlock };
 }
 
 function decodeCatch(r: Reader): CatchClause {

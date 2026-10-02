@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 try:
     from include.types_ast import Type, TypeKind
@@ -103,6 +103,57 @@ def lookup_type_path(name: str, scope: Scope) -> TypeLookupResult:
         return TypeLookupResult(TypeLookup.NOT_A_TYPE, current,
                                 owner=".".join(parts[:-1]), missing=parts[-1])
     return TypeLookupResult(TypeLookup.OK, current)
+
+
+def resolve_canonical(name: str, scope: Scope) -> Optional[Symbol]:
+    """El Symbol del tipo cuyo nombre CANONICO es ``name`` (uso interno).
+
+    Los tipos viajan canonicos ('caja.Caja': el alias con que la libreria se
+    EXPORTA), pero el consumidor la importo quiza con otro alias
+    (``#import cont.caja as cj``). Buscar 'caja.Caja' como ruta tomaba 'caja'
+    por un alias de import que ahi no existe, y la pregunta del compilador
+    se respondia mal en silencio: un ``Caja<R>`` de libreria "no poseia nada"
+    y el destructor de su ``R`` no corria nunca.
+
+    NO sirve para resolver lo que ESCRIBE el usuario (eso es
+    :func:`lookup_type_path`): alli un alias no importado tiene que seguir
+    siendo un error. Esto es para las preguntas internas —¿posee?, ¿es un
+    enum?— sobre tipos que ya estan resueltos.
+    """
+    symbol = scope.resolve_type(name)
+    if symbol is not None:
+        return symbol
+    result = lookup_type_path(name, scope)
+    if result.status is TypeLookup.OK:
+        return result.symbol
+    if "." not in name:
+        return None
+    vistos: set = set()
+    actual: Optional[Scope] = scope
+    while actual is not None:
+        for sym in actual.values.values():
+            if sym.kind is SymbolKind.IMPORT and sym.members:
+                hallado = _tipo_por_canonico(sym.members, name, vistos)
+                if hallado is not None:
+                    return hallado
+        actual = actual.parent
+    return None
+
+
+def _tipo_por_canonico(members: Dict[str, Symbol], name: str,
+                       vistos: set) -> Optional[Symbol]:
+    """Busca en los exports de una libreria (y de sus submodulos)."""
+    for m in members.values():
+        if id(m) in vistos:
+            continue
+        vistos.add(id(m))
+        if m.kind in _TYPE_KINDS and m.type_name == name:
+            return m
+        if m.kind is SymbolKind.IMPORT and m.members:
+            hallado = _tipo_por_canonico(m.members, name, vistos)
+            if hallado is not None:
+                return hallado
+    return None
 
 
 def canonical_name(symbol: Symbol, written: str = "") -> str:
@@ -227,6 +278,15 @@ def owns_resources(t: Optional[Type], scope: Scope, table: SymbolTable) -> bool:
        ``__free__`` viaja en la tabla de hooks y es su contrato completo.
     3. **Un ``struct`` posee si algún campo POR VALOR posee**, aunque él no
        declare ``__free__``: contener un dueño es ser dueño.
+    4. **Un campo ``R ptr`` posee si ``R`` posee.** Es la excepción a la regla
+       1 y es solo de los CAMPOS: un bloque de ``mem`` guardado en un campo es
+       del struct, como el buffer de un ``std::vector`` (así ``Vector<R>``
+       posee y ``Vector<int>`` no, y sigue siendo copiable). Una variable
+       ``R ptr`` sigue siendo un préstamo. En ejecución solo se destruye lo
+       que de verdad es un bloque: un campo que apunta a un valor ajeno no se
+       toca.
+    5. **Un ``enum`` suma posee si el payload de alguna variante posee.** Un
+       payload puntero NO: la regla 4 es de los campos de un struct.
 
     ``T?`` y ``error T`` son envoltorios: poseen si lo que envuelven posee.
     Los primitivos nunca poseen.
@@ -250,11 +310,20 @@ def _posee(t: Optional[Type], scope: Scope, table: SymbolTable,
     if kind is not TypeKind.NOMINAL or t.name is None:
         return False
 
-    simbolo = lookup_type_path(t.name, scope).symbol
+    simbolo = resolve_canonical(t.name, scope)
     if simbolo is None:
         return False
-    if table.lookup_hook(simbolo.name, HookKind.FREE) is not None:
+    if table.lookup_hook(simbolo.name, HookKind.FREE) is not None \
+            or table.lookup_hook(canonical_name(simbolo, t.name),
+                                 HookKind.FREE) is not None:
         return True                       # lo declara (regla 2)
+    if simbolo.kind is SymbolKind.ENUM and simbolo.members:
+        if t in visitados:
+            return False
+        visitados.add(t)
+        return any(_posee(p, scope, table, visitados)          # regla 5
+                   for item in simbolo.members.values()
+                   for p in (item.param_types or ()))
     if simbolo.kind is not SymbolKind.STRUCT or not simbolo.members:
         return False
 
@@ -275,8 +344,38 @@ def _posee(t: Optional[Type], scope: Scope, table: SymbolTable,
     # aunque 'R' tuviera '__free__', y su destructor no se ejecutaba nunca.
     # Es la misma sustitucion que hace falta para leer cualquier campo suyo.
     mapa = bindings(simbolo, t)
-    return any(_posee(substitute(campo.type, mapa), scope, table, visitados)
+    return any(_posee_campo(substitute(campo.type, mapa), scope, table, visitados)
                for campo in simbolo.members.values())
+
+
+def _posee_campo(t: Optional[Type], scope: Scope, table: SymbolTable,
+                 visitados: set) -> bool:
+    """¿Un CAMPO de tipo ``t`` posee? Como :func:`_posee`, más la regla 4: un
+    ``R ptr`` en un campo es el bloque del struct."""
+    if t is not None and t.kind is TypeKind.POINTER:
+        return _posee(t.inner, scope, table, visitados)
+    return _posee(t, scope, table, visitados)
+
+
+def field_owns_resources(t: Optional[Type], scope: Scope,
+                         table: SymbolTable) -> bool:
+    """¿Un CAMPO de tipo ``t`` posee recursos? La regla 4 de
+    :func:`owns_resources`: un ``R ptr`` guardado en un campo es un bloque
+    del struct, y posee si ``R`` posee."""
+    return _posee_campo(t, scope, table, set())
+
+
+def mentions_param(t: Optional[Type], params) -> bool:
+    """¿``t`` nombra alguno de los parámetros de tipo ``params`` (``T``,
+    ``Caja<T>``, ``T ptr``)? Es la pregunta de un GENÉRICO: lo que se sabe de
+    un ``T`` depende de con qué se instancie."""
+    if t is None or not params:
+        return False
+    if t.kind is TypeKind.NOMINAL:
+        if not t.args and t.name in params:
+            return True
+        return any(mentions_param(a, params) for a in t.args)
+    return mentions_param(getattr(t, "inner", None), params)
 
 
 def infinite_size_path(name: str, scope: Scope) -> Optional[Tuple[str, ...]]:

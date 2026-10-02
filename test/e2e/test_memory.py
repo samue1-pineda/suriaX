@@ -131,12 +131,12 @@ def test_indexacion_sobre_bloque_reservado():
 
 
 def test_indexacion_fuera_de_rango_es_error():
-    """RT013: acceder fuera de ``[0, tamaño)`` de un bloque reservado."""
+    """EXC002 (antes RT013): acceder fuera de ``[0, tamaño)`` de un bloque reservado."""
     code, err = _fails("fn __reserve__(int n) -> int ptr mutable;\n"
                        "fn main() -> int { var int ptr mutable b = __reserve__(2); "
                        "b[5] = 1; return 0; };")
     assert code == 70, f"exit={code}"
-    assert "RT013" in err, err
+    assert "EXC002" in err, err
 
 
 def test_limite_no_hay_aritmetica_de_punteros():

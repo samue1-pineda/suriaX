@@ -1,0 +1,18 @@
+-- cada tipo cae en su rama
+  int 7
+  str texto
+  char c
+  float 2.5
+  bool false
+  sintaxis en 12: falta ';'
+  limite 100
+  desconocido
+-- char y str de un caracter son tipos distintos
+  str x
+  char x
+-- gana la primera rama que encaja
+  primera
+-- sin tipo atrapa lo que las demas dejan
+  atrapado por la rama sin tipo
+-- ninguna rama encaja: el valor sigue subiendo
+  lo atrapa el de afuera: no soy int

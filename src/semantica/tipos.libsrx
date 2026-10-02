@@ -1,0 +1,209 @@
+/- semantica.tipos — el UNIVERSO de tipos: cada tipo distinto, una vez
+   (`V0/include/types_ast.py`).
+
+ En la V0 un `Type` contiene a otros (`inner`, `args`): es recursivo. El
+ lenguaje no tiene tipos recursivos, así que aquí los tipos viven en una
+ ARENA y se nombran por su índice, igual que los nodos del árbol
+ (`frontend.arbol`). Un `ptr int` es un `Tipo` cuyo `inner` es el índice
+ de `int`.
+
+ Cada tipo se guarda UNA vez (interning): dos `int` construidos por
+ separado son el mismo índice. Así comparar dos tipos es comparar dos
+ enteros, que es lo que hace la V0 con `==` sobre sus `Type` (estructural).
+
+ El índice 0 es "sin tipo" (el `None` de la V0).
+-/
+
+#import array.vector as vec
+#import collections.dictionary as dic
+
+//: las clases de tipo, con los MISMOS números que `TypeKind` del HIR
+public const int SIN_TIPO = 0;
+public const int VOID = 1;
+public const int BOOL = 2;
+public const int INT = 3;
+public const int FLOAT = 4;
+public const int CHAR = 5;
+public const int STR = 6;
+public const int POINTER = 7;
+public const int NULLABLE = 8;
+public const int NOMINAL = 9;
+public const int META = 10;
+public const int ERROR = 11;
+public const int BYTE = 12;
+
+struct {
+    int clase;       // una de las constantes de arriba
+    str nombre;      // solo NOMINAL
+    int inner;       // POINTER / NULLABLE / ERROR: el tipo envuelto (0 = ninguno)
+    bool mut;        // solo POINTER: se escribe a través de él
+    int args_desde;  // los argumentos (`Vector<int>`) están en `Universo.args`
+    int n_args;
+} Tipo;
+
+struct {
+    vec.Vector<Tipo> tipos;
+    vec.Vector<int> args;               // los argumentos de todos los tipos, seguidos
+    dic.Dictionary<str, int> indice;    // clave estructural -> índice
+} Universo;
+
+/- Un universo con la entrada 0 ("sin tipo") ya puesta. -/
+public fn universo() -> Universo {
+    var Universo u = Universo{ tipos: vec.dynamic<Tipo>(32), args: vec.dynamic<int>(8),
+                               indice: dic.make<str, int>(32) };
+    u.tipos.push(Tipo{ clase: SIN_TIPO, nombre: "", inner: 0, mut: false,
+                       args_desde: 0, n_args: 0 });
+    return u;
+}
+
+/- El índice del tipo con esa forma; lo crea si no existía. -/
+public fn interna(Universo ptr mutable u, int clase, str nombre, int inner, bool mut,
+                  vec.Vector<int> ptr args) -> int {
+    var str clave = f"{clase}|{nombre}|{inner}|{mut}|";
+    var int i = 0;
+    while (i < args.len()) {
+        clave = clave + f"{args.get(i)},";
+        i = i + 1;
+    };
+    if (u.indice.contains(clave)) {
+        return u.indice.get(clave);
+    };
+    var int desde = u.args.len();
+    i = 0;
+    while (i < args.len()) {
+        u.args.push(args.get(i));
+        i = i + 1;
+    };
+    u.tipos.push(Tipo{ clase: clase, nombre: nombre, inner: inner, mut: mut,
+                       args_desde: desde, n_args: args.len() });
+    var int nuevo = u.tipos.len() - 1;
+    u.indice.put(clave, nuevo);
+    return nuevo;
+}
+
+/- Un tipo sin partes (`int`, `bool`...). -/
+public fn simple(Universo ptr mutable u, int clase) -> int {
+    var vec.Vector<int> nada = vec.dynamic<int>(1);
+    return interna(u, clase, "", 0, false, &nada);
+}
+
+/- `ptr inner` (`mutable` si se escribe a través de él). -/
+public fn puntero(Universo ptr mutable u, int inner, bool mut) -> int {
+    var vec.Vector<int> nada = vec.dynamic<int>(1);
+    return interna(u, POINTER, "", inner, mut, &nada);
+}
+
+/- `error` sin envolver: lo DESCONOCIDO (el binding de un `catch (e)`). -/
+public fn error_suelto(Universo ptr mutable u) -> int {
+    var vec.Vector<int> nada = vec.dynamic<int>(1);
+    return interna(u, ERROR, "", 0, false, &nada);
+}
+
+/- ¿`t` no dice nada del valor (`es_desconocido`): `error` sin envolver? -/
+public fn es_desconocido(Universo ptr u, int t) -> bool {
+    return t > 0 and clase_de(u, t) == ERROR and inner_de(u, t) == 0;
+}
+
+/- `inner?`. -/
+public fn nullable(Universo ptr mutable u, int inner) -> int {
+    var vec.Vector<int> nada = vec.dynamic<int>(1);
+    return interna(u, NULLABLE, "", inner, false, &nada);
+}
+
+/- Un tipo por su NOMBRE (`struct`, `enum`), con sus argumentos. -/
+public fn nominal(Universo ptr mutable u, str nombre, vec.Vector<int> ptr args) -> int {
+    return interna(u, NOMINAL, nombre, 0, false, args);
+}
+
+/- El tipo de un primitivo escrito (`PrimitiveTypeExpr`), por su nombre. -/
+public fn primitivo(Universo ptr mutable u, str nombre) -> int {
+    if (nombre == "int") { return simple(u, INT); };
+    if (nombre == "float") { return simple(u, FLOAT); };
+    if (nombre == "bool") { return simple(u, BOOL); };
+    if (nombre == "str") { return simple(u, STR); };
+    if (nombre == "char") { return simple(u, CHAR); };
+    if (nombre == "void") { return simple(u, VOID); };
+    if (nombre == "byte") { return simple(u, BYTE); };
+    return SIN_TIPO;
+}
+
+/- El tipo de un literal por su clase (`literal_kind`); `null` no tiene
+   tipo propio (lo unifica la Semántica). -/
+public fn de_literal(Universo ptr mutable u, str clase_literal) -> int {
+    if (clase_literal == "null") { return SIN_TIPO; };
+    return primitivo(u, clase_literal);
+}
+
+public fn clase_de(Universo ptr u, int t) -> int { return u.tipos.get(t).clase; }
+public fn nombre_de(Universo ptr u, int t) -> str { return u.tipos.get(t).nombre; }
+public fn inner_de(Universo ptr u, int t) -> int { return u.tipos.get(t).inner; }
+public fn mut_de(Universo ptr u, int t) -> bool { return u.tipos.get(t).mut; }
+public fn n_args_de(Universo ptr u, int t) -> int { return u.tipos.get(t).n_args; }
+
+/- El `k`-ésimo argumento de `t` (`Vector<int>` -> `int`). -/
+public fn arg_de(Universo ptr u, int t, int k) -> int {
+    return u.args.get(u.tipos.get(t).args_desde + k);
+}
+
+// ------------------------------------------------------------------------ //
+// los genéricos (`type_service.substitute` y `mentions_param`)
+// ------------------------------------------------------------------------ //
+
+/- `t` con cada PARÁMETRO de tipo (`nombres[i]`, un nominal sin argumentos)
+   reemplazado por su argumento (`args[i]`): el campo `T ptr mutable` de un
+   `Vector<T>`, visto desde un `Vector<int>`, es `int ptr mutable`. Recorre
+   los envoltorios y los argumentos de un genérico anidado. Lo que no nombra
+   ningún parámetro queda igual (el mismo índice). -/
+public fn sustituye(Universo ptr mutable u, int t, vec.Vector<str> ptr nombres,
+                   vec.Vector<int> ptr args) -> int {
+    if (t <= 0 or nombres.len() == 0) { return t; };
+    var Tipo x = u.tipos.get(t);
+    if (x.clase == NOMINAL) {
+        if (x.n_args == 0) {
+            var int i = 0;
+            while (i < nombres.len() and i < args.len()) {
+                if (nombres.get(i) == x.nombre) { return args.get(i); };
+                i = i + 1;
+            };
+            return t;
+        };
+        var vec.Vector<int> nuevos = vec.dynamic<int>(x.n_args);
+        var int k = 0;
+        while (k < x.n_args) {
+            nuevos.push(sustituye(u, arg_de(u, t, k), nombres, args));
+            k = k + 1;
+        };
+        return interna(u, NOMINAL, x.nombre, 0, false, &nuevos);
+    };
+    if (x.inner <= 0) { return t; };
+    var int inner = sustituye(u, x.inner, nombres, args);
+    if (inner == x.inner) { return t; };
+    var vec.Vector<int> nada = vec.dynamic<int>(1);
+    return interna(u, x.clase, x.nombre, inner, x.mut, &nada);
+}
+
+/- ¿`t` nombra alguno de los parámetros de tipo `nombres` (`T`, `Caja<T>`,
+   `T ptr`)? Lo que se sabe de un `T` depende de la instancia. -/
+public fn menciona(Universo ptr u, int t, vec.Vector<str> ptr nombres) -> bool {
+    if (t <= 0 or nombres.len() == 0) { return false; };
+    var Tipo x = u.tipos.get(t);
+    if (x.clase == NOMINAL) {
+        if (x.n_args == 0) {
+            var int i = 0;
+            while (i < nombres.len()) {
+                if (nombres.get(i) == x.nombre) { return true; };
+                i = i + 1;
+            };
+            return false;
+        };
+        var int k = 0;
+        while (k < x.n_args) {
+            if (menciona(u, arg_de(u, t, k), nombres)) { return true; };
+            k = k + 1;
+        };
+        return false;
+    };
+    return menciona(u, x.inner, nombres);
+}
+
+#export as tipos

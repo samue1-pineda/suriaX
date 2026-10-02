@@ -1,8 +1,9 @@
    # logic_mem — backend de memoria real de suriaX (C++ / pybind11)
 
 Administrador de memoria lógica en C++, **desacoplado y agnóstico del target**:
-lo llama el intérprete hoy (vía pybind11) y lo llamarán la VM de bytecode/JIT y
-el backend LLVM IR/WASM por igual — **sin** "depende de X y no se encontró".
+lo llama el intérprete hoy (vía pybind11) y lo llamarán la VM del MIR y su JIT
+por igual — **sin** "depende de X y no se encontró". (LLVM quedó fuera del
+plan en la v0.2.0.)
 Aquí vive la LÓGICA de memoria; los consumidores solo la invocan.
 
 ```
@@ -12,7 +13,7 @@ Aquí vive la LÓGICA de memoria; los consumidores solo la invocan.
                 /              \
         Python Interpreter    C++ MIRBuilder
                 │                    │
-                │              MIR → { Bytecode VM | LLVM IR/WASM }
+                │              MIR → VM de registros (→ JIT)
                 │                    │
                 └─────── pybind11 ───┴──────►  logic_mem (C++)   ◄── mismo core
 ```

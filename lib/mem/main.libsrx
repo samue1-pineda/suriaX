@@ -20,6 +20,13 @@
 
    #import mem;                       -> mem.reserve<T>(n), mem.copy<T>(d, s, n)
    #from mem #import reserve, copy;   -> reserve<T>(n), copy<T>(d, s, n)
+
+ UN BLOQUE POSEE SUS CELDAS NO VACIAS: soltarlo ('release') destruye lo que
+ tienen (el '__free__' de cada una, si su tipo lo declara). Para sacar un
+ valor sin destruirlo —devolverlo, pasarlo a otro bloque— estan 'take' (una
+ celda) y 'transfer' (un tramo): las celdas quedan vacias y el valor tiene
+ un solo dueño. 'copy' copia, y con un tipo que tiene destructor es SEM038:
+ la copia y el original serian dos dueños.
 -/
 
 // --- hooks nativos (prototipos ligados a un intrinseco del host) ---------- //
@@ -48,6 +55,23 @@ private fn __copy__<T>(T ptr mutable dst, T ptr src, int n) -> void;
 // tipo propio ni destructor que ejecutar.
 private fn __release__<T>(T ptr mutable bloque) -> void;
 
+// SACA el valor de la celda 'i': la celda queda vacia y el valor es de quien
+// lo recibe. Es 'pop' de un vector de valores con destructor: devolver una
+// copia dejaria dos dueños.
+private fn __take__<T>(T ptr mutable bloque, int i) -> T;
+
+// MUEVE n celdas de 'src' a 'dst': las de origen quedan vacias. Es como crece
+// un contenedor de valores con destructor (reservar mayor, mover, soltar el
+// viejo, que ya no tiene nada que destruir).
+private fn __move__<T>(T ptr mutable dst, T ptr mutable src, int n) -> void;
+
+// los 64 bits de un 'float' como un 'int', y la vuelta: REINTERPRETAR la
+// misma memoria, no convertir el valor (el 'f64::to_bits' de Rust). Es como
+// se escribe un 'double' en un archivo binario (el '.phir' guarda los
+// literales 'float' asi).
+private fn __bits_de_float__(float x) -> int;
+private fn __float_de_bits__(int bits) -> float;
+
 // --- API publica (envoltorios finos, invocables entre modulos) ------------ //
 
 public fn reserve<T>(int n) -> T ptr mutable {
@@ -60,6 +84,25 @@ public fn copy<T>(T ptr mutable dst, T ptr src, int n) -> void {
 
 public fn release<T>(T ptr mutable bloque) -> void {
     __release__<T>(bloque);
+}
+
+public fn take<T>(T ptr mutable bloque, int i) -> T {
+    return __take__<T>(bloque, i);
+}
+
+// los 64 bits IEEE-754 de 'x' (float_bits(1.0) == 0x3FF0000000000000)
+public fn float_bits(float x) -> int {
+    return __bits_de_float__(x);
+}
+
+// el 'float' cuyos 64 bits son 'bits' (la vuelta de 'float_bits')
+public fn float_from_bits(int bits) -> float {
+    return __float_de_bits__(bits);
+}
+
+// 'move' es una palabra reservada: el tramo se TRANSFIERE
+public fn transfer<T>(T ptr mutable dst, T ptr mutable src, int n) -> void {
+    __move__<T>(dst, src, n);
 }
 
 // cierre del paquete: el alias 'mem' es el nombre del import.

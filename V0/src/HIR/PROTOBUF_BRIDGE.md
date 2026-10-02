@@ -3,7 +3,10 @@
 > Documento de diseño de la **Fase 5** (HIR). Define QUÉ se serializa, CÓMO
 > se mapea cada estructura de Python a protobuf, el plan de versionado y el
 > orden de implementación. El esquema vive en [`proto/hir.proto`](proto/hir.proto)
-> (**v1, compila con `protoc`; emisor implementado en `emmit_IR.py`**).
+> (**v2, con el pool de tipos; se serializa con un codec propio —`schema.py`
+> y `wire.py`— sin `protoc` ni `google.protobuf`; emisor en `emmit_IR.py`**).
+> El `.proto` sigue siendo la fuente única y `protoc` lo compila (lo usan el
+> backend C++ y la prueba cruzada del codec).
 > Mismo rigor que `parser/ARQUITECTURA.md` y `semantic/ARQUITECTURA.md`.
 
 ## Alcance de v1 — qué NO viaja (deliberado)
@@ -109,6 +112,7 @@ mismo nombre y los mismos campos. Cero traducción conceptual — quien lee
 | `Expression` | `Expr` con `oneof node` | ver abajo; un nodo sin handler se rechaza (`HIR005`) |
 | `Statement` | `Stmt` con `oneof node` | idem; `MoveStmt`/`FreeStmt` SÍ viajan |
 | `Block.drops` | `repeated Drop` | destrucciones que el compilador INSERTA al cerrar el bloque; nadie las escribe |
+| `Drop.by_type` / `Assignment.drops_old` | `bool` | destruir POR SU TIPO concreto lo que el frontend no puede aplanar (un `T`, un `catch (e)` sin tipo, el valor viejo de una asignacion): lo hace cada consumidor con la misma regla. El target web no los lee (rechaza `__free__`) |
 | `Declaration` (8 clases) | `Decl` con `oneof node` | incluye `FromDirective`; statements sueltos van en `Decl.statement` |
 | `AddrOf` (`&x`) | `AddrOf {operand, mut}` | nodo dedicado con la regla de mutabilidad resuelta (ver arriba) |
 | `CastExpr` (`cast<T>(x)`) | `CastExpr {type, value, hook}` | única vía de conversión; `hook` = `__cast__` (`HookKind.CAST`) si hay nominal involucrado |
@@ -215,7 +219,7 @@ categoría, un solo recorrido O(n).
    `SymbolTable` + un `switch` exhaustivo por `oneof`~~ **hecho**
    ([`backend/`](../../../backend/README.md)). El contrato de la frontera
    queda congelado: sus vistas (`--pretty`, `--summary`) son **byte-idénticas**
-   a las de Python, y `test/e2e/test_backend_cpp.py` las compara sobre un
+   a las de Python, y `test/backend/test_backend_cpp_*.py` las compara sobre un
    programa de referencia que toca cada forma del esquema. El `switch` va
    **sin rama `default`**, así que añadir un caso al `oneof` rompe la
    compilación del lector — la exhaustividad verificable por el compilador que

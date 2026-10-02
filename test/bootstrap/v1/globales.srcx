@@ -1,0 +1,7 @@
+const int LIMITE = 10;
+var int contador = 0;
+
+fn main() -> int {
+    contador = contador + LIMITE;
+    return contador;
+}

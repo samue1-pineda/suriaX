@@ -15,6 +15,7 @@ ARQUITECTURA.md secc. 1).
 from __future__ import annotations
 
 from .context import ParserContext
+from include.t_types import Token, TokenType
 from .cursor import Cursor
 from .expressions.registry import BINDING_POWER, build_led, next_min_bp, parse_unary
 
@@ -33,7 +34,7 @@ def parse_expression(cursor: Cursor, ctx: ParserContext, min_bp: int = 0) -> ast
     left = parse_unary(cursor, ctx)
 
     while True:
-        op_tok = cursor.peek()
+        op_tok, ocupa = _operador(cursor)
         prec = BINDING_POWER.get(op_tok.type)
         if prec is None:
             return left
@@ -41,9 +42,28 @@ def parse_expression(cursor: Cursor, ctx: ParserContext, min_bp: int = 0) -> ast
         if bp < min_bp:
             return left
 
-        cursor.advance()
+        for _ in range(ocupa):
+            cursor.advance()
         right = parse_expression(cursor, ctx, next_min_bp(bp, assoc))
         left = build_led(op_tok, left, right)
+
+
+def _operador(cursor: Cursor):
+    """El operador infijo en el cursor y cuántos tokens ocupa.
+
+    ``>>`` y ``>>=`` no los emite el lexer (ver ``SHIFT_RIGHT``): son un ``>``
+    seguido PEGADO de ``>`` o de ``>=``. Si hay un espacio en medio no son un
+    desplazamiento.
+    """
+    tok = cursor.peek()
+    if tok.type is TokenType.GREATER:
+        sig = cursor.peek(1)
+        if sig.ln == tok.ln and sig.col == tok.col + 1:
+            if sig.type is TokenType.GREATER:
+                return Token(TokenType.SHIFT_RIGHT, ">>", ">>", tok.ln, tok.col), 2
+            if sig.type is TokenType.GREATER_EQUAL:
+                return Token(TokenType.SHIFT_RIGHT_ASSIGN, ">>=", ">>=", tok.ln, tok.col), 2
+    return tok, 1
 
 
 __all__ = ["parse_expression"]

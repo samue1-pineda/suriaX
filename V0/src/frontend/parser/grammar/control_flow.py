@@ -1,5 +1,5 @@
 """Control de flujo: ``if``/``else``, ``while``, ``match``/``case``,
-``return``, ``break``, ``continue`` (EBNF secc. 2).
+``return``, ``break``, ``continue`` (EBNF).
 
 ::
     if_stmt    = "if" "(" expression ")" block [ "else" ( block | if_stmt ) ]
@@ -114,6 +114,13 @@ def _parse_case_arm(cursor: Cursor, ctx: ParserContext) -> ast.CaseArm:
 
 def parse_return_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ReturnStmt:
     tok = cursor.expect(TokenType.RETURN)
+    if ctx.in_finally():
+        raise ParseError.ExitFromFinallyError(
+            "'return' dentro de un 'finally': reemplazaria la salida que ya "
+            "estaba en curso (y se tragaria una excepcion en vuelo). Devuelve "
+            "el valor desde el 'try' o desde el 'catch'",
+            line=tok.ln, column=tok.col,
+        )
     value = None
     if not cursor.check(TokenType.SEMICOLON):
         value = pratt.parse_expression(cursor, ctx)
@@ -127,6 +134,11 @@ def parse_break_stmt(cursor: Cursor, ctx: ParserContext) -> ast.BreakStmt:
         raise ParseError.InvalidStatementError(
             "'break' fuera de un bucle", line=tok.ln, column=tok.col,
         )
+    if ctx.jump_leaves_finally():
+        raise ParseError.ExitFromFinallyError(
+            "'break' que sale de un 'finally': un 'finally' termina siempre por "
+            "su final", line=tok.ln, column=tok.col,
+        )
     cursor.expect(TokenType.SEMICOLON)
     return ast.BreakStmt(ln=tok.ln, col=tok.col)
 
@@ -136,6 +148,11 @@ def parse_continue_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ContinueStmt:
     if not ctx.in_loop():
         raise ParseError.InvalidStatementError(
             "'continue' fuera de un bucle", line=tok.ln, column=tok.col,
+        )
+    if ctx.jump_leaves_finally():
+        raise ParseError.ExitFromFinallyError(
+            "'continue' que sale de un 'finally': un 'finally' termina siempre "
+            "por su final", line=tok.ln, column=tok.col,
         )
     cursor.expect(TokenType.SEMICOLON)
     return ast.ContinueStmt(ln=tok.ln, col=tok.col)

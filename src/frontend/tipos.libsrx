@@ -1,0 +1,147 @@
+/- frontend.tipos — las anotaciones de tipo (`V0/.../grammar/types.py`).
+
+     type        = base_type { "?" | "ptr" [ "mutable" ] }
+     base_type   = int | float | bool | char | str | void | type | error [type]
+                 | self | NAME { "." NAME } [ type_args ]
+     type_args   = "<" type { "," type } ">"
+     type_params = "<" IDENTIFIER { "," IDENTIFIER } ">"
+
+ Los sufijos se aplican de izquierda a derecha: `char ptr?` es un puntero
+ nullable a char, y `char? ptr` un puntero a un char nullable.
+-/
+
+#import frontend.tokens as tk
+#import frontend.cursor as cu
+#import frontend.arbol as ar
+#import array.vector as vec
+
+fn primitivo(tk.TType t) -> str {
+    if (t == tk.TType.VOID) { return "void"; }
+    if (t == tk.TType.BOOL) { return "bool"; }
+    if (t == tk.TType.INT) { return "int"; }
+    if (t == tk.TType.FLOAT) { return "float"; }
+    if (t == tk.TType.CHAR) { return "char"; }
+    if (t == tk.TType.STR) { return "str"; }
+    if (t == tk.TType.BYTE) { return "byte"; }
+    return "";
+}
+
+/- ¿Puede `t` empezar un tipo? (decide si `error` envuelve a otro tipo). -/
+fn arranca_tipo(tk.TType t) -> bool {
+    return primitivo(t) != "" or t == tk.TType.TYPE or t == tk.TType.ERRORTYPE
+        or cu.es_nombre(t);
+}
+
+public fn tipo(cu.Parser ptr mutable p) -> int {
+    var int base = tipo_base(p);
+    while (true) {
+        var tk.Token t = cu.actual(p);
+        if (t.tipo == tk.TType.NULLABLE) {
+            cu.avanza(p);
+            var int n = cu.nodo_en(p, "NullableTypeExpr", t);
+            cu.hijo(p, n, "inner", base);
+            base = n;
+        } else if (t.tipo == tk.TType.POINTER) {
+            cu.avanza(p);
+            var int n = cu.nodo_en(p, "PointerTypeExpr", t);
+            cu.hijo(p, n, "inner", base);
+            if (cu.acepta(p, tk.TType.MUTABLE)) { cu.crudo(p, n, "mutable", "true"); }
+            base = n;
+        } else {
+            return base;
+        }
+    }
+    return base;
+}
+
+fn tipo_base(cu.Parser ptr mutable p) -> int {
+    var tk.Token t = cu.actual(p);
+    var str prim = primitivo(t.tipo);
+    if (prim != "") {
+        cu.avanza(p);
+        var int n = cu.nodo_en(p, "PrimitiveTypeExpr", t);
+        cu.texto(p, n, "name", prim);
+        return n;
+    }
+    if (t.tipo == tk.TType.ERRORTYPE) {
+        cu.avanza(p);
+        var int n = cu.nodo_en(p, "ErrorTypeExpr", t);
+        if (arranca_tipo(cu.actual(p).tipo)) { cu.hijo(p, n, "inner", tipo(p)); }
+        return n;
+    }
+    if (t.tipo == tk.TType.TYPE) {
+        cu.avanza(p);
+        return cu.nodo_en(p, "MetaTypeExpr", t);
+    }
+    if (t.tipo == tk.TType.IDENTIFIER and t.lexema == "self") {
+        cu.avanza(p);
+        return cu.nodo_en(p, "SelfTypeExpr", t);
+    }
+    if (cu.es_nombre(t.tipo)) {
+        cu.avanza(p);
+        var str nombre = nombre_calificado(p, t.lexema);
+        var int n = cu.nodo_en(p, "NominalTypeExpr", t);
+        cu.texto(p, n, "name", nombre);
+        ar_nombre(p, n, nombre);
+        if (cu.es(p, tk.TType.LESS)) {
+            var vec.Vector<int> args = argumentos(p);
+            var int i = 0;
+            while (i < args.len()) {
+                cu.hijo(p, n, "args", args.get(i));
+                i = i + 1;
+            }
+        }
+        return n;
+    }
+    if (t.tipo == tk.TType.POINTER) {
+        cu.falla("PAR023", "'ptr' es un sufijo postfijo: escribe 'T ptr' en vez de 'ptr T' (p. ej. 'char ptr text', no 'ptr char text')",
+                 t.linea, t.col);
+    }
+    cu.falla("PAR023", f"se esperaba un tipo, se encontro {tk.nombre_de(t.tipo)}", t.linea, t.col);
+    return -1;
+}
+
+fn ar_nombre(cu.Parser ptr mutable p, int n, str nombre) -> void {
+    ar.pon_nombre(&p.arbol, n, nombre, "");
+}
+
+/- `a { . b }` -> "a.b" (el primer nombre ya se consumió). -/
+fn nombre_calificado(cu.Parser ptr mutable p, str cabeza) -> str {
+    var str r = cabeza;
+    while (cu.acepta(p, tk.TType.DOT)) {
+        r = r + "." + cu.exige_nombre(p).lexema;
+    }
+    return r;
+}
+
+/- `<` tipo { `,` tipo } `>` -> los nodos de los tipos. -/
+public fn argumentos(cu.Parser ptr mutable p) -> vec.Vector<int> {
+    cu.exige(p, tk.TType.LESS);
+    var vec.Vector<int> r = vec.dynamic<int>(2);
+    r.push(tipo(p));
+    while (cu.acepta(p, tk.TType.COMMA)) { r.push(tipo(p)); }
+    cu.exige(p, tk.TType.GREATER);
+    return r;
+}
+
+/- `<T, U>` tras el nombre de una declaración -> "[T,U]", o "" si no hay. -/
+public fn parametros(cu.Parser ptr mutable p) -> str {
+    if (not cu.es(p, tk.TType.LESS)) { return ""; }
+    cu.avanza(p);
+    var str r = "[" + parametro(p);
+    while (cu.acepta(p, tk.TType.COMMA)) { r = r + "," + parametro(p); }
+    cu.exige(p, tk.TType.GREATER);
+    return r + "]";
+}
+
+fn parametro(cu.Parser ptr mutable p) -> str {
+    var tk.Token t = cu.actual(p);
+    if (t.tipo != tk.TType.IDENTIFIER) {
+        cu.falla("PAR023", f"un parametro de tipo es un NOMBRE por ligar, no un tipo ya escrito: '{t.lexema}' no sirve. Escribe 'Vector<T>' para declarar el generico y 'Vector<int>' para usarlo",
+                 t.linea, t.col);
+    }
+    cu.avanza(p);
+    return t.lexema;
+}
+
+#export as tipos

@@ -22,11 +22,14 @@ import sys
 from typing import Optional
 
 import htims
+from error_handler.InternalCompilerError import InternalCompilerError
+from error_handler.lex_error import InvalidUnicodeCharacterError
 from src.frontend.lexer import source_reader
 from src.frontend.lexer.lexer import Lexer
 from src.frontend.parser.parser import Parser
 
-from .options import EXIT_EXTENSION_ERROR, EXIT_FILE_NOT_FOUND, EXIT_OK
+from .options import (EXIT_EXTENSION_ERROR, EXIT_FILE_NOT_FOUND,
+                      EXIT_INTERNAL_ERROR, EXIT_OK)
 from .pipeline import load_config
 
 
@@ -62,7 +65,8 @@ def emit_stage(path: str, stage: str, *,
     usuario a escribir una directiva en el. Acepta ``--stdin``, asi que tambien
     funciona sobre un buffer sin guardar.
 
-    Devuelve 2 si la fase no existe (con la lista en stderr), 0 en cualquier otro
+    Devuelve 2 si la fase no existe (con la lista en stderr), 6 si el
+    compilador falló (ICE000, con su traza en stderr) y 0 en cualquier otro
     caso: el contenido se lee de stdout, no del exit code.
     """
     available = Parser.available_stages()
@@ -81,6 +85,7 @@ def emit_stage(path: str, stage: str, *,
             source = source_reader.read_file(path)
         lexer = Lexer(source, file=path)
         parser = Parser(lexer.tokenize())
+        parser.fuente = source   # la vista de desugaring cita las lineas
         # Una directiva '#test' en el propio archivo se consume: la fase que se
         # muestra es la que pidio el visualizador, no la que traiga el fuente.
         parser.consume_test_directive()
@@ -89,8 +94,19 @@ def emit_stage(path: str, stage: str, *,
             detalle = "\n".join(
                 f"  {err.code}: {err.message}  ({err.loc})" for err in lexer.errors)
             return EXIT_OK, f"\n=== errores lexicos ({len(lexer.errors)}) ===\n{detalle}"
-    except Exception as exc:  # nunca romper el visor con un traceback
-        return EXIT_OK, f"no se pudo volcar la fase '{stage}': {exc}"
+    except InvalidUnicodeCharacterError as err:
+        # un fuente que no es UTF-8 es un error del programa (LEX008), no un
+        # fallo del compilador
+        return EXIT_OK, (f"\n=== errores lexicos (1) ===\n"
+                         f"  {err.code}: {err.message}  ({err.loc})")
+    except Exception as exc:  # noqa: BLE001 - nunca romper el visor con un traceback
+        # Antes esto devolvía EXIT_OK con "no se pudo volcar la fase": un
+        # fallo del compilador que salía como éxito y sin decir qué falló.
+        # Ahora es un ICE: su mensaje nombra la excepción y el sitio del
+        # compilador, y el código de salida dice que algo se rompió.
+        ice = InternalCompilerError.desde(exc, phase=f"volcado de la fase '{stage}'",
+                                          file=path)
+        return EXIT_INTERNAL_ERROR, ice.render()
     return EXIT_OK, None
 
 
@@ -148,7 +164,29 @@ def _with_file(entry: dict, path: str) -> dict:
     return entry
 
 
-def emit_diagnostics(path: str, *, from_stdin: bool = False) -> dict:
+def emit_index(path: str, *, from_stdin: bool = False) -> dict:
+    """Canal del LSP para hover, ir a la definicion y completar: los
+    diagnosticos (lo mismo que ``--emit-diagnostics``) MAS el indice del
+    archivo —sus simbolos con tipo, firma, posicion y comentario, donde se usa
+    cada uno y que va despues de un ``.``— en UNA sola pasada del frontend
+    (ver ``src/frontend/semantic/index.py``). Sin indice si el parseo no fue
+    limpio: un arbol recuperado en modo panico no es de fiar."""
+    estado: dict = {}
+    payload = emit_diagnostics(path, from_stdin=from_stdin, _estado=estado)
+    if "table" in estado:
+        from src.frontend.semantic.index import build_index
+        payload.update(build_index(estado["program"], estado["table"], path=path,
+                                   source=estado["source"],
+                                   libraries=estado["libraries"]))
+    else:
+        from src.frontend.semantic.index import INDEX_VERSION
+        payload.update({"index_version": INDEX_VERSION, "symbols": [],
+                        "references": [], "members": {}})
+    return payload
+
+
+def emit_diagnostics(path: str, *, from_stdin: bool = False,
+                     _estado: Optional[dict] = None) -> dict:
     """
     Canal del LSP(Extension): corre el frontend (lexer -> parser -> AST-tipado
     -> Semantica, con resolucion real de .libsrx), emite en stdout un JSON con
@@ -225,8 +263,14 @@ def emit_diagnostics(path: str, *, from_stdin: bool = False) -> dict:
         notes: list = []
         if parsed_clean:
             resolve_types(program)
+            libraries: dict = {}
             _table, sem_errors = analyze(
-                program, source_path=path, config=config, notes=notes, libraries={})
+                program, source_path=path, config=config, notes=notes,
+                libraries=libraries)
+            if _estado is not None:
+                # para '--emit-index': lo que la Semantica ya calculo
+                _estado.update(program=program, table=_table, source=source,
+                               libraries=libraries)
 
         extents = _token_extents(tokens)
         for err in (*lexer.errors, *parser.ctx.errors, *sem_errors):
@@ -238,33 +282,27 @@ def emit_diagnostics(path: str, *, from_stdin: bool = False) -> dict:
                 "line": note.get("line"), "column": note.get("column"),
                 "file": note.get("file") or path, "severity": "note",
                 "phase": "linker"}, extents))
-    except Exception as exc:  #NUNCA romper el canal del editor con un traceback
+    except Exception as exc:  # noqa: BLE001 - NUNCA romper el canal del editor con un traceback
         # El editor solo ve este mensaje, asi que tiene que bastar para saber
         # QUE fallo: el tipo de la excepcion y el sitio del compilador donde
         # ocurrio (el frame mas profundo del propio proyecto). Un 'ICE000: too
-        # many values to unpack' sin mas obliga a reproducirlo a ciegas.
-        import traceback
-        detalle = ""
-        try:
-            propio = [f for f in traceback.extract_tb(exc.__traceback__)
-                      if _REPO_ROOT in os.path.abspath(f.filename)]
-            if propio:
-                ultimo = propio[-1]
-                archivo = os.path.relpath(ultimo.filename, _REPO_ROOT)
-                detalle = f" [{archivo}:{ultimo.lineno} en {ultimo.name}()]"
-        except Exception:  # pragma: no cover - el diagnostico nunca falla
-            detalle = ""
+        # many values to unpack' sin mas obliga a reproducirlo a ciegas. Lo
+        # arma la misma clase que usa la CLI: un solo formato de ICE.
+        ice = InternalCompilerError.desde(exc, phase="canal de diagnosticos",
+                                          file=path)
+        mensaje = ice.message
         # SURIAX_ICE_TRACEBACK=1 anade la traza completa al mensaje: para
         # depurar sin tener que reproducir el fallo fuera del editor.
         if os.environ.get("SURIAX_ICE_TRACEBACK") == "1":
-            detalle += "\n" + "".join(traceback.format_exception(exc))
+            mensaje += "\n" + ice.render()
+        # linea/columna 1: el editor necesita una posicion donde pintar el
+        # diagnostico, aunque un ICE no ocurra en una linea del fuente.
         diagnostics.append({
-            "code": "ICE000",
-            "message": (f"error interno del compilador: "
-                        f"{type(exc).__name__}: {exc}{detalle}"),
-            "line": 1, "column": 1, "severity": "panic", "phase": "internal"})
+            "code": ice.code, "message": mensaje,
+            "line": 1, "column": 1, "severity": ice.severity,
+            "phase": "internal"})
 
     return _emit({"file": path, "diagnostics": diagnostics})
 
 
-__all__ = ["emit_stage", "emit_diagnostics", "emit_extensions"]
+__all__ = ["emit_stage", "emit_diagnostics", "emit_index", "emit_extensions"]

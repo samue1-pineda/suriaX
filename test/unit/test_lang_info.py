@@ -119,3 +119,96 @@ def test_emit_diagnostics_archivo_limpio_no_reporta_nada():
                                  args=["--emit-diagnostics"])
     assert code == 0
     assert json.loads(out)["diagnostics"] == []
+
+
+# --------------------------------------------------------------------------
+# v4: la sintaxis (para colorear) y los snippets, sacados del compilador
+# --------------------------------------------------------------------------
+
+def test_la_version_del_contrato_es_la_4():
+    from include.lang_info import LANG_INFO_VERSION
+    info = build_language_info()
+    assert LANG_INFO_VERSION == 4 and info["lang_info_version"] == 4
+    assert {"syntax", "snippets"} <= set(info)
+
+
+def test_los_escapes_publicados_son_los_del_lexer():
+    """Derivados de la tabla del scanner: un escape nuevo aparece solo."""
+    from src.frontend.lexer.scanners.strings import _ESCAPES
+    syntax = build_language_info()["syntax"]
+    esperados = sorted("\\" + k for k in _ESCAPES)
+    assert syntax["string"]["escapes"] == esperados
+    assert syntax["char"]["escapes"] == esperados
+
+
+def test_los_comentarios_publicados_los_ignora_el_lexer():
+    comments = build_language_info()["syntax"]["comments"]
+    abre, cierra = comments["block"]
+    from helpers import lex
+    fuente = f"{comments['line']} nada\n{abre} tampoco\n nada {cierra} x"
+    tokens, errores = lex(fuente)
+    assert not errores
+    assert [t.lexeme for t in tokens if t.type.name != "EOF"] == ["x"]
+
+
+def test_el_formato_publicado_es_el_que_valida_el_parser():
+    import re
+    from src.frontend.parser.expressions.nud import formato_valido
+    spec = build_language_info()["syntax"]["fstring"]["format_spec"]
+    for muestra in ("", "08", ".2f", "x", "08b", "10.3f", "X", "o"):
+        assert re.fullmatch(spec, muestra) and formato_valido(muestra), muestra
+    for muestra in ("08q", "..2", "-3", "f2"):
+        assert not re.fullmatch(spec, muestra) and not formato_valido(muestra), muestra
+
+
+def test_lang_info_lexer():
+    """Las expresiones de los numeros reconocen lo mismo que el scanner (que
+    no usa expresiones): un literal que el regex acepta entero tokeniza como
+    UN literal de esa clase, y uno que rechaza no."""
+    import re
+    numbers = build_language_info()["syntax"]["numbers"]
+    from helpers import lex
+
+    def un_literal(texto):
+        tokens, errores = lex(texto)
+        reales = [t for t in tokens if t.type.name != "EOF"]
+        if errores or len(reales) != 1:
+            return None
+        return reales[0].type.name
+
+    for texto in ("0", "42", "1_000_000", "0xFF", "0xff_ff", "0b1010", "0B1_0",
+                  "0o755", "3.25", "1_0.2_5"):
+        clase = "float" if re.fullmatch(numbers["float"], texto) else "int"
+        assert re.fullmatch(numbers[clase], texto), texto
+        assert un_literal(texto) == ("FLOAT_LIT" if clase == "float" else "INT_LIT"), texto
+    for texto in ("1__0", "1_", "0x", "0b2", "0o8", "0xFG"):
+        assert not re.fullmatch(numbers["int"], texto), texto
+        assert un_literal(texto) is None, texto
+
+
+def _expandir(body: str) -> str:
+    """El snippet con cada campo en su valor por defecto (y '$N' vacio)."""
+    import re
+    texto = re.sub(r"\$\{\d+:([^}]*)\}", r"\1", body)
+    return re.sub(r"\$\d+", "", texto)
+
+
+def test_lang_info_snippets():
+    """Cada snippet, con sus valores por defecto, compila sin diagnosticos:
+    lo que el editor inserta tiene que ser suriaX valido."""
+    from helpers import error_codes
+    snippets = build_language_info()["snippets"]
+    prefijos = [s["prefix"] for s in snippets]
+    assert len(prefijos) == len(set(prefijos)), "prefijos repetidos"
+    for snippet in snippets:
+        assert snippet["context"] in ("top", "body"), snippet
+        assert snippet["description"], snippet
+        codigo = _expandir(snippet["body"])
+        if snippet["context"] == "body":
+            fuente = f"fn main() -> int {{\n{codigo}\nreturn 0;\n}}\n"
+        else:
+            fuente = "struct { int v; } Punto;\n" + codigo + "\n"
+            if snippet["prefix"] != "main":
+                fuente += "fn main() -> int { return 0; }\n"
+        codigos = error_codes(fuente)
+        assert not codigos, f"el snippet '{snippet['prefix']}' no compila: {codigos}\n{fuente}"

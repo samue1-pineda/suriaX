@@ -1,0 +1,8 @@
+#import forma as fm
+
+fn main() -> int {
+    var fm.P p = fm.P{ x: 1 };
+    var fm.Q q = fm.Q{ a: p, b: &p };
+    const fm.E e = fm.g();
+    return fm.f(p, &q).x + fm.h(e) + fm.K;
+}

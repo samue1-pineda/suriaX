@@ -1,57 +1,90 @@
 # Hello, world!
 
-"hola mundo!" en suriaX. Muestra la importación de una librería nativa
-(libsrX) y la llamada a una función a través de su alias.
-
->**NOTA**: la libreria IO aun no existe, en la pre-alpha, el lexer lo identificara como un IDENTIFIER pero el parser arrojara error.
- 
+"hola mundo!" en suriaX. Muestra cómo se importa una librería nativa (libsrX)
+y cómo se llama a una de sus funciones. Todos los ejemplos de esta página se
+ejecutan tal cual con `python main.py archivo.srcx` (compila y ejecuta).
 
 ```srcx
-//hello.srcx
+// hello.srcx
+#from io #import stdp
 
-// se importa la librería de entrada/salida con un alias
-const IO = #import IO;
-
-// 'printf' no es una palabra reservada: es una función de la librería 'IO'
-IO.printf("Hello, world!");
+// 'println' no es una palabra reservada: es una función del submódulo
+// 'stdp' del paquete IO (lib/io/stdp.libsrx)
+stdp.println("Hello, world!");
 ```
 
 Puntos clave:
 
 - **`;` obligatorio:** toda sentencia termina en punto y coma.
-- **libsrX:** `printf` llega de la librería `IO`; se invoca como `IO.printf(...)`.
-- **forma corta del import:** también puede escribirse `#import IO;` y luego
-  usar el alias por defecto.
-
-## Variante con interpolación
-
-La interpolación es **opt-in**: solo una **f-string** (`f"..."`) interpola
-`{expr}` (con `{{` / `}}` para llave literal); una cadena plana `"..."`
-nunca interpola — `{veces}` ahí es texto literal. Por eso `print` y `printf`
-no son lo mismo, incluso si vienen de la misma librería:
+- **libsrX:** `println` viene de la librería `IO`, no del lenguaje. El paquete
+  vive en `lib/io/` y se llama como su alias (`#export package as IO`).
+- **`fn main` es opcional:** las sentencias del nivel superior se ejecutan en
+  orden, como un script. Con `main`, el valor que devuelve es el código de
+  salida:
 
 ```srcx
-const IO = #import IO;
+#from io #import stdp
 
-int veces = 3;
-IO.printf(f"Hola mundo x{veces}");   // f-string: interpola -> "Hola mundo x3"
-
-IO.print("Hola mundo x{veces}");     // cadena plana: imprime "{veces}" tal cual
+fn main() -> int {
+    stdp.println("desde main");
+    return 0;
+};
 ```
 
-## Probar la tokenización
+## Formas de importar
 
-Para ver cómo el lexer tokeniza este programa, antepón la directiva
-`#test lexer` y ejecútalo:
+Las cuatro formas siguientes imprimen lo mismo. Cambia el nombre con el que se
+llega a la función:
+
+```srcx
+#from io #import stdp;            // el submódulo, directo:      stdp.println(...)
+#import IO;                       // el paquete:                  IO.stdp.println(...)
+#import IO as es;                 // el paquete con otro alias:   es.stdp.println(...)
+const IO = #import IO;            // lo mismo, como declaración:  IO.stdp.println(...)
+```
+
+> `const IO = #import IO;` y `#import IO as IO;` son equivalentes: las dos
+> ligan el paquete a un nombre. (Una sola línea de import por archivo en estos
+> ejemplos; se pueden combinar.)
+
+## `print`, `println` y `printf`
+
+`stdp.print` escribe el texto tal cual, `stdp.println` le añade un salto de
+línea, y `stdpf.printf` (otro submódulo) escribe el texto sin añadir nada:
+
+```srcx
+#from io #import stdpf
+
+stdpf.printf("sin salto de linea; ");
+stdpf.printf("ahora si\n");
+```
+
+## Interpolación
+
+La interpolación es **opt-in**: solo una **f-string** (`f"..."`) interpola
+`{expr}` (con `{{` / `}}` para una llave literal). Una cadena normal `"..."`
+nunca interpola; ahí `{veces}` es texto.
+
+```srcx
+#from io #import stdp
+
+var int veces = 3;
+stdp.println(f"Hola mundo x{veces}");   // -> Hola mundo x3
+stdp.println("Hola mundo x{veces}");    // -> Hola mundo x{veces}
+```
+
+## Ver cada fase
+
+El objetivo de suriaX es que se vea qué entrega cada fase del compilador.
+Antepón `#test <fase>` al archivo para volcar esa fase y terminar:
 
 ```srcx
 #test lexer
-const IO = #import IO;
-IO.printf("Hello, world!");
+#from io #import stdp
+stdp.println("Hello, world!");
 ```
 
-```bash
-python V0/main.py archivo.srcx
-```
-
-Esto vuelca el arreglo de tokens en consola. Ver [how_to_run.md](../../how_to_run.md).
+Las fases disponibles son `lexer`, `parser`, `ast`, `sem` y `hir`. Sin tocar
+el archivo, `python V0/main.py hello.srcx --emit-stage ast` hace lo mismo, y
+`--hir-pretty` deja en `dumps/` el HIR legible. Todas las opciones están en
+[FLAGS.md](../../FLAGS.md).

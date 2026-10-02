@@ -1,0 +1,35 @@
+struct { int x; int y; } Punto;
+@impl Punto {
+    fn suma(Punto ptr self) -> int { return self.x + self.y; }
+    fn mueve(Punto ptr mutable self, int dx) -> void { self.x = self.x + dx; }
+    fn copia(Punto ptr self) -> Punto { return Punto{ x: self.x, y: self.y }; }
+}
+struct { Punto p; str nombre; } Figura;
+@impl Figura {
+    fn total(Figura ptr self) -> int { return self.p.suma(); }
+}
+dunder fn __doble__(Punto ptr self) -> int { return self.suma() * 2; }
+
+struct { str que; } R;
+hook fn __free__(R ptr r) -> void { }
+@impl R {
+    fn largo(R ptr self) -> int { return len(self.que); }
+    fn nuevo(R ptr self, str otro) -> R { return R{ que: otro }; }
+    fn toma(R ptr self, R otro) -> int { return len(otro.que); }
+}
+// un receptor POR VALOR: lo presta 'x.m()', así que el método no lo destruye
+dunder fn __usa__(R self) -> int { return len(self.que); }
+
+fn main() -> int {
+    var Punto p = Punto{ x: 1, y: 2 };
+    p.mueve(3);
+    var Punto ptr q = &p;
+    var int a = p.suma() + q.suma() + p.copia().suma();
+    var Figura f = Figura{ p: p, nombre: "f" };
+    a = a + f.total() + f.p.suma() + p.__doble__();
+    var R r = R{ que: "abc" };
+    r.nuevo("x");
+    var R s = r.nuevo("yy");
+    a = a + r.toma(R{ que: "t" });
+    return a + r.largo() + s.largo() + r.__usa__();
+}

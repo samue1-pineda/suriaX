@@ -1,0 +1,13 @@
+-- desde un metodo
+  quedan 1
+  quedan 0
+  el contador ya esta en cero
+-- desde un hook (__print__)
+  Punto(3)
+  el hook lanzo -4
+-- desde el brazo de un match
+  sin permiso
+-- desde una funcion generica
+  atrapado 99
+-- a mitad de una expresion: la asignacion no ocurre
+  s sigue en 1

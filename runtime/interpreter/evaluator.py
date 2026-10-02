@@ -18,15 +18,19 @@ caliente.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, List, Optional
 
 from .enviroment.environment import Frame
 from .errors import (
-    DivisionByZeroError, MissingReturnError,
+    DestructorThrewError, DivisionByZeroError, ExcepcionDelPrograma,
+    ShiftOutOfRangeError,
+    FinallyThrewError,
+    MissingReturnError,
     IndexOutOfRangeError, InvalidCastRuntimeError, InvalidFreeError,
     MissingIntrinsicError, NotCallableError, NotIndexableError,
-    NullDereferenceError, StepLimitError, SuriaXRuntimeError,
-    UnsupportedNodeError,
+    NullDereferenceError, StackOverflowError, StepLimitError,
+    SuriaXRuntimeError, UnsupportedNodeError,
 )
 from .hook.dispatch import hook_key, ref_key, type_key
 from . import intrinsics
@@ -55,6 +59,87 @@ def _void_kind_value() -> int:
 #: se resuelven una vez por proceso: el enum del esquema no cambia en caliente.
 _VOID_KIND = None
 _POINTER_KIND = None
+_NOMINAL_KIND = None
+_ERROR_KIND = None
+#: (ERROR, NULLABLE, NOMINAL), para escribir un valor con su tipo
+_KINDS_TEXTO = None
+
+_M64 = (1 << 64) - 1
+
+#: escapes que se escriben en la representacion de una cadena o un char: los
+#: mismos que acepta el lexer
+_ESCAPES = {"\\": "\\\\", "\n": "\\n", "\t": "\\t", "\r": "\\r", "\0": "\\0"}
+
+
+def _cadena_repr(s: str, comilla: str) -> str:
+    """``"hola\\n"`` / ``'a'``: el texto como se escribiria en el fuente."""
+    cuerpo = "".join(_ESCAPES.get(c, "\\" + c if c == comilla else c) for c in s)
+    return comilla + cuerpo + comilla
+
+
+_FORMATO = re.compile(r"(0?)([1-9][0-9]*)?(?:\.([0-9]+))?([dxXbof]?)")
+
+
+def _con_formato(valor: Any, tipo, texto: str, spec: str) -> str:
+    """El ``texto`` de ``valor`` con el formato ``[0][ancho][.precision][tipo]``.
+
+    Es un algoritmo PROPIO y no el ``format`` de Python, para que la VM haga
+    exactamente lo mismo: ``d x X b o`` escriben el valor absoluto en esa base
+    con el signo delante (``-ff``); ``f``, con la precision pedida (6 si no);
+    el ancho rellena a la IZQUIERDA un numero (con ``0`` despues del signo si
+    se pidio) y a la DERECHA todo lo demas.
+    """
+    m = _FORMATO.fullmatch(spec)
+    if m is None:
+        return texto
+    cero, ancho, precision, clase = m.groups()
+    if valor is not None and clase:
+        if clase == "d":
+            texto = str(valor)
+        elif clase in "xXbo":
+            base = {"x": "x", "X": "X", "b": "b", "o": "o"}[clase]
+            texto = ("-" if valor < 0 else "") + format(abs(valor), base)
+        elif clase == "f":
+            texto = _fijo(float(valor), int(precision) if precision else 6)
+    if not ancho or len(texto) >= int(ancho):
+        return texto
+    ancho = int(ancho)
+    numero = tipo is not None and tipo.kind in (_TK_INT, _TK_FLOAT, _TK_BYTE) \
+        and valor is not None
+    if numero and cero:
+        signo = "-" if texto.startswith("-") else ""
+        return signo + texto[len(signo):].rjust(ancho - len(signo), "0")
+    return texto.rjust(ancho) if numero else texto.ljust(ancho)
+
+
+def _fijo(x: float, precision: int) -> str:
+    """``{x:.2f}``: redondeo correcto, 'inf', '-inf' y 'nan' como Python."""
+    if math.isnan(x):
+        return "nan"
+    if math.isinf(x):
+        return "inf" if x > 0 else "-inf"
+    return f"{x:.{precision}f}"
+
+
+def _con_signo(x: int) -> int:
+    x &= _M64
+    return x - (1 << 64) if x >> 63 else x
+
+
+def _splitmix64(x: int) -> int:
+    """El finalizador de splitmix64: mezcla los 64 bits de un entero."""
+    z = (x + 0x9E3779B97F4A7C15) & _M64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+    return _con_signo(z ^ (z >> 31))
+
+
+def _fnv1a(datos: bytes) -> int:
+    """FNV-1a de 64 bits."""
+    h = 0xCBF29CE484222325
+    for b in datos:
+        h = ((h ^ b) * 0x100000001B3) & _M64
+    return _con_signo(h)
 
 
 class _Break(Exception):
@@ -73,16 +158,22 @@ class Thrown(Exception):
     Si escapa hasta la raíz, ``interpreter.run`` la reporta como error de
     runtime no capturado."""
 
-    __slots__ = ("value", "ln", "col")
+    __slots__ = ("value", "ln", "col", "tipo")
 
-    def __init__(self, value: Any, ln: int = 0, col: int = 0) -> None:
+    def __init__(self, value: Any, ln: int = 0, col: int = 0,
+                 tipo=None) -> None:
         self.value = value
         self.ln = ln
         self.col = col
+        #: clave del tipo ESTATICO del valor lanzado (el que decidio la
+        #: Semantica), o None si el HIR no lo trae. Es lo que filtra el
+        #: 'catch' — ver '_atrapa'.
+        self.tipo = tipo
 
 
 # TypeKind del esquema (valores estables del .proto; ver hir.proto)
 _TK_BOOL, _TK_INT, _TK_FLOAT, _TK_CHAR, _TK_STR = 2, 3, 4, 5, 6
+_TK_BYTE = 12   # 'byte': un int de Python en 0..255
 _TK_NOMINAL = 9   # espejo de TypeKind.NOMINAL en el esquema del HIR
 _SK_ENUM = 3      # espejo de SymbolKind.ENUM
 
@@ -90,8 +181,9 @@ _SK_ENUM = 3      # espejo de SymbolKind.ENUM
 class Evaluator:
     __slots__ = ("image", "trace", "trace_exec", "max_steps", "steps",
                  "events", "depth", "unit", "_stmt_dispatch", "_expr_dispatch",
-                 "_index_kind", "_index_set_kind", "_eq_kind", "_len_kind",
-                 "_temporales")
+                 "_index_kind", "_index_set_kind", "_eq_kind", "_free_kind", "_structs", "_len_kind",
+                 "_hash_kind",
+                 "_temporales", "_enums")
 
     def __init__(self, image, *, trace: bool = False, max_steps: int = 0,
                  trace_exec: bool = False,
@@ -114,6 +206,10 @@ class Evaluator:
         # (Expr.type_id, esquema v2): resolverlos exige saber de que modulo
         # salio la expresion. La monta 'call_function' y la restaura al salir.
         self.unit = image.main
+        # (unidad, nombre) -> (Unit, EnumDecl), para escribir un enum por su
+        # NOMBRE en un f-string. Se arma la primera vez que hace falta.
+        self._enums: Optional[dict] = None
+        self._structs: Optional[dict] = None
         # valores enteros de los kinds de hook despachados por sintaxis ('v[i]',
         # 'v[i]=x', 'a==b') contra image.hooks — sin cablear el número del enum.
         from V0.src.HIR.stubs import load_hir_pb2
@@ -121,7 +217,9 @@ class Evaluator:
         self._index_kind = _hk.Value("INDEX")
         self._index_set_kind = _hk.Value("INDEX_SET")
         self._len_kind = _hk.Value("LEN")
+        self._hash_kind = _hk.Value("HASH")
         self._eq_kind = _hk.Value("EQ")
+        self._free_kind = _hk.Value("FREE")
 
         self._stmt_dispatch = {
             "block": self._stmt_block,
@@ -184,7 +282,19 @@ class Evaluator:
             if self.trace_exec:
                 self.emit(f"[call] {decl.name}(intrinseco) "
                           f"args={[format_value(a) for a in args]}")
-            return native(*args)
+            if decl.name == "__release__" and args and isinstance(args[0], Block):
+                # un bloque POSEE sus celdas no vacias: soltarlo las destruye
+                # (las que se sacaron con 'mem.take' o 'mem.move' ya no estan).
+                # Las celdas las marca liberadas el intrinseco.
+                for celda in reversed(args[0].cells):
+                    if celda.state is CellState.LIVE and celda.value is not None:
+                        self._destruir_por_tipo(celda.value, ln=ln, col=col)
+            try:
+                return native(*args)
+            except SuriaXRuntimeError as exc:
+                # el host no sabe desde dónde lo llamaron: la posición es la
+                # del sitio de llamada, igual que en la VM
+                raise exc.ubicar(ln, col)
 
         if self.trace_exec:
             self.emit(f"[call] {decl.name}("
@@ -207,10 +317,28 @@ class Evaluator:
         previa = self.unit
         self.unit = unit
         try:
-            self._exec_block(decl.body, Frame(parent=frame))
+            # El cuerpo corre en el MISMO marco que los parámetros: la
+            # Semántica los declara en el mismo scope FUNCTION (un local no
+            # puede llamarse como un parámetro), y los drops del cuerpo
+            # incluyen los parámetros que la función posee. Con un marco hijo,
+            # '_drop_scope' no los encontraba y no se destruían nunca.
+            self._exec_block(decl.body, frame)
         except _Return as ret:
             result = ret.value
             devolvio = True
+        except RecursionError:
+            # La pila de Python se agotó: el PROGRAMA anidó demasiadas
+            # llamadas. Se convierte aquí, en el marco donde ocurrió, para
+            # reportar la llamada y la profundidad. Si construir el error
+            # vuelve a agotar la pila, el marco de arriba (con más margen)
+            # atrapa ese RecursionError y lo convierte él: siempre sale un
+            # RT019, nunca un traceback.
+            raise StackOverflowError(
+                f"desbordamiento de pila al llamar a '{decl.name}': "
+                f"{self.depth} llamadas anidadas (¿una recursión sin caso "
+                "base?)",
+                ln=ln, col=col,
+            ) from None
         finally:
             self.unit = previa
             self.depth -= 1
@@ -302,10 +430,17 @@ class Evaluator:
             cell = self._celda_de_ruta(frame, drop.path)
             if cell is None:
                 continue
+            if drop.by_type:
+                self._destruir_por_tipo(cell.value)
+                cell.free()
+                if self.trace:
+                    self.emit(f"[mem] drop -> celda '{'.'.join(drop.path)}' "
+                              "(por su tipo)")
+                continue
             bound = self.image.hooks.get(ref_key(drop.hook))
             if bound is not None:
-                self.call_function(bound[0], bound[1],
-                                   [Pointer(cell, mut=True)])
+                self._destruir(bound, Pointer(cell, mut=True),
+                               drop.hook.owner_type)
             cell.free()
             if self.trace:
                 self.emit(f"[mem] drop -> celda '{'.'.join(drop.path)}'")
@@ -356,18 +491,109 @@ class Evaluator:
     def _soltar_temporales(self, marca: int) -> None:
         while len(self._temporales) > marca:
             valor, hook = self._temporales.pop()
+            if hook is None:
+                # POR SU TIPO: posee sin declarar '__free__', o es un 'T'
+                self._destruir_por_tipo(valor)
+                continue
             bound = self.image.hooks.get(ref_key(hook))
             if bound is None:
                 continue
-            self.call_function(bound[0], bound[1],
-                               [Pointer(Cell(valor), mut=True)])
+            self._destruir(bound, Pointer(Cell(valor), mut=True),
+                           hook.owner_type)
             if self.trace:
                 self.emit("[mem] drop temporal")
 
-    def _registrar_temporal(self, valor, hook_ref) -> None:
-        """Apila un valor sin dueno para destruirlo al cerrar la sentencia."""
+    def _destruir(self, bound, puntero, dueno: str, *,
+                  ln: int = 0, col: int = 0) -> None:
+        """Corre el ``__free__`` de ``dueno``. Si lanza, el programa termina
+        con RT021: un destructor nunca puede lanzar.
+
+        Los tres sitios que destruyen (fin de ambito, temporal, ``free``)
+        pasan por aqui para que la regla no dependa de por donde murio el
+        valor. Sin ella, un ``__free__`` que lanzaba durante el desenrollado
+        REEMPLAZABA al ``throw`` en curso: el ``catch`` recibia el segundo y
+        el primero se perdia sin rastro.
+        """
+        try:
+            self.call_function(bound[0], bound[1], [puntero], ln=ln, col=col)
+        except Thrown as lanzado:
+            raise DestructorThrewError(
+                f"el __free__ de '{dueno}' lanzó "
+                f"{format_value(lanzado.value)}: un destructor nunca puede "
+                "lanzar. Si liberar puede fallar, registra el fallo y deja "
+                "que el __free__ termine normalmente",
+                ln=lanzado.ln or ln, col=lanzado.col or col,
+            ) from None
+
+    def _destruir_por_tipo(self, valor, *, ln: int = 0, col: int = 0) -> None:
+        """DESTRUIR POR TIPO (el 'drop glue'): ``valor`` muere, y lo que
+        corre lo decide su tipo CONCRETO, que aqui se lee del valor.
+
+        La misma regla con que el frontend aplana los drops de un tipo que
+        conoce (``scope_resolver._aplanar_drops``), para lo que el frontend no
+        puede aplanar (``Drop.by_type``):
+
+        - si el tipo declara ``__free__``, corre ese, y se hace cargo de sus
+          campos;
+        - si no, sus campos, del ultimo al primero;
+        - un BLOQUE de ``mem`` (el de un campo, o uno que se suelta) destruye
+          sus celdas no vacias, de la ultima a la primera, y las deja
+          liberadas.
+
+        Con una PILA y no con recursion: una lista enlazada de bloques puede
+        ser larga, y la pila de Python no.
+        """
+        pendientes = [valor]
+        while pendientes:
+            v = pendientes.pop()
+            if isinstance(v, StructValue):
+                bound = self.image.hooks.get((v.type_name, self._free_kind, ""))
+                if bound is not None:
+                    self._destruir(bound, Pointer(Cell(v), mut=True),
+                                   v.type_name, ln=ln, col=col)
+                    continue
+                # apilados en orden: el ULTIMO campo sale primero
+                for celda in v.fields.values():
+                    if celda.state is CellState.LIVE:
+                        pendientes.append(celda.value)
+            elif isinstance(v, EnumValue):
+                for celda in v.fields:
+                    if celda.state is CellState.LIVE:
+                        pendientes.append(celda.value)
+            elif isinstance(v, Block):
+                for celda in v.cells:
+                    if celda.state is CellState.LIVE:
+                        if celda.value is not None:
+                            pendientes.append(celda.value)
+                        celda.free()
+
+    #: las expresiones que producen un valor NUEVO, que es de la llamada que
+    #: lo recibe: si un argumento posterior lanza, nadie lo recibio y muere.
+    _FRESCOS = frozenset(("struct_literal", "call", "move_expr", "cast_expr"))
+
+    def _argumentos(self, exprs, frame: Frame) -> list:
+        """Los valores de ``exprs``, en orden. Si uno LANZA, los ya evaluados
+        que eran nuevos (un literal, un resultado, un ``move``) se destruyen
+        por su tipo antes de seguir: ``usa(R{...}, falla())`` no le entrega el
+        ``R`` a nadie. Es lo que hace la VM con sus temporales frescos."""
+        valores: list = []
+        try:
+            for e in exprs:
+                valores.append(self.eval_expr(e, frame))
+        except Thrown:
+            for e, v in reversed(list(zip(exprs, valores))):
+                if e.WhichOneof("node") in self._FRESCOS:
+                    self._destruir_por_tipo(v, ln=e.ln, col=e.col)
+            raise
+        return valores
+
+    def _registrar_temporal(self, valor, hook_ref, por_tipo: bool = False) -> None:
+        """Apila un valor sin dueno para destruirlo al cerrar la sentencia:
+        con su ``__free__``, o POR SU TIPO (``hook`` None)."""
         if hook_ref.owner_type:
             self._temporales.append((valor, hook_ref))
+        elif por_tipo:
+            self._temporales.append((valor, None))
 
     def _stmt_block(self, stmt, frame: Frame) -> None:
         self._exec_block(stmt.block, Frame(parent=frame))
@@ -390,8 +616,19 @@ class Evaluator:
         node = stmt.if_stmt
         self._exec_if(node, frame)
 
+    def _condicion(self, expr, frame: Frame) -> Any:
+        """La condición de un ``if``/``while``: sus temporales con destructor
+        mueren al terminar de evaluarla (el final de la expresión completa,
+        como en C++), no al terminar la sentencia. En un ``while`` se
+        acumulaban uno por vuelta hasta salir del bucle."""
+        marca = len(self._temporales)
+        valor = self.eval_expr(expr, frame)
+        if len(self._temporales) > marca:
+            self._soltar_temporales(marca)
+        return valor
+
     def _exec_if(self, node, frame: Frame) -> None:
-        if self.eval_expr(node.condition, frame):
+        if self._condicion(node.condition, frame):
             self._exec_block(node.then_block, Frame(parent=frame))
         elif node.WhichOneof("else_branch") == "else_block":
             self._exec_block(node.else_block, Frame(parent=frame))
@@ -400,7 +637,7 @@ class Evaluator:
 
     def _stmt_while(self, stmt, frame: Frame) -> None:
         node = stmt.while_stmt
-        while self.eval_expr(node.condition, frame):
+        while self._condicion(node.condition, frame):
             try:
                 self._exec_block(node.body, Frame(parent=frame))
             except _Break:
@@ -592,8 +829,8 @@ class Evaluator:
         if node.hook.owner_type:
             bound = self.image.hooks.get(ref_key(node.hook))
             if bound is not None:
-                self.call_function(bound[0], bound[1], [value],
-                                   ln=stmt.ln, col=stmt.col)
+                self._destruir(bound, value, node.hook.owner_type,
+                               ln=stmt.ln, col=stmt.col)
         value.cell.free(ln=stmt.ln, col=stmt.col)
         if self.trace:
             self.emit(f"[mem] free -> celda '{value.cell.name}'  "
@@ -607,21 +844,87 @@ class Evaluator:
         frame.define(node.name, Cell(Namespace(node.lib), name=node.name))
 
     def _stmt_throw(self, stmt, frame: Frame) -> None:
-        value = self.eval_expr(stmt.throw_stmt.value, frame)
-        raise Thrown(value, ln=stmt.ln, col=stmt.col)
+        expr = stmt.throw_stmt.value
+        value = self.eval_expr(expr, frame)
+        tipo = self._tipo_de(expr)
+        if self._es_desconocido(tipo):
+            # 'catch (e) { ...; throw e; }': el tipo de 'e' no se sabe al
+            # compilar, pero el valor LLEGÓ con uno. Se relanza con ese —como
+            # 'raise' en Python— para que un 'catch (T x)' de más arriba lo
+            # siga reconociendo. Antes se relanzaba como "error" y caía en la
+            # rama equivocada.
+            if expr.WhichOneof("node") == "identifier":
+                tipo = frame.lanzado(expr.identifier.name) or tipo
+        raise Thrown(value, ln=stmt.ln, col=stmt.col, tipo=tipo)
+
+    @staticmethod
+    def _es_desconocido(tipo) -> bool:
+        """¿Es la clave del tipo 'error' a secas (lo que no se sabe)?"""
+        global _ERROR_KIND
+        if _ERROR_KIND is None:
+            from V0.src.HIR.stubs import load_hir_pb2
+            _ERROR_KIND = load_hir_pb2().TypeKind.Value("ERROR")
+        return tipo is None or (tipo[0] == _ERROR_KIND and tipo[3] is None)
 
     def _stmt_try(self, stmt, frame: Frame) -> None:
         node = stmt.try_stmt
+        if not node.HasField("finally_block"):
+            self._try_catch(stmt, frame)
+            return
+        # 'finally': corre al salir por CUALQUIER camino. Los errores
+        # fatales (RTxxx que no son del programa) no lo corren: terminan el
+        # programa, como un proceso que muere.
+        try:
+            self._try_catch(stmt, frame)
+        except (Thrown, ExcepcionDelPrograma) as en_vuelo:
+            self._correr_finally(stmt, frame, en_vuelo)
+            raise
+        except (_Return, _Break, _Continue):
+            self._correr_finally(stmt, frame, None)
+            raise
+        self._correr_finally(stmt, frame, None)
+
+    def _correr_finally(self, stmt, frame: Frame, en_vuelo) -> None:
+        """El bloque ``finally``. Si lanza mientras ``en_vuelo`` ya viajaba,
+        el programa termina con RT022: el ``catch`` de afuera solo puede
+        recibir una excepcion, y la primera se perderia sin rastro."""
+        bloque = stmt.try_stmt.finally_block
+        if en_vuelo is None:
+            self._exec_block(bloque, Frame(parent=frame))
+            return
+        try:
+            self._exec_block(bloque, Frame(parent=frame))
+        except (Thrown, ExcepcionDelPrograma) as otra:
+            primera = en_vuelo if isinstance(en_vuelo, Thrown) \
+                else self._como_lanzado(en_vuelo)
+            segunda = otra if isinstance(otra, Thrown) else self._como_lanzado(otra)
+            raise FinallyThrewError(
+                f"el 'finally' lanzó {format_value(segunda.value)} mientras ya "
+                f"viajaba {format_value(primera.value)}: un 'finally' no puede "
+                "lanzar durante un desenrollado. Si limpiar puede fallar, "
+                "registra el fallo y deja que el 'finally' termine",
+                ln=segunda.ln or stmt.ln, col=segunda.col or stmt.col,
+            ) from None
+
+    def _try_catch(self, stmt, frame: Frame) -> None:
+        node = stmt.try_stmt
         try:
             self._exec_block(node.try_block, Frame(parent=frame))
-        except Thrown as thrown:
+        except (Thrown, ExcepcionDelPrograma) as fallo:
+            # una excepcion del runtime (EXCxxx) entra por las MISMAS ramas
+            # que un 'throw': se convierte aqui, en el unico sitio que sabe
+            # que alguien quiere atraparla. Si ninguna rama la acepta, el
+            # 'raise' de abajo relanza la ORIGINAL y conserva su codigo.
+            thrown = fallo if isinstance(fallo, Thrown) \
+                else self._como_lanzado(fallo)
             for rama in node.catches:
-                if not self._atrapa(rama, thrown.value):
+                if not self._atrapa(rama, thrown):
                     continue
                 # el binding de la rama vive SOLO en el scope de su bloque
                 catch_frame = Frame(parent=frame)
                 catch_frame.define(rama.name,
                                    Cell(thrown.value, name=rama.name))
+                catch_frame.lanzados = {rama.name: thrown.tipo}
                 if self.trace:
                     self.emit(f"[err] catch '{rama.name}' = "
                               f"{format_value(thrown.value)}  "
@@ -633,16 +936,49 @@ class Evaluator:
             # se lo queda.
             raise
 
-    def _atrapa(self, rama, valor: Any) -> bool:
-        """¿La rama ``catch`` acepta este valor?
+    @staticmethod
+    def _como_lanzado(fallo: ExcepcionDelPrograma) -> "Thrown":
+        """La excepcion del runtime como el valor que la libreria
+        ``excepciones`` declara: ``excepciones.DivisionPorCero{mensaje,
+        linea, columna}``. La clave de tipo es la CANONICA (la del export de
+        la libreria), la misma que el HIR escribe en un ``catch
+        (exc.DivisionPorCero e)`` aunque el import use otro alias."""
+        global _NOMINAL_KIND
+        if _NOMINAL_KIND is None:
+            from V0.src.HIR.stubs import load_hir_pb2
+            _NOMINAL_KIND = load_hir_pb2().TypeKind.Value("NOMINAL")
+        nombre = f"excepciones.{fallo.tipo_excepcion}"
+        valor = StructValue(nombre, {
+            "mensaje": Cell(fallo.message, name="mensaje"),
+            "linea": Cell(fallo.ln, name="linea"),
+            "columna": Cell(fallo.col, name="columna"),
+        })
+        return Thrown(valor, ln=fallo.ln, col=fallo.col,
+                      tipo=(_NOMINAL_KIND, nombre, False, None, ()))
 
-        Sin tipo declarado, cualquiera. Con tipo, hay que preguntar en
-        EJECUCION de que es el valor: ``throw`` acepta cualquier cosa, asi que
-        el tipo dinamico del valor lanzado es lo unico que hay para decidir.
+    def _atrapa(self, rama, thrown: "Thrown") -> bool:
+        """¿La rama ``catch`` acepta lo que se lanzó?
+
+        Sin tipo declarado, cualquiera. Con tipo, se compara el tipo ESTATICO
+        del valor lanzado —el que la Semántica anotó en la expresión del
+        ``throw`` y viaja en el HIR— con el de la rama, entero y canónico. Es
+        lo que hace la VM de C++ (una etiqueta por tipo).
+
+        Antes se miraba el VALOR en ejecución, y eso confundía dos cosas: un
+        ``char`` es aquí una cadena de longitud 1, así que ``catch (str s)``
+        atrapaba un ``char`` y ``catch (char c)`` atrapaba ``"y"``; y un tipo
+        nominal se comparaba por su nombre CORTO, así que ``catch (b.Error e)``
+        atrapaba un ``a.Error`` de otra librería.
+
+        Si el HIR no trae el tipo (``type_id`` 0), queda la prueba dinámica
+        de antes como respaldo.
         """
         if not rama.HasField("type"):
             return True
-        return self._es_de_tipo(valor, rama.type)
+        esperado = type_key(rama.type)
+        if thrown.tipo is not None and esperado is not None:
+            return thrown.tipo == esperado
+        return self._es_de_tipo(thrown.value, rama.type)
 
     def _es_de_tipo(self, valor: Any, tipo) -> bool:
         """¿``valor`` es del tipo ``tipo``? (prueba DINAMICA, solo para catch)
@@ -688,9 +1024,11 @@ class Evaluator:
         # apila para destruirlo al cerrar la sentencia. Quien marco el nodo fue
         # el frontend; aqui solo se obedece.
         if which == "call":
-            self._registrar_temporal(valor, expr.call.temp_drop)
+            self._registrar_temporal(valor, expr.call.temp_drop,
+                                     expr.call.temp_by_type)
         elif which == "struct_literal":
-            self._registrar_temporal(valor, expr.struct_literal.temp_drop)
+            self._registrar_temporal(valor, expr.struct_literal.temp_drop,
+                                     expr.struct_literal.temp_by_type)
         return valor
 
     def _expr_literal(self, expr, frame: Frame) -> Any:
@@ -706,8 +1044,135 @@ class Evaluator:
             if part.WhichOneof("part") == "text":
                 parts.append(part.text)
             else:
-                parts.append(format_value(self.eval_expr(part.expr, frame)))
+                valor = self.eval_expr(part.expr, frame)
+                tipo = (self.unit.module.types[part.expr.type_id]
+                        if part.expr.type_id else None)
+                texto = self._texto(valor, tipo, self.unit, repr_=part.repr)
+                if part.spec:
+                    texto = _con_formato(valor, tipo, texto, part.spec)
+                parts.append(texto)
         return "".join(parts)
+
+    # ------------------------------------------------------------------ #
+    # un valor escrito con su TIPO: el nombre de una variante
+    # ------------------------------------------------------------------ #
+    def _texto(self, valor: Any, tipo, unidad, *, repr_: bool = False,
+               mapa: Optional[dict] = None) -> str:
+        """``format_value`` sabiendo el tipo estático del valor.
+
+        Una variante SIN payload es un entero en ejecución (``Color.Verde``
+        vale 1, ``OK = 200`` vale 200) y el entero solo no dice de qué enum
+        es: lo dice el tipo. Con él se escribe su NOMBRE, igual que una
+        variante con payload (``Circulo(2.5)``). La VM hace lo mismo con la
+        tabla de nombres del MIR.
+
+        Con ``repr_`` (``{x!r}``) se escribe la REPRESENTACION: una cadena con
+        sus comillas y escapes, un ``char`` entre apostrofes y un enum con su
+        tipo (``Color.Verde``). Un struct se escribe siempre asi, con sus
+        campos en el orden declarado y cada uno en su representacion
+        (``Punto{x: 1, nombre: "a"}``), como el ``str`` de Python que por
+        defecto es el ``repr``.
+
+        ``mapa`` lleva los parametros de tipo del struct que se esta
+        escribiendo (``T`` -> ``(tipo, unidad)``): el campo ``T v`` de un
+        ``Caja<Color>`` se escribe como un ``Color``.
+        """
+        if valor is None:
+            return "null"
+        if tipo is not None:
+            global _KINDS_TEXTO
+            if _KINDS_TEXTO is None:
+                from V0.src.HIR.stubs import load_hir_pb2
+                k = load_hir_pb2().TypeKind
+                _KINDS_TEXTO = (k.Value("ERROR"), k.Value("NULLABLE"), k.Value("NOMINAL"))
+            error, nulable, nominal = _KINDS_TEXTO
+            while tipo.kind == error and tipo.HasField("inner"):
+                tipo = tipo.inner
+            if tipo.kind == nulable and tipo.HasField("inner"):
+                tipo = tipo.inner
+            if tipo.kind == nominal and mapa and not tipo.args and tipo.name in mapa:
+                tipo, unidad = mapa[tipo.name]
+                return self._texto(valor, tipo, unidad, repr_=repr_)
+            if repr_ and tipo.kind == _TK_STR:
+                return _cadena_repr(valor, '"')
+            if repr_ and tipo.kind == _TK_CHAR:
+                return _cadena_repr(valor, "'")
+            if tipo.kind == nominal:
+                enum = self._enum_de(tipo.name, unidad)
+                if enum is not None:
+                    suya, decl = enum
+                    prefijo = f"{decl.name}." if repr_ else ""
+                    if isinstance(valor, int) and not isinstance(valor, bool):
+                        for nombre, v in suya.enum_values[decl.name].items():
+                            if v == valor and not isinstance(v, VariantCtor):
+                                return prefijo + nombre
+                    if isinstance(valor, EnumValue):
+                        for item in decl.items:
+                            if item.name != valor.variant:
+                                continue
+                            campos = [
+                                self._texto(c.value, suya.module.types[t], suya,
+                                            repr_=repr_)
+                                for c, t in zip(valor.fields, item.payload_type_ids)]
+                            return f"{prefijo}{valor.variant}({', '.join(campos)})"
+                struct = self._struct_de(tipo.name, unidad)
+                if struct is not None and isinstance(valor, StructValue):
+                    suya, decl = struct
+                    propio = {}
+                    for param, arg in zip(decl.type_params, tipo.args):
+                        if mapa and arg.kind == nominal and not arg.args \
+                                and arg.name in mapa:
+                            propio[param] = mapa[arg.name]
+                        else:
+                            propio[param] = (arg, unidad)
+                    campos = []
+                    for campo in decl.fields:
+                        celda = valor.fields.get(campo.name)
+                        texto = self._texto(
+                            celda.value if celda is not None else None,
+                            suya.module.types[campo.type_id], suya,
+                            repr_=True, mapa=propio)
+                        campos.append(f"{campo.name}: {texto}")
+                    corto = valor.type_name.rsplit(".", 1)[-1]
+                    return f"{corto}{{{', '.join(campos)}}}"
+        return format_value(valor)
+
+    def _struct_de(self, nombre: str, unidad):
+        """La declaración del struct que nombra un tipo CANÓNICO (como
+        :meth:`_enum_de`)."""
+        if self._structs is None:
+            self._structs = {}
+            for u in [self.image.main, *self.image.units.values()]:
+                for d in u.module.items:
+                    if d.WhichOneof("node") == "struct_decl":
+                        self._structs[(u.alias, d.struct_decl.name)] = (u, d.struct_decl)
+        if "." in nombre:
+            prefijo, suelto = nombre.rsplit(".", 1)
+            for (alias, n), valor in self._structs.items():
+                if n == suelto and (alias == prefijo or alias.endswith("." + prefijo)):
+                    return valor
+            return None
+        return (self._structs.get((unidad.alias, nombre))
+                or self._structs.get((self.image.main.alias, nombre)))
+
+    def _enum_de(self, nombre: str, unidad):
+        """La declaración del enum que nombra un tipo CANÓNICO: suelto es de
+        la unidad que lo usa (o del main); ``alias.Nombre`` es de esa
+        librería (se compara el último tramo del alias, como el MIR)."""
+        if self._enums is None:
+            self._enums = {}
+            for u in [self.image.main, *self.image.units.values()]:
+                for d in u.module.items:
+                    if d.WhichOneof("node") == "enum_decl":
+                        self._enums[(u.alias, d.enum_decl.name)] = (u, d.enum_decl)
+        if "." in nombre:
+            prefijo, suelto = nombre.rsplit(".", 1)
+            for (alias, n), valor in self._enums.items():
+                if n == suelto and (alias == prefijo or alias.endswith("." + prefijo)):
+                    return valor
+            return None
+        return (self._enums.get((unidad.alias, nombre))
+                or self._enums.get((self.image.main.alias, nombre)))
 
     def _expr_identifier(self, expr, frame: Frame) -> Any:
         return frame.lookup(expr.identifier.name, ln=expr.ln,
@@ -718,6 +1183,10 @@ class Evaluator:
         operand = self.eval_expr(node.operand, frame)
         if node.op == "not":
             return not operand
+        if node.op == "~":
+            if self._es_byte(expr):
+                return ~operand & 0xFF   # un byte no tiene signo: 8 bits
+            return ~operand   # -x-1: con un int de 64 bits nunca desborda
         return self._arith(-operand)  # '-' (negar INT_MIN también desborda)
 
     def _expr_addr_of(self, expr, frame: Frame) -> Pointer:
@@ -736,6 +1205,21 @@ class Evaluator:
             cell = self._field_cell(base, operand.member.member,
                                     ln=expr.ln, col=expr.col)
             return Pointer(cell, mut=node.mut)
+        if which == "index":
+            # '&b[i]': el PRESTAMO de un elemento. Solo de un objeto (un
+            # struct, un enum con payload): la VM lo presta por su handle y no
+            # tiene punteros al interior de un bloque para un escalar. Es lo
+            # que usa 'Vector.at'.
+            base = self.eval_expr(operand.index.obj, frame)
+            idx = self.eval_expr(operand.index.index, frame)
+            cell = self._element_cell(base, idx, ln=expr.ln, col=expr.col)
+            if isinstance(cell.value, (StructValue, EnumValue)):
+                return Pointer(cell, mut=node.mut)
+            raise UnsupportedNodeError(
+                "'&' sobre un elemento que no es un objeto: la dirección de "
+                "un escalar dentro de un bloque no tiene soporte de ejecución",
+                ln=expr.ln, col=expr.col,
+            )
         raise UnsupportedNodeError(
             f"'&' sobre '{which}' sin soporte de ejecución",
             ln=expr.ln, col=expr.col,
@@ -838,6 +1322,22 @@ class Evaluator:
                 return -resto if left < 0 else resto
             # 'fmod(x, 0.0)' lanza en Python; IEEE-754 dice NaN.
             return math.nan if right == 0 else math.fmod(left, right)
+        # BITS, sobre enteros de 64 bits con signo. '&', '|' y '^' de dos
+        # valores en rango dan un valor en rango (complemento a dos); '<<'
+        # envuelve como la maquina y '>>' es aritmetico (conserva el signo),
+        # que es lo que hace el '>>' de Python sobre un negativo.
+        if op == "&":
+            return left & right
+        if op == "|":
+            return left | right
+        if op == "^":
+            return left ^ right
+        if op in ("<<", ">>"):
+            if right < 0 or right > 63:
+                raise ShiftOutOfRangeError(
+                    f"desplazamiento de {right} bits fuera de [0, 64)",
+                    ln=expr.ln, col=expr.col)
+            return self._wrap64(left << right) if op == "<<" else left >> right
         if op == "==":
             eq = self._dispatch_eq(left, right, expr)
             return (left == right) if eq is None else eq
@@ -855,6 +1355,31 @@ class Evaluator:
         raise UnsupportedNodeError(f"operador binario '{op}' desconocido",
                                    ln=expr.ln, col=expr.col)
 
+    def _hash(self, valor: Any, expr) -> int:
+        """El hash de un valor, IGUAL al de la VM (el orden de las claves de
+        un diccionario depende de el, y los dos motores lo imprimen igual):
+
+        - ``int``/``bool`` (y un enum sin payload): splitmix64 de sus 64 bits;
+        - ``str`` y ``char``: FNV-1a de 64 bits sobre su UTF-8 (un ``char`` es
+          un texto de un caracter aqui, y en la VM se hashea igual);
+        - un struct o un enum con payload: su ``__hash__``.
+        """
+        if isinstance(valor, bool) or (isinstance(valor, int)):
+            return _splitmix64(int(valor))
+        if isinstance(valor, str):
+            return _fnv1a(valor.encode("utf-8"))
+        if isinstance(valor, float):
+            raise UnsupportedNodeError(
+                "un 'float' no tiene hash: NaN no es igual a si mismo",
+                ln=expr.ln, col=expr.col)
+        tipo = getattr(valor, "type_name", None) or getattr(valor, "enum_name", None)
+        bound = self.image.hooks.get(hook_key(tipo, self._hash_kind)) if tipo else None
+        if bound is None:
+            raise UnsupportedNodeError(
+                f"'{tipo}' no define '__hash__'", ln=expr.ln, col=expr.col)
+        return self.call_function(bound[0], bound[1], [valor],
+                                  ln=expr.ln, col=expr.col)
+
     def _dispatch_eq(self, left: Any, right: Any, expr) -> Optional[bool]:
         """'a == b' entre dos valores nominales del mismo tipo con hook __eq__:
         devuelve su resultado; ``None`` si no aplica (se cae a la identidad)."""
@@ -868,41 +1393,66 @@ class Evaluator:
 
     def _expr_assignment(self, expr, frame: Frame) -> Any:
         node = expr.assignment
-        value = self.eval_expr(node.value, frame)
+        # Un struct es un VALOR: asignarlo lo COPIA, igual que ligarlo con
+        # 'var'. Antes 'b = a; b.v = 99' cambiaba tambien 'a', y
+        # 'e.dentro = c' dejaba a 'e' y a 'c' compartiendo el mismo objeto.
+        value = copy_on_bind(self.eval_expr(node.value, frame))
         target = node.target
         which = target.WhichOneof("node")
         if which == "identifier":
-            frame.lookup(target.identifier.name, ln=expr.ln,
-                         col=expr.col).write(value, ln=expr.ln, col=expr.col)
+            cell = frame.lookup(target.identifier.name, ln=expr.ln, col=expr.col)
+            if node.drops_old:
+                self._muere_el_viejo(cell, expr)
+            cell.write(value, ln=expr.ln, col=expr.col)
             return value
         if which == "member":
             base = self.eval_expr(target.member.obj, frame)
             cell = self._field_cell(base, target.member.member,
                                     ln=expr.ln, col=expr.col)
+            if node.drops_old:
+                self._muere_el_viejo(cell, expr)
             cell.write(value, ln=expr.ln, col=expr.col)
             return value
         if which == "index":
             base = self.eval_expr(target.index.obj, frame)
             idx = self.eval_expr(target.index.index, frame)
-            # 'v[i] = x' sobre un tipo nominal con hook __index_set__: despacha
-            # al hook (el indexado crudo de puntero/bloque sigue por _element_cell).
-            if isinstance(base, StructValue):
-                bound = self.image.hooks.get(hook_key(base.type_name, self._index_set_kind))
-                if bound is not None:
-                    self.call_function(bound[0], bound[1], [base, idx, value],
-                                       ln=expr.ln, col=expr.col)
-                    return value
-            self._element_cell(base, idx, ln=expr.ln, col=expr.col).write(
-                value, ln=expr.ln, col=expr.col)
+            # 'v[i] = x' sobre un tipo nominal con hook __index_set__ (o un
+            # puntero a él): despacha al hook. El indexado crudo de un bloque
+            # sigue por _element_cell.
+            despacho = self._hook_de_indexado(base, self._index_set_kind,
+                                              ln=expr.ln, col=expr.col)
+            if despacho is not None:
+                bound, receptor = despacho
+                self.call_function(bound[0], bound[1], [receptor, idx, value],
+                                   ln=expr.ln, col=expr.col)
+                return value
+            cell = self._element_cell(base, idx, ln=expr.ln, col=expr.col)
+            if node.drops_old:
+                self._muere_el_viejo(cell, expr)
+            cell.write(value, ln=expr.ln, col=expr.col)
             return value
         raise UnsupportedNodeError(
             f"asignación a '{which}' sin soporte de ejecución",
             ln=expr.ln, col=expr.col,
         )
 
+    def _muere_el_viejo(self, cell, expr) -> None:
+        """El valor que tenia un destino que POSEE muere al recibir otro
+        (``Assignment.drops_old``). Una celda vacia, movida o liberada no
+        tiene nada que destruir. La celda NO se libera: se escribe ya."""
+        if cell.state is CellState.LIVE and cell.value is not None:
+            self._destruir_por_tipo(cell.value, ln=expr.ln, col=expr.col)
+
     def _expr_call(self, expr, frame: Frame) -> Any:
         node = expr.call
         callee = node.callee
+        # 'hash(x)': nativo o por el '__hash__' del tipo EN EJECUCION (en un
+        # generico el frontend no sabe cual es)
+        if node.hook.owner_type and node.hook.kind == self._hash_kind:
+            receptor = (callee.member.obj
+                        if callee.WhichOneof("node") == "member" and not node.args
+                        else node.args[0])
+            return self._hash(self.eval_expr(receptor, frame), expr)
         # despacho de hook FIJO ya enlazado (print(x) / x.print() / len(x))
         if node.hook.owner_type:
             bound = self.image.hooks.get(ref_key(node.hook))
@@ -934,7 +1484,7 @@ class Evaluator:
                     (node.hook.owner_type, callee.member.member))
                 if method is not None:
                     args = [self.eval_expr(callee.member.obj, frame)]
-                    args.extend(self.eval_expr(a, frame) for a in node.args)
+                    args.extend(self._argumentos(node.args, frame))
                     return self.call_function(method[0], method[1], args,
                                               ln=expr.ln, col=expr.col)
             # 'len(s)' sobre un 'str': NATIVO, no lo declara ninguna libreria.
@@ -949,7 +1499,7 @@ class Evaluator:
                 return len(self.eval_expr(receptor, frame))
 
         callee_value = self._eval_callee(node.callee, frame)
-        args = [self.eval_expr(a, frame) for a in node.args]
+        args = self._argumentos(node.args, frame)
         if isinstance(callee_value, VariantCtor):
             # 'Nodo.Literal(5)' construye el valor de la variante. El payload
             # va en celdas, como los campos de un struct: asi participa del
@@ -1005,13 +1555,36 @@ class Evaluator:
                     f"indice {idx} fuera de la cadena (longitud {len(base)})",
                     ln=expr.ln, col=expr.col)
             return base[idx]
-        if isinstance(base, StructValue):
-            bound = self.image.hooks.get(hook_key(base.type_name, self._index_kind))
-            if bound is not None:
-                return self.call_function(bound[0], bound[1], [base, idx],
+        despacho = self._hook_de_indexado(base, self._index_kind,
                                           ln=expr.ln, col=expr.col)
+        if despacho is not None:
+            bound, receptor = despacho
+            return self.call_function(bound[0], bound[1], [receptor, idx],
+                                      ln=expr.ln, col=expr.col)
         return self._element_cell(base, idx, ln=expr.ln, col=expr.col).read(
             ln=expr.ln, col=expr.col)
+
+    def _hook_de_indexado(self, base: Any, kind: int, *, ln: int, col: int):
+        """``(hook, receptor)`` si ``base[i]`` despacha a ``__index__`` /
+        ``__index_set__``; ``None`` si es indexado crudo.
+
+        Vale para el valor Y para un PUNTERO a una celda que lo contiene: la
+        Semántica ya tipaba ``v[i]`` con ``v: Vector<T> ptr`` a través del
+        hook (igual que ``v.len()`` se desreferencia solo), y el intérprete lo
+        indexaba como memoria cruda — ``RT013: solo [0] es válido``. Con el
+        puntero, el receptor que recibe el hook es el PROPIO puntero, así que
+        ``__index_set__`` escribe en el original y no en una copia. Un puntero
+        a un BLOQUE (``mem.reserve``) sigue siendo indexado crudo.
+        """
+        objetivo = base
+        if isinstance(base, Pointer):
+            objetivo = base.cell.read(ln=ln, col=col)
+        if not isinstance(objetivo, StructValue):
+            return None
+        bound = self.image.hooks.get(hook_key(objetivo.type_name, kind))
+        if bound is None:
+            return None
+        return bound, base
 
     def _expr_member(self, expr, frame: Frame) -> Any:
         node = expr.member
@@ -1033,9 +1606,9 @@ class Evaluator:
 
     def _expr_struct_literal(self, expr, frame: Frame) -> Any:
         node = expr.struct_literal
-        fields: dict = {}
-        for name, value_expr in zip(node.field_names, node.values):
-            fields[name] = Cell(self.eval_expr(value_expr, frame), name=name)
+        valores = self._argumentos(node.values, frame)
+        fields: dict = {name: Cell(valor, name=name)
+                        for name, valor in zip(node.field_names, valores)}
         return StructValue(node.type_name, fields)
 
     def _expr_sizeof(self, expr, frame: Frame) -> Any:
@@ -1067,6 +1640,8 @@ class Evaluator:
             return chr(value)
         elif kind == _TK_BOOL and isinstance(value, bool):
             return value
+        elif kind == _TK_BYTE and isinstance(value, int) and not isinstance(value, bool):
+            return value & 0xFF   # trunca (modulo 256), como la VM
         elif kind == _TK_STR and isinstance(value, (str, bool, int, float)):
             # primitivo -> 'str': la MISMA representacion que interpola un
             # f-string ('format_value'), y no 'str()' de Python, porque si
@@ -1104,8 +1679,7 @@ class Evaluator:
                     try:
                         return nativa(value)
                     except SuriaXRuntimeError as exc:
-                        exc.ln, exc.col = expr.ln, expr.col
-                        raise
+                        raise exc.ubicar(expr.ln, expr.col)
             return self.call_function(bound[0], bound[1], [value],
                                       ln=expr.ln, col=expr.col)
         raise InvalidCastRuntimeError(
@@ -1128,6 +1702,12 @@ class Evaluator:
             return False
         # con payload el enum es un tipo suma: sus valores no son enteros.
         return not any(m.param_types for m in sym.members.values())
+
+    def _es_byte(self, expr) -> bool:
+        """¿El tipo estatico de ``expr`` es ``byte``?"""
+        if not expr.type_id:
+            return False
+        return self.unit.module.types[expr.type_id].kind == _TK_BYTE
 
     def _tipo_de(self, expr):
         """Clave del tipo estático de ``expr``, resuelta contra el pool de la

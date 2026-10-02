@@ -1,0 +1,92 @@
+/- Excepciones 17: 'finally' corre al salir del 'try' por CUALQUIER camino.
+
+ Al terminar el try, al terminar el catch, con un 'return', un 'break' o un
+ 'continue' que lo atraviesa, y con una excepcion que nadie atrapo (que
+ despues sigue su camino). Es lo que hace a 'finally' distinto de escribir
+ la limpieza al final: esa linea no corre si algo salio antes.
+
+ Reglas que se ven aqui:
+ - el valor de un 'return' se calcula ANTES del 'finally': cambiar la
+   variable dentro del 'finally' no cambia lo devuelto;
+ - lo declarado en el 'try' muere (su '__free__' corre) antes del 'finally';
+ - un 'finally' anidado corre antes que el de afuera.
+
+ Dentro de un 'finally' no hay 'return', ni 'break' o 'continue' que salgan
+ de el (PAR027): reemplazarian la salida que ya estaba en curso.
+-/
+#from io #import stdp
+
+struct { str que; } Recurso;
+hook fn __free__(Recurso ptr r) -> void { stdp.println(f"  libera {r.que}"); }
+
+fn devuelve() -> int {
+    var int x = 1;
+    try {
+        return x;
+    } finally {
+        x = 99;
+        stdp.println("  finally: x vale 99, pero ya se devolvio 1");
+    };
+}
+
+fn con_recurso() -> void {
+    try {
+        var Recurso r = Recurso{ que: "archivo" };
+        stdp.println("  usa el archivo");
+    } finally {
+        stdp.println("  finally despues de liberar");
+    };
+}
+
+fn bucle() -> void {
+    var int i = 0;
+    while (i < 4) {
+        i = i + 1;
+        try {
+            if (i == 2) { continue; };
+            if (i == 4) { break; };
+            stdp.println(f"  vuelta {i}");
+        } finally {
+            var int i = 100;
+            stdp.println(f"  finally (su propia i vale {i})");
+        };
+    };
+}
+
+fn anidado() -> void {
+    try {
+        try {
+            throw "desde adentro";
+        } finally {
+            stdp.println("  finally de adentro");
+        };
+    } catch (str e) {
+        stdp.println(f"  atrapado afuera: {e}");
+    } finally {
+        stdp.println("  finally de afuera");
+    };
+}
+
+fn relanza() -> void {
+    try {
+        throw 2;
+    } catch (int e) {
+        throw e + 10;
+    } finally {
+        stdp.println("  finally tras un catch que relanza");
+    };
+}
+
+fn main() -> int {
+    stdp.println("-- return atraviesa el finally");
+    stdp.println(f"  devolvio {devuelve()}");
+    stdp.println("-- lo del try muere antes del finally");
+    con_recurso();
+    stdp.println("-- break y continue");
+    bucle();
+    stdp.println("-- anidados, de adentro hacia afuera");
+    anidado();
+    stdp.println("-- un catch que relanza");
+    try { relanza(); } catch (int e) { stdp.println(f"  afuera atrapo {e}"); };
+    return 0;
+}
