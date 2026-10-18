@@ -257,7 +257,7 @@ fn main() -> int { return 0; };
 
 test "doble de 21" {
     var int r = doble(21);
-    if (r != 42) { throw r; };
+    expect (r == 42);
     __write__("ok\\n");
 };
 """

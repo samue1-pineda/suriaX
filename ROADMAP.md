@@ -6,8 +6,64 @@
 > interprete funcional, modelo de memoria por **ownership** (las regiones se
 > retiraron: ver [el registro de la decisión](documentation/source/memory_decision.rst))
 > y llamadas a c++(pybind11) para memoria
+>
+> **Paradigma:** imperativo con herramientas funcionales y **programación
+> genérica** (más cerca de Ada que de la STL). Tipado estático, fuerte y
+> nominal, sin inferencia de tipos. Nicho: herramientas de línea de comandos
+> que analizan código o texto.
 
 ---
+
+## La versión en curso
+
+[![Versión](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/version.json)](version.py)
+
+La 0.3.0 fue un rescate de urgencia; la 0.4.1 repone lo que faltó y cierra
+el lenguaje del nicho. Lo nuevo se construye primero en la V0 y en el
+intérprete; la VM, el target web y la V1 lo rechazan con su código hasta
+ponerse al día. El detalle de cada cambio está en el
+[CHANGELOG](CHANGELOG.md) y lo que falla, en [c_errorstfix.md](c_errorstfix.md).
+
+**Hecho:**
+
+- Herramientas: playground por capas con API descrita, depurador (DAP) que
+  muestra el estado de propiedad de cada variable, servidor de lenguaje
+  (LSP) y extensión de VS Code generada del compilador [x]
+- Llamadas al host para el nicho: entrada estándar, archivos, lanzar otros
+  programas, tiempo, y `text` para analizar texto [x]
+- Valores: copia al devolver, variables siempre con valor, globales que se
+  destruyen, igualdad por valor, `__cmp__` y `Vector.sort` [x]
+- Funciones con nombre como valores (`fn(A) -> R`), `sort_by`, `filter` y el
+  paquete `func` (`map`, `fold`) [x]
+- Desenvolver `T?` (`match` con `case null`/`case v`, y `??`) y enums
+  genéricos (`Res<int, str>.Ok(5)`) [x]
+- Cotas (`<T: Ord + Contrato>`), conceptos nativos (`Eq`, `Ord`, `Hash`,
+  `Print`), traits con métodos de `@impl`, deducción de argumentos de tipo
+  (subconjunto de la de C++) y métodos genéricos [x]
+- Diagnósticos: los fallos silenciosos de la caza de fallos pasan a errores
+  al compilar (const y punteros de solo lectura, construcciones dudosas,
+  `sizeof` sin `__sizeof__`, lo que siempre fallaba al ejecutar) [x]
+- Léxico, sintaxis e intérprete: exponentes, f-strings con literales dentro,
+  posiciones reales, sin cascadas, `--test` con pruebas aisladas, errores
+  con su archivo [x]
+
+- Lambdas que no escapan, con la palabra `lambda` y los tipos escritos
+  (`lambda (int ptr x) -> bool: x[0] > 3`), y `print` con primitivos [x]
+
+**Para cerrar la 0.4.1:**
+
+- Poner al día la VM (lo que hoy rechaza con `VM001`–`VM005`, `__cmp__`,
+  la destrucción de las globales, las llamadas al host nuevas) y
+  reconstruir su binario [ ]
+- Poner al día la V1 con el lenguaje de la 0.4.1 y regenerar la semilla [ ]
+- Correr las suites `backend` y `bootstrap` y ASan antes del commit del
+  hito [ ]
+
+## Después de la 0.4.1
+
+Lo que viene después, con el estado de cada idea, está en
+[FUTURO.md](FUTURO.md): es la única lista de ideas. Este roadmap cuenta las
+fases y lo que ya se hizo.
 
 ## Fase 0: Diseño del lenguaje 
 
@@ -60,7 +116,8 @@
 - Reglas de `mutable`/`const`, `null`/nullable (`?`), punteros (`ptr`/`&`) [x]
 - Hooks de tipo dunder con despacho enlazado: `__free__`/`__sizeof__`/
   `__print__`/`__len__`/`__cast__`/`__index__`/`__index_set__`/`__eq__`/
-  `__min__`/`__max__` [x]
+  `__cmp__`/`__hash__`/`__min__`/`__max__` [x] (la lista completa, en
+  [lib/HOOKS.md](lib/HOOKS.md))
 - `#test sem` (visualización de símbolos/diagnósticos) [x]
 
 ## Fase 5: HIR (protobuf)
@@ -128,11 +185,10 @@
   `--trace-memory` (`memory/pointer.py`) [x]
 - Drop automático al cerrar el ámbito (llamada a `__free__` del tipo) [x]
 - Arenas como **tipo de librería** (una fábrica normal más `__free__`, sin
-  sintaxis dedicada) — requiere structs ejecutables [ ]
+  sintaxis dedicada) [ ]
 - Target `interp` en `compilerconfig` + CLI `--run` (V0/main.py llama a
   `runtime/interpreter/main.py --exec` en proceso) [x]
-- Structs ejecutables (instanciación por fábrica de librería), vectores,
-  `#extern` [ / ]
+- Structs ejecutables, vectores (`lib/array/vector`) y `#extern cpp` [x]
 
 ## Fase 6: Backend C++ 
 
@@ -140,8 +196,8 @@
 - Resolución de la imagen (slots, llamadas y destrucciones por función) [x]
   (`suriax-hir --resolve`)
 - **MIR lowering**: registros virtuales + control de flujo explícito [x]
-  (`backend/src/mir.cpp`, `suriax-hir --mir`; sin SSA. Pendiente: `&` sobre
-  un CAMPO escalar, que se rechaza con su posición. Ver [docs/mir.md](docs/mir.md))
+  (`backend/src/mir.cpp`, `suriax-hir --mir`; sin SSA. Lo nuevo de la 0.4.1
+  se rechaza con `VM001`–`VM005`. Ver [docs/mir.md](docs/mir.md))
 - Verificación de **propiedad** y **préstamos** sobre el MIR [ / ]
   (propiedad por todos los caminos del CFG [x]; préstamos solo dentro de un
   bloque)
@@ -225,14 +281,14 @@
 - Formatos: texto, **JSON** (consumible por herramientas) y **DOT/Graphviz**
   (árboles y CFG) [ / ]
 - Visualización del **CFG** del MIR y del flujo de propiedad (`move`/drop) [ ]
-- `suriaX inspect <archivo> --stage <fase>`[x]
+- Volcar una fase sola: `python V0/main.py <archivo> --emit-stage <fase>` [x]
 - Vista interactiva paso a paso del pipeline[ ]
 
 ## Fase 8: Playground (web)  
 
 > Vive en [`playground/`](playground/README.md) y se despliega en Railway
-> (con un `Procfile` en la raíz que se perdió en el rescate de la 0.3.0: ver
-> `c_errorstfix.md`). El frontend **no** se reimplementó en TypeScript: la página
+> con el `Procfile` de la raíz (recreado en la 0.4.1; el `Dockerfile` existe
+> pero no se ha construido). El frontend **no** se reimplementó en TypeScript: la página
 > pide las fases al compilador de verdad (`driver/artifacts`), que es lo que
 > evita tener dos respuestas para la misma pregunta.
 
@@ -248,10 +304,10 @@
   (dejaría de hacer falta el servidor; no es necesario para que la página
   funcione)
 
-> **Genéricos de FUNCIÓN** (`fn make<T>(...)`): hechos en la 0.3.0, con
-> instanciación EXPLÍCITA (`make<int>()`) porque no hay inferencia por
-> decisión registrada. `lib/array/vector` ya es genérico (`make<T>` y
-> `dynamic<T>`). Los **literales de arreglo** (`[1,2,3]`) siguen sin existir:
+> **Genéricos**: de función en la 0.3.0; en la 0.4.1, cotas, conceptos,
+> métodos genéricos y **deducción** de los argumentos de tipo desde los
+> argumentos de la llamada (`mayor(3, 9)`). No es inferencia: las variables
+> se anotan siempre. Lo que no se puede deducir se escribe (`make<int>()`). Los **literales de arreglo** (`[1,2,3]`) siguen sin existir:
 > el análisis de lo que cuestan está en `c_errorstfix.md`.
 
 ## Fase 9: Librerías nativas (libsrX)  
@@ -267,11 +323,14 @@
   uso cualificado desde el consumidor (`const dt.int8 x;`), y `type` como
   metatipo (`fn f() -> type`) [x]
 - `.srcx` como librería permitido con NOTA en `log/notes.jsonl` [x]
--  Librería `IO` y manejo de metodos dunder [/] (io.libsrx con
-  print/printf/println y hooks `__print__`/`__len__` funcionando)
+-  Librería `IO` y manejo de metodos dunder [x] (`lib/io/`: `stdp` con
+  print/println y `stdpf` con printf, y hooks `__print__`/`__len__` funcionando)
 - Rutas de búsqueda (`libraries.libsrx_paths` en la config, relativas a la
   raíz del proyecto; default `./lib`) [x]
-- Conjunto base de librerías estándar [ / ]
+- Conjunto base de librerías estándar [ / ]: `io`, `array.vector`,
+  `collections.dictionary`, `text`, `func`, `mem`, `excepciones`, `math`,
+  `d_types` y `sistema` (archivos, proceso, entrada, comandos, tiempo,
+  rutas). Qué llamadas al host tiene cada motor: `lib/LLAMADAS_AL_HOST.md`
 
 ## Fase 10: Tooling, tests y distribución  
 
@@ -302,8 +361,11 @@
   `--emit-lang-info` v4 (sintaxis para colorear y snippets),
   `--emit-stage` (incluida la vista `desugar`) [x]
 - Extensión de VS Code (la anterior se perdió con el computador viejo; se
-  recrea DENTRO de suriaX): gramática generada del lang-info, cliente LSP,
-  visualizador de fases [ ]
+  recreó DENTRO de suriaX, en `tooling/vscode`): gramática generada del
+  lang-info, cliente LSP sin dependencias de npm, depurador y banderas
+  configurables; se empaqueta en un `.vsix` [x]. Falta publicarla y probarla
+  dentro del editor [ ]
+- Servidor de lenguaje (`--lsp`) y depurador (`--dap`, sobre el intérprete) [x]
 
 ## Fase 11: Bootstrap (V1, el compilador escrito en suriaX)
 
@@ -328,9 +390,12 @@
   `sizeof`, `__cast__` y `#extern` quedan fuera (la V1 no los usa)
 - Punto fijo: la V1 se compila a sí misma [x] — las 30 unidades, idénticas a
   las de la V0 y estables al compilarse otra vez
-  (`test/bootstrap/test_punto_fijo.py`). Se adelantó a los diagnósticos
+  (`test/bootstrap/test_punto_fijo.py`). Alcanzado en la 0.4.0; hoy está
+  roto hasta que la V1 se ponga al día con la 0.4.1 (último punto). Se adelantó a los diagnósticos
   (decidido por el mantenedor): el punto fijo no los necesita
-- Diagnósticos (los mismos códigos y posiciones que la V0) [ ]
+- Diagnósticos (los mismos códigos y posiciones que la V0) [x] — en la 0.3.0
+- Ponerse al día con la V0 de la 0.4.1 (sintaxis, semántica y diagnósticos
+  nuevos) y regenerar la semilla [ ]
 
 Después del punto fijo:
 

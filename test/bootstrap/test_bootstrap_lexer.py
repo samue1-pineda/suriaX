@@ -33,10 +33,11 @@ _MAIN = os.path.join(_REPO, "main.py")
 _DRIVER = """#from io #import stdp
 #import frontend.tokens as tk
 #import frontend.lexer as lx
+#import frontend.diagnosticos as dg
 #import array.vector as vec
 
 fn main() -> int {
-    var vec.Vector<str> errores = vec.dynamic<str>(4);
+    var vec.Vector<dg.Diagnostico> errores = vec.dynamic<dg.Diagnostico>(4);
     var vec.Vector<tk.Token> toks = lx.tokenizar(__FUENTE__, &errores);
     var int i = 0;
     while (i < toks.len()) {
@@ -46,7 +47,7 @@ fn main() -> int {
     }
     var int e = 0;
     while (e < errores.len()) {
-        stdp.println("error " + errores.get(e));
+        stdp.println("error " + dg.texto(errores.get(e)));
         e = e + 1;
     }
     return 0;
@@ -65,14 +66,14 @@ def _v0(fuente: str):
     lexer = Lexer(fuente)
     tokens = lexer.tokenize()
     lineas = [f"{t.ln}:{t.col} {t.type.value} {t.lexeme}" for t in tokens]
-    return lineas, [e.code for e in lexer.errors]
+    return lineas, [f"{e.code} {e.line}:{e.column}" for e in lexer.errors]
 
 
 def _suriax(fuente: str):
     with tempfile.TemporaryDirectory(prefix="suriax-bootstrap-") as tmp:
         destino = os.path.join(tmp, "lib", "frontend")
         os.makedirs(destino)
-        for nombre in ("main.libsrx", "tokens.libsrx", "lexer.libsrx"):
+        for nombre in ("main.libsrx", "tokens.libsrx", "lexer.libsrx", "diagnosticos.libsrx"):
             shutil.copy(os.path.join(_FRONTEND, nombre), destino)
         programa = os.path.join(tmp, "driver.srcx")
         with open(programa, "w", encoding="utf-8") as fh:
@@ -88,8 +89,9 @@ def _suriax(fuente: str):
                 (linea.lstrip().startswith("unidad '") and " -> " in linea):
             continue
         if linea.startswith("error "):
-            # "error l:c LEXnnn: mensaje" -> "LEXnnn"
-            codigos.append(linea.split()[2].rstrip(":"))
+            # "error LEXnnn l:c mensaje" -> "LEXnnn l:c": el codigo Y la
+            # posicion, que es lo que un diagnostico tiene que compartir
+            codigos.append(" ".join(linea.split()[1:3]))
         else:
             lineas.append(linea)
     return lineas, codigos

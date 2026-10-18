@@ -25,19 +25,29 @@ from .reporting import Reporter, SilentReporter
 def execute(result: CompileResult, *,
             trace_exec: bool = False, trace_memory: bool = False,
             reporter: Optional[Reporter] = None,
-            argumentos: Optional[list] = None) -> int:
+            argumentos: Optional[list] = None,
+            pruebas: bool = False,
+            depurador=None) -> int:
     """Ejecuta el ``.phir`` de ``result`` EN PROCESO y devuelve su código.
+
+    Con ``pruebas`` no corre ``main``: corre los bloques ``test`` (``--test``)
+    y devuelve 1 si alguno falla. Siempre en el intérprete: la VM todavía no
+    corre pruebas.
 
     En proceso —sin subproceso ni reparseo— porque el HIR ya está en memoria
     del lado del compilador y volver a leerlo solo añadiría latencia. Con
     ``--debug`` la traza se ACUMULA en ``result.trace_events`` para el reporte
     en vez de imprimirse.
+
+    Con ``depurador`` (``runtime.interpreter.depurador.Depurador``) el
+    programa corre en el intérprete y se detiene donde él diga: la VM no se
+    puede depurar todavía.
     """
     reporter = reporter or SilentReporter()
     if not result.should_run or result.phir_path is None:
         return result.status
 
-    if result.motor == "compiler":
+    if result.motor == "compiler" and not pruebas and depurador is None:
         if trace_exec or trace_memory:
             reporter.warn("--trace-exec y --trace-memory son del interprete: "
                           "se ejecuta en el interprete")
@@ -67,8 +77,17 @@ def execute(result: CompileResult, *,
         fase = "interprete"
         # los errores DEL PROGRAMA (RTxxx, throw sin capturar) los atrapa
         # 'interp.run' y devuelve 70; lo que llegue aquí es del compilador.
-        exit_code = interp.run(image, {"interpreter": icfg},
-                               events=result.trace_events)
+        if depurador is not None:
+            # quien compilo sabe cual es el fuente del programa: un punto de
+            # parada se pone sobre ese archivo, no sobre el .phir.
+            depurador.fija_ruta(image.main, result.path)
+        if pruebas:
+            exit_code = interp.run_tests(image, {"interpreter": icfg},
+                                         depurador=depurador)
+        else:
+            exit_code = interp.run(image, {"interpreter": icfg},
+                                   events=result.trace_events,
+                                   depurador=depurador)
     except Exception as exc:  # noqa: BLE001 - se reporta como ICE, nunca se traga
         # Incluye HIRLoadError: el .phir lo acaba de escribir el propio
         # compilador, así que si su lector lo rechaza el fallo es del emisor

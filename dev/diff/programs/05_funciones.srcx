@@ -1,0 +1,57 @@
+// 05 — funciones y recursión: factorial, fibonacci, mcd y Ackermann pequeño.
+#from io #import stdp
+
+fn factorial(int n) -> int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn fib(int n) -> int {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn mcd(int a, int b) -> int {
+    if (b == 0) {
+        return a;
+    }
+    return mcd(b, a % b);
+}
+
+fn ackermann(int m, int n) -> int {
+    if (m == 0) {
+        return n + 1;
+    }
+    if (n == 0) {
+        return ackermann(m - 1, 1);
+    }
+    return ackermann(m - 1, ackermann(m, n - 1));
+}
+
+fn es_par(int n) -> bool {
+    if (n == 0) {
+        return true;
+    }
+    return es_impar(n - 1);
+}
+
+fn es_impar(int n) -> bool {
+    if (n == 0) {
+        return false;
+    }
+    return es_par(n - 1);
+}
+
+fn main() -> int {
+    stdp.println(f"factorial(10) = {factorial(10)}");
+    stdp.println(f"factorial(20) = {factorial(20)}");
+    stdp.println(f"fib(20) = {fib(20)}");
+    stdp.println(f"mcd(1071, 462) = {mcd(1071, 462)}");
+    stdp.println(f"ackermann(2, 3) = {ackermann(2, 3)}");
+    stdp.println(f"es_par(31) = {es_par(31)}");
+    return 0;
+}

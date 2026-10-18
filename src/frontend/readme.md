@@ -77,8 +77,9 @@ Escribirlo encontró fallos que ninguna prueba veía:
   `catch (T x)` de más arriba ya no lo reconocía. El parser lo necesitaba
   para "limpiar y relanzar". Corregido en los dos motores.
 - **Una f-string partida en dos líneas** (`f"a{x}"` y en la línea siguiente
-  `f"b{y}"`) ubica la `y` en la línea de la PRIMERA cadena con la columna
-  de la segunda. Está en `c_errorstfix.md`.
+  `f"b{y}"`) ubicaba la `y` en la línea de la PRIMERA cadena con la columna
+  de la segunda. Corregido en la 0.4.1 (las expresiones de una
+  interpolación llevan su posición real).
 
 Y lo que le faltó al lenguaje (lo marcado **ya existe**: el código de aquí
 todavía no lo usa):
@@ -105,9 +106,11 @@ Diferencias conocidas con la V0, fuera de las pruebas:
 ## El compilador ya se compila a sí mismo
 
 La meta era que la V1 leyera su propio fuente y emitiera un `.phir` IDÉNTICO,
-byte a byte, al de la V0. Se cumplió (el punto fijo, lote 19): la V1 compila
-sus 30 unidades —ella y cada librería que importa— igual que la V0, y
-compilada por sí misma vuelve a dar lo mismo. Cómo se llegó, lote por lote,
+byte a byte, al de la V0. Se cumplió en la 0.4.0 (el punto fijo, lote 19):
+la V1 compilaba sus 30 unidades —ella y cada librería que importa— igual que
+la V0, y compilada por sí misma volvía a dar lo mismo. **Hoy está roto**: la
+V1 no lee la sintaxis nueva de la 0.4.1 que ya usa la librería estándar (ver
+[c_errorstfix.md](../../c_errorstfix.md), sección 3). Cómo se llegó, lote por lote,
 y cómo reproducirlo, en [`src/readme.md`](../readme.md).
 
 Este lexer y este parser fueron el primer tramo. Ningún bloqueo del lenguaje

@@ -78,6 +78,33 @@ def stdlib_path() -> Optional[str]:
     ruta = os.path.join(raiz, "lib")
     return ruta if os.path.isdir(ruta) else None
 
+#: prefijo de una ruta dentro de la stdlib en el HIR (ver :func:`ruta_publica`)
+PREFIJO_STDLIB = "<stdlib>/"
+
+
+def ruta_publica(path: str, config: Optional[dict]) -> str:
+    """La ruta de una librería tal como viaja en el HIR (``Module.source_file``).
+
+    REPRODUCIBLE: no depende de en qué carpeta ni en qué máquina se compila.
+    Dentro de la stdlib, ``<stdlib>/IO/main.libsrx``; dentro del proyecto,
+    relativa a su raíz (``lib/calc.libsrx``); fuera de los dos, absoluta (no
+    hay contra qué anclarla). Siempre con ``/``. Antes era la absoluta, y el
+    mismo compilador daba otro ``.phir`` en otra carpeta (decisión del
+    mantenedor, fase V2). La V1 aplica la misma regla
+    (``semantica.enlazador.ruta_publica``).
+    """
+    absoluta = os.path.abspath(path)
+    stdlib = stdlib_path()
+    raiz = (config or {}).get("_root")
+    for base, prefijo in ((stdlib, PREFIJO_STDLIB), (raiz, "")):
+        if not base:
+            continue
+        base = os.path.abspath(base)
+        if os.path.normcase(absoluta).startswith(os.path.normcase(base) + os.sep):
+            return prefijo + absoluta[len(base) + 1:].replace(os.sep, "/")
+    return absoluta.replace(os.sep, "/")
+
+
 LIBSRX_EXT = ".libsrx"
 SRCX_EXT = ".srcx"
 
@@ -184,8 +211,15 @@ def package_parent(dir_path: str, folder_name: str) -> Optional[str]:
     return None
 
 
+def same_file(a: str, b: str) -> bool:
+    """¿``a`` y ``b`` nombran el mismo archivo? (absolutas, y sin distinguir
+    mayúsculas donde el sistema no las distingue)."""
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def find_library(lib: str, paths: List[str], *,
-                 packages_only: bool = False) -> Optional[Found]:
+                 packages_only: bool = False,
+                 skip: Optional[str] = None) -> Optional[Found]:
     """Localiza ``lib`` en ``paths`` y devuelve un :class:`Found`, o ``None``.
 
     Orden de preferencia por base: archivo ``.libsrx`` > paquete > ``.srcx``.
@@ -193,13 +227,21 @@ def find_library(lib: str, paths: List[str], *,
     ``packages_only``: un import PUNTEADO (``io.string``) solo puede
     satisfacerlo un paquete — los archivos planos homónimos se ignoran en
     vez de ganar por orden de búsqueda y bloquear el submódulo.
+
+    ``skip``: el archivo QUE IMPORTA. Nunca es la librería que pide: un
+    programa no es una librería de sí mismo, y una librería que se importa a
+    sí misma sería un ciclo de un paso. Antes ``excepciones.srcx`` con
+    ``#import excepciones`` se encontraba a SÍ MISMO (la carpeta del fuente
+    es la primera ruta) y el error era un ``SEM010 ... no termina en
+    '#export ...'`` que no nombraba la causa; ahora la búsqueda sigue y
+    encuentra la de la stdlib.
     """
     names = _name_candidates(lib)
     for base in paths:
         if not packages_only:
             for name in names:
                 candidate = os.path.join(base, name + LIBSRX_EXT)
-                if os.path.isfile(candidate):
+                if os.path.isfile(candidate) and not (skip and same_file(candidate, skip)):
                     return Found(os.path.abspath(candidate), "libsrx")
         for name in names:
             dir_path = os.path.join(base, name)
@@ -210,12 +252,13 @@ def find_library(lib: str, paths: List[str], *,
         if not packages_only:
             for name in names:
                 candidate = os.path.join(base, name + SRCX_EXT)
-                if os.path.isfile(candidate):
+                if os.path.isfile(candidate) and not (skip and same_file(candidate, skip)):
                     return Found(os.path.abspath(candidate), "srcx")
     return None
 
 
 __all__ = [
-    "Found", "search_paths", "find_library", "package_parent",
+    "Found", "search_paths", "find_library", "package_parent", "ruta_publica",
+    "same_file",
     "PACKAGE_PARENT", "LIBSRX_EXT", "SRCX_EXT",
 ]

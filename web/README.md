@@ -25,8 +25,8 @@ es la única frontera compartida.
 | Lector de wire-format | [`src/hir/wire.ts`](src/hir/wire.ts) | Decodifica protobuf sin dependencias: varint, 64 bits, UTF-8, campos desconocidos, tope de anidamiento. |
 | Escritor de wire-format | [`src/hir/write.ts`](src/hir/write.ts) | La contraparte: omite defectos de proto3, conserva los `oneof`. |
 | Modelo del HIR | [`src/hir/schema.ts`](src/hir/schema.ts) | Espejo 1:1 de `hir.proto`; cada `oneof` es una unión discriminada. |
-| Deserializador | [`src/hir/decode.ts`](src/hir/decode.ts) | `.phir` → `Module`, con fail-fast de `schema_version`. |
-| Re-serializador | [`src/hir/encode.ts`](src/hir/encode.ts) | `Module` → `.phir`. Cierra el ciclo: permite cachear el HIR optimizado y validar el lector contra el protobuf real. |
+| Deserializador | [`src/hir/decode.ts`](src/hir/decode.ts) | `.phir` → `Module`, con fail-fast de `schema_version`. Acepta los esquemas 1 (tipos inline, `--hir-schema 1`) y 2 (pool de tipos) y los decodifica al MISMO `Module` (`test/web/schema_v1.test.ts`). |
+| Re-serializador | [`src/hir/encode.ts`](src/hir/encode.ts) | `Module` → `.phir`. Cierra el ciclo: permite cachear el HIR optimizado y validar el lector contra el protobuf real. Escribe siempre el esquema 2. |
 | Linker de unidades | [`src/hir/link.ts`](src/hir/link.ts) | `Unit`/`Image` e índices de hooks, casts y dunders (espejo del intérprete). |
 | Política del target | [`src/target/policy.ts`](src/target/policy.ts) | **Qué** no puede correr el web, como datos. |
 | Contención | [`src/target/restrictions.ts`](src/target/restrictions.ts) | La hace cumplir sobre el HIR, con diagnósticos `WEB0xx` posicionados. |
@@ -89,6 +89,26 @@ codegen, no en runtime:
 | `WEB008` | `sizeof(T)` | Depende del layout nativo. |
 | `WEB900`/`WEB901` | `.phir` ilegible / nodo malformado | Errores del lector. |
 
+### Funciones como valores: `WEB103`, con cualquier política
+
+Una función usada como **valor** (tipo `fn(A) -> R`, `TypeKind.FUNCTION_TYPE` =
+13 en el HIR: guardarla en una variable, pasarla, devolverla, llamar a
+través de ella) hoy solo la ejecuta el intérprete. La contención la rechaza
+con `WEB103` en cada línea que la usa —una declaración (parámetro, campo,
+variable, retorno, `cast`) o cualquier expresión cuyo tipo la contenga, también
+dentro de un `?` o de los argumentos de un genérico—, y el mensaje dice cómo
+ejecutarla (`python V0/main.py <fuente>.srcx --run interpreter`).
+
+No es una capacidad de la política: ni `--unrestricted` la deja pasar, como
+tampoco deja pasar un `WEB901`. Un perfil puede habilitar lo que el codegen
+sabe traducir; esto no lo sabe, y antes de `WEB103` lo que salía era un
+`WEB101` ("tipo 'no representable'") y un `WEB100` ("'doble' no es una
+variable en alcance") que no decían qué faltaba. Va en la contención y no en
+el codegen para que el rechazo no dependa del DCE.
+
+`schema.formatType` escribe el tipo como `pretty.format_type`: `fn(int) ->
+int`, y entre paréntesis cuando va envuelto (`(fn(int) -> int)?`).
+
 ### Imprimir un valor calculado
 
 `stdp.println(f"total {x}")` **funciona**. No se construye una cadena: el
@@ -146,6 +166,47 @@ siendo el del export de WebAssembly, donde repetirlo produce un módulo
 inválido. Un identificador de suriaX no puede llevar `.`, así que cualificar
 basta para no chocar nunca con un nombre del usuario.
 
+### Las pruebas (`test`) no se ejecutan
+
+El target **lee** un `test` entero —su cuerpo, sus `expect` y las cláusulas
+`errfinally` y `finally`— y la contención lo revisa como cualquier otro
+código: un puntero dentro de una cláusula es `WEB002`. Pero no lo ejecuta: el
+DCE quita las pruebas (y lo que solo ellas usaban) y lo que baja a
+WebAssembly es el programa. El informe de `--json` las cuenta en
+`dce.<unidad>.tests`. Para correr las pruebas de un programa está el
+intérprete: `python V0/main.py prog.srcx --test`.
+
+### Perfiles: quién invoca elige la contención
+
+`--policy <nombre>` elige el perfil; el target no adivina dónde corre.
+
+| Perfil | Capacidades | Librerías |
+|---|---|---|
+| `web-v1` (por defecto) | ninguna habilitada | cualquiera; decide la capacidad |
+| `playground` | ninguna habilitada | **lista blanca**: `IO`, `math`, `excepciones` |
+| `unrestricted` (= `--unrestricted`) | todas | cualquiera |
+
+El del playground existe porque decidir solo por capacidad, que es lo
+correcto para el target, es ruidoso para quien escribe un programa en una
+página: un `#import text` daba cuarenta `WEB002` dentro de una librería que
+no escribió. Con la lista blanca es **un** `WEB007`, en su `#import`, que
+dice por qué, y el motivo distingue dos casos:
+
+- **nunca** — `sistema` (archivos, procesos, rutas): el playground no los
+  tiene. No es una carencia del codegen;
+- **todavía no** — `text`, `array`, `collections`, `d_types`, `mem`: el
+  target no sabe bajarlas. Cuando sepa, se añaden a `PLAYGROUND_UNITS`.
+
+Una unidad denegada no se revisa por dentro (ya se reportó donde se
+importa), y una unidad nueva de un paquete permitido nace denegada: la lista
+es unidad a unidad, sin comodines. Un nombre de perfil que no existe es un
+error (código 2), no el perfil por defecto: quien pidió `playground` y recibe
+`web-v1` cree estar contenido.
+
+```bash
+node web/main.ts prog.phir --json --policy playground
+```
+
 ### Habilitar algo
 
 Cuando una capacidad entre en soporte, se deriva la política; no se edita el
@@ -158,7 +219,7 @@ const conMath = withUnits(WEB_V1_POLICY, [{ alias: "MATH", hostPrimitives: [] }]
 
 ## El WIR (y por qué no es el MIR)
 
-El MIR es del backend **C++** (VM bytecode/JIT): un IR de **registros**, para
+El MIR es del backend **C++** (la VM de registros y, más adelante, el JIT): un IR de **registros**, para
 una máquina de registros. WebAssembly es otra máquina: una de **pila** con
 control de flujo **estructurado**. Dos objetivos distintos piden dos IR
 distintos, y forzar uno solo habría dejado a los dos a medias.
@@ -292,7 +353,7 @@ mismo programa se aceptaría o rechazaría según el nivel de optimización.
 ## Pruebas
 
 ```bash
-cd web && node --test "test/*.test.ts"     # 81 pruebas
+node --test test/web/*.test.ts            # 133 pruebas (desde la raíz)
 cd web && tsc --noEmit                     # verificación de tipos
 python test/main.py                        # las corre también desde la suite del repo
 ```

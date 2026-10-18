@@ -1,0 +1,365 @@
+/- semantica.muertos — la propiedad LINEAL dentro de cada función: lo que
+   ya no es de quien lo nombra (`V0/.../semantic/memory_check.py`, la última
+   pasada de la Semántica de la V0).
+
+ Una pasada por cuerpo, sin punto fijo ni análisis entre funciones:
+
+ - `move x` y después leer `x` -> `SEM004`; `move x` dos veces -> `SEM005`;
+ - `free x` y después leer `x` -> `SEM023`; `free x` dos veces -> `SEM024`;
+ - `free x` de algo movido -> `SEM004` (lo libera su nuevo dueño).
+
+ Se rastrean RUTAS estáticas (`x`, `o.it`, `o.it.v`): soltar `o` invalida
+ `o.it`, nunca al revés; un elemento (`a[i]`) no se rastrea (queda para el
+ MIR). Declarar o asignar un nombre lo REVIVE. Las ramas de un `if`, un
+ `match` o un `try` se miran con una COPIA y se UNEN al cerrar (movido en
+ alguna => movido después), salvo una rama que sale (`return`/`throw`). Un
+ `while` se mira una vez.
+
+ Es un módulo aparte porque no necesita tipos ni símbolos: el árbol, los
+ `throw` que ceden con un `move` implícito (los marca el resolver) y la lista
+ de diagnósticos.
+-/
+
+#import frontend.arbol as ar
+#import frontend.diagnosticos as dg
+#import semantica.nodos as nd
+#import array.vector as vec
+#import collections.dictionary as dic
+#import text
+
+/- Lo que ya no es de quien lo nombra: cada ruta con su MOTIVO ("move" o
+   "free") y la línea donde ocurrió. -/
+struct {
+    vec.Vector<str> rutas;
+    vec.Vector<str> motivos;
+    vec.Vector<int> lineas;
+} Muertos;
+
+/- Lo que la pasada necesita en todo el recorrido. -/
+struct {
+    dic.Dictionary<int, bool> ptr mueve;            // ThrowStmt que cede con 'move'
+    vec.Vector<dg.Diagnostico> ptr mutable ds;
+} Pasada;
+
+fn vacio() -> Muertos {
+    return Muertos{ rutas: vec.dynamic<str>(4), motivos: vec.dynamic<str>(4),
+                    lineas: vec.dynamic<int>(4) };
+}
+
+fn copia(Muertos ptr m) -> Muertos {
+    var Muertos c = vacio();
+    var int i = 0;
+    while (i < m.rutas.len()) {
+        c.rutas.push(m.rutas.get(i));
+        c.motivos.push(m.motivos.get(i));
+        c.lineas.push(m.lineas.get(i));
+        i = i + 1;
+    };
+    return c;
+}
+
+fn busca(Muertos ptr m, str ruta) -> int {
+    var int i = 0;
+    while (i < m.rutas.len()) {
+        if (m.rutas.get(i) == ruta) { return i; };
+        i = i + 1;
+    };
+    return -1;
+}
+
+fn pon(Muertos ptr mutable m, str ruta, str motivo, int linea) -> void {
+    var int i = busca(m, ruta);
+    if (i >= 0) {
+        m.motivos[i] = motivo;
+        m.lineas[i] = linea;
+        return;
+    };
+    m.rutas.push(ruta);
+    m.motivos.push(motivo);
+    m.lineas.push(linea);
+}
+
+/- `destino.update(otro)`: lo que murió en `otro` también murió en `destino`. -/
+fn une(Muertos ptr mutable destino, Muertos ptr otro) -> void {
+    var int i = 0;
+    while (i < otro.rutas.len()) {
+        pon(destino, otro.rutas.get(i), otro.motivos.get(i), otro.lineas.get(i));
+        i = i + 1;
+    };
+}
+
+/- Un valor NUEVO en `base` la revive, con todo lo que cuelga de ella. -/
+fn revive(Muertos ptr mutable m, str base) -> void {
+    var Muertos quedan = vacio();
+    var int i = 0;
+    while (i < m.rutas.len()) {
+        var str r = m.rutas.get(i);
+        if (r != base and not text.starts_with(r, base + ".")) {
+            quedan.rutas.push(r);
+            quedan.motivos.push(m.motivos.get(i));
+            quedan.lineas.push(m.lineas.get(i));
+        };
+        i = i + 1;
+    };
+    m.rutas = move quedan.rutas;
+    m.motivos = move quedan.motivos;
+    m.lineas = move quedan.lineas;
+}
+
+/- El índice de `ruta` o de algún ANCESTRO suyo que ya murió, o -1. -/
+fn de_ancestro(Muertos ptr m, str ruta) -> int {
+    var str prefijo = ruta;
+    while (true) {
+        var int i = busca(m, prefijo);
+        if (i >= 0) { return i; };
+        var int corte = -1;
+        var int k = 0;
+        while (k < len(prefijo)) {
+            if (prefijo[k] == '.') { corte = k; };
+            k = k + 1;
+        };
+        if (corte < 0) { return -1; };
+        prefijo = text.slice(prefijo, 0, corte);
+    };
+    return -1;
+}
+
+/- La ruta estática de `n` (`o.it.v`), o "" si no es una cadena de campos. -/
+fn ruta_de(vec.Vector<ar.Nodo> ptr a, int n) -> str {
+    var str c = nd.clase(a, n);
+    if (c == "Identifier") { return nd.atributo(a, n, "name"); };
+    if (c == "MemberAccess") {
+        var str base = ruta_de(a, nd.hijo(a, n, "obj"));
+        if (base == "") { return ""; };
+        return base + "." + nd.atributo(a, n, "member");
+    };
+    return "";
+}
+
+/- ¿El bloque termina SALIENDO (`return`, `throw`)? Lo que movió no llega
+   a la sentencia siguiente. -/
+fn sale(vec.Vector<ar.Nodo> ptr a, int bloque) -> bool {
+    var vec.Vector<int> ss = nd.hijos(a, bloque, "statements");
+    if (ss.len() == 0) { return false; };
+    var str c = nd.clase(a, ss.get(ss.len() - 1));
+    return c == "ReturnStmt" or c == "ThrowStmt";
+}
+
+fn reporta(Pasada ptr mutable p, str codigo, vec.Vector<ar.Nodo> ptr a, int n, str mensaje) -> void {
+    p.ds.push(dg.nuevo(codigo, nd.linea(a, n), nd.col(a, n), mensaje));
+}
+
+// ------------------------------------------------------------------------ //
+// el recorrido
+// ------------------------------------------------------------------------ //
+
+/- Verifica cada función (y cada `test`) del módulo cuya raíz es `raiz`. -/
+public fn verifica(vec.Vector<ar.Nodo> ptr a, int raiz, dic.Dictionary<int, bool> ptr mueve,
+                   vec.Vector<dg.Diagnostico> ptr mutable ds) -> void {
+    var Pasada p = Pasada{ mueve: mueve, ds: ds };
+    var vec.Vector<int> items = nd.hijos(a, raiz, "items");
+    var int i = 0;
+    while (i < items.len()) {
+        var int n = items.get(i);
+        if (nd.clase(a, n) == "DecoratorDecl") { n = nd.hijo(a, n, "target"); };
+        var str c = nd.clase(a, n);
+        if ((c == "FunctionDecl" or c == "TestDecl") and nd.hijo(a, n, "body") >= 0) {
+            var Muertos m = vacio();
+            sentencias(a, nd.hijo(a, n, "body"), &m, &p);
+        };
+        i = i + 1;
+    };
+}
+
+fn sentencias(vec.Vector<ar.Nodo> ptr a, int bloque, Muertos ptr mutable m,
+              Pasada ptr mutable p) -> void {
+    var vec.Vector<int> ss = nd.hijos(a, bloque, "statements");
+    var int i = 0;
+    while (i < ss.len()) {
+        sentencia(a, ss.get(i), m, p);
+        i = i + 1;
+    };
+}
+
+fn sentencia(vec.Vector<ar.Nodo> ptr a, int n, Muertos ptr mutable m, Pasada ptr mutable p) -> void {
+    var str c = nd.clase(a, n);
+    if (c == "MoveStmt") { marca_movido(a, nd.hijo(a, n, "target"), n, m, p); return; };
+    if (c == "ExprStmt") { expresion(a, nd.hijo(a, n, "expr"), m, p); return; };
+    if (c == "VarDecl") {
+        var int valor = nd.hijo(a, n, "value");
+        if (valor >= 0) { expresion(a, valor, m, p); };
+        revive(m, nd.atributo(a, n, "name"));
+        return;
+    };
+    if (c == "Block") { sentencias(a, n, m, p); return; };
+    if (c == "IfStmt") {
+        expresion(a, nd.hijo(a, n, "condition"), m, p);
+        var int entonces = nd.hijo(a, n, "then_block");
+        var Muertos en_then = copia(m);
+        sentencias(a, entonces, &en_then, p);
+        var Muertos en_else = copia(m);
+        var int otro = nd.hijo(a, n, "else_branch");
+        if (otro >= 0) {
+            if (nd.clase(a, otro) == "IfStmt") { sentencia(a, otro, &en_else, p); }
+            else { sentencias(a, otro, &en_else, p); };
+        };
+        // la unión conservadora, salvo por una rama que sale
+        if (not sale(a, entonces)) { une(m, &en_then); };
+        if (otro < 0 or nd.clase(a, otro) == "IfStmt" or not sale(a, otro)) { une(m, &en_else); };
+        return;
+    };
+    if (c == "WhileStmt") {
+        expresion(a, nd.hijo(a, n, "condition"), m, p);
+        sentencias(a, nd.hijo(a, n, "body"), m, p);     // una sola pasada
+        return;
+    };
+    if (c == "MatchStmt") {
+        expresion(a, nd.hijo(a, n, "subject"), m, p);
+        // cada rama parte de la ENTRADA; la unión se acumula aparte
+        var vec.Vector<int> ramas = nd.hijos(a, n, "cases");
+        var Muertos entrada = copia(m);
+        var int i = 0;
+        while (i < ramas.len()) {
+            var Muertos en_rama = copia(&entrada);
+            expresion(a, nd.hijo(a, ramas.get(i), "pattern"), &en_rama, p);
+            sentencia(a, nd.hijo(a, ramas.get(i), "body"), &en_rama, p);
+            une(m, &en_rama);
+            i = i + 1;
+        };
+        return;
+    };
+    if (c == "ReturnStmt") {
+        var int valor = nd.hijo(a, n, "value");
+        if (valor >= 0) { expresion(a, valor, m, p); };
+        return;
+    };
+    if (c == "FreeStmt") {
+        var int objetivo = nd.hijo(a, n, "target");
+        var str ruta = ruta_de(a, objetivo);
+        if (ruta == "") {
+            expresion(a, objetivo, m, p);   // una ruta dinámica: queda para el MIR
+            return;
+        };
+        var int i = de_ancestro(m, ruta);
+        if (i >= 0) {
+            ya_no_es_suyo(a, ruta, m.motivos.get(i), m.lineas.get(i), "free", n, p);
+            return;
+        };
+        pon(m, ruta, "free", nd.linea(a, n));
+        return;
+    };
+    if (c == "ThrowStmt") {
+        var int valor = nd.hijo(a, n, "value");
+        // 'throw r;' cede 'r' con un 'move' que la V0 inserta en el árbol
+        if (p.mueve.contains(n)) { marca_movido(a, valor, valor, m, p); }
+        else { expresion(a, valor, m, p); };
+        return;
+    };
+    if (c == "TryStmt") {
+        // el try y cada catch son caminos alternativos; un catch parte de la
+        // ENTRADA del try (el throw pudo saltar antes de cualquier 'move')
+        var Muertos entrada = copia(m);
+        var Muertos en_try = copia(m);
+        sentencias(a, nd.hijo(a, n, "try_block"), &en_try, p);
+        une(m, &en_try);
+        var vec.Vector<int> ramas = nd.hijos(a, n, "catches");
+        var int i = 0;
+        while (i < ramas.len()) {
+            var Muertos en_catch = copia(&entrada);
+            revive(&en_catch, nd.atributo(a, ramas.get(i), "name"));
+            sentencias(a, nd.hijo(a, ramas.get(i), "block"), &en_catch, p);
+            une(m, &en_catch);
+            i = i + 1;
+        };
+        var int final = nd.hijo(a, n, "finally_block");
+        if (final >= 0) { sentencias(a, final, m, p); };
+        return;
+    };
+    // break, continue, 'type', imports: nada que verificar
+}
+
+/- Una LECTURA de algo que su dueño ya soltó. -/
+fn uso(vec.Vector<ar.Nodo> ptr a, str ruta, str motivo, int linea, int n, Pasada ptr mutable p) -> void {
+    if (motivo == "move") {
+        reporta(p, "SEM004", a, n, f"'{ruta}' se usa después de 'move' (línea {linea})");
+    } else {
+        reporta(p, "SEM023", a, n, f"'{ruta}' se usa después de 'free' (línea {linea})");
+    };
+}
+
+/- Una operación (`move` o `free`) sobre algo que su dueño ya soltó: el
+   código lo decide POR QUÉ murió; la operación, si además es un doble. -/
+fn ya_no_es_suyo(vec.Vector<ar.Nodo> ptr a, str ruta, str motivo, int linea, str operacion, int n,
+                 Pasada ptr mutable p) -> void {
+    var bool doble = motivo == operacion;
+    if (motivo == "move") {
+        if (doble) { reporta(p, "SEM005", a, n, f"'{ruta}' ya fue movido (línea {linea})"); }
+        else {
+            reporta(p, "SEM004", a, n, f"'{ruta}' se movió en la línea {linea}: ya no es su valor, "
+                                       + "no se puede liberar desde aquí");
+        };
+    } else if (doble) {
+        reporta(p, "SEM024", a, n, f"'{ruta}' ya fue liberado (línea {linea})");
+    } else {
+        reporta(p, "SEM023", a, n, f"'{ruta}' se liberó en la línea {linea}: ya no existe");
+    };
+}
+
+/- `objetivo` deja de ser de quien lo nombraba (`move x;`, `move x`, el
+   `move` implícito de un `throw`); `en` es donde se informa. -/
+fn marca_movido(vec.Vector<ar.Nodo> ptr a, int objetivo, int en, Muertos ptr mutable m,
+                Pasada ptr mutable p) -> void {
+    var str ruta = ruta_de(a, objetivo);
+    if (ruta == "") {
+        expresion(a, objetivo, m, p);
+        return;
+    };
+    var int i = de_ancestro(m, ruta);
+    if (i >= 0) {
+        ya_no_es_suyo(a, ruta, m.motivos.get(i), m.lineas.get(i), "move", en, p);
+        return;
+    };
+    pon(m, ruta, "move", nd.linea(a, en));
+}
+
+fn expresion(vec.Vector<ar.Nodo> ptr a, int n, Muertos ptr mutable m, Pasada ptr mutable p) -> void {
+    if (n < 0) { return; };
+    var str c = nd.clase(a, n);
+    if (c == "MoveExpr") { marca_movido(a, nd.hijo(a, n, "operand"), n, m, p); return; };
+    if (c == "Identifier") {
+        var str nombre = nd.atributo(a, n, "name");
+        var int i = de_ancestro(m, nombre);
+        if (i >= 0) { uso(a, nombre, m.motivos.get(i), m.lineas.get(i), n, p); };
+        return;
+    };
+    if (c == "Assignment") {
+        expresion(a, nd.hijo(a, n, "value"), m, p);
+        var int destino = nd.hijo(a, n, "target");
+        // asignar da un valor NUEVO (y escribir no es leer)
+        if (nd.clase(a, destino) == "Identifier") {
+            revive(m, nd.atributo(a, destino, "name"));
+            return;
+        };
+        var str ruta = ruta_de(a, destino);
+        if (ruta != "") { revive(m, ruta); }
+        else { expresion(a, destino, m, p); };
+        return;
+    };
+    if (c == "MemberAccess") {
+        var str ruta = ruta_de(a, n);
+        if (ruta != "") {
+            var int i = de_ancestro(m, ruta);
+            if (i >= 0) { uso(a, ruta, m.motivos.get(i), m.lineas.get(i), n, p); };
+            return;
+        };
+    };
+    // lo demás: sus hijos, en orden
+    var vec.Vector<int> hs = ar.hijos(a, n);
+    var int i = 0;
+    while (i < hs.len()) {
+        expresion(a, hs.get(i), m, p);
+        i = i + 1;
+    };
+}
+
+#export as muertos

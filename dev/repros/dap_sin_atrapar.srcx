@@ -1,0 +1,4 @@
+fn main() -> int {
+    try { throw 5; } catch (str e) { };
+    return 0;
+}

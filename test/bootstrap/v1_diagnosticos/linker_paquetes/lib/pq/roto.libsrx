@@ -1,0 +1,2 @@
+public fn r( -> int { return 3; }
+#export as roto

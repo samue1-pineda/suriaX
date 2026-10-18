@@ -1,0 +1,6 @@
+# Un .phir es protobuf: BINARIO. Sin esto git lo decide por heurística: si no
+# hay un byte NUL lo toma por texto, y con core.autocrlf convierte sus 0x0A a
+# CRLF al clonar, salvo que tenga '\r' sueltos. Medido: 4 unidades de la
+# semilla (src/semilla/) no tienen NUL y hoy se salvan solo por sus '\r'
+# sueltos; una unidad futura sin ellos saldría corrupta.
+*.phir binary

@@ -1,0 +1,14 @@
+// 07 — error de ejecución: división entera por cero. El divisor sale de una
+// función para que no se pueda detectar al compilar.
+#from io #import stdp
+
+fn cero() -> int {
+    return 0;
+}
+
+fn main() -> int {
+    stdp.println("antes de dividir");
+    var int d = 10 / cero();
+    stdp.println(f"nunca se imprime: {d}");
+    return 0;
+}

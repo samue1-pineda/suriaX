@@ -69,6 +69,8 @@ def emit_stage(path: str, stage: str, *,
     compilador falló (ICE000, con su traza en stderr) y 0 en cualquier otro
     caso: el contenido se lee de stdout, no del exit code.
     """
+    from src.linker_p import nueva_compilacion
+    nueva_compilacion()     # la caché del linker es de ESTE volcado
     available = Parser.available_stages()
     if stage.lower() not in available:
         return (EXIT_FILE_NOT_FOUND,
@@ -164,28 +166,46 @@ def _with_file(entry: dict, path: str) -> dict:
     return entry
 
 
-def emit_index(path: str, *, from_stdin: bool = False) -> dict:
+def emit_index(path: str, *, from_stdin: bool = False,
+               source: Optional[str] = None) -> dict:
     """Canal del LSP para hover, ir a la definicion y completar: los
     diagnosticos (lo mismo que ``--emit-diagnostics``) MAS el indice del
     archivo —sus simbolos con tipo, firma, posicion y comentario, donde se usa
     cada uno y que va despues de un ``.``— en UNA sola pasada del frontend
     (ver ``src/frontend/semantic/index.py``). Sin indice si el parseo no fue
-    limpio: un arbol recuperado en modo panico no es de fiar."""
+    limpio: un arbol recuperado en modo panico no es de fiar.
+
+    Construir el indice tambien puede fallar, y el canal tiene la misma regla
+    que el de diagnosticos: nunca un traceback. Un fallo aqui sale como
+    ``ICE000`` entre los diagnosticos, con el indice vacio; antes escapaba
+    como excepcion (el primer consumidor en atraparlo fue el LSP)."""
+    from src.frontend.semantic.index import INDEX_VERSION
+    vacio = {"index_version": INDEX_VERSION, "symbols": [],
+             "references": [], "members": {}}
     estado: dict = {}
-    payload = emit_diagnostics(path, from_stdin=from_stdin, _estado=estado)
-    if "table" in estado:
+    payload = emit_diagnostics(path, from_stdin=from_stdin, source=source,
+                               _estado=estado)
+    if "table" not in estado:
+        payload.update(vacio)
+        return payload
+    try:
         from src.frontend.semantic.index import build_index
         payload.update(build_index(estado["program"], estado["table"], path=path,
                                    source=estado["source"],
                                    libraries=estado["libraries"]))
-    else:
-        from src.frontend.semantic.index import INDEX_VERSION
-        payload.update({"index_version": INDEX_VERSION, "symbols": [],
-                        "references": [], "members": {}})
+    except Exception as exc:  # noqa: BLE001 - el canal nunca lanza
+        ice = InternalCompilerError.desde(exc, phase="indice del editor",
+                                          file=path)
+        payload["diagnostics"].append({
+            "code": "ICE000", "message": ice.message, "line": 1, "column": 1,
+            "end_line": 1, "end_column": 2, "severity": "panic",
+            "phase": "index", "file": path})
+        payload.update(vacio)
     return payload
 
 
 def emit_diagnostics(path: str, *, from_stdin: bool = False,
+                     source: Optional[str] = None,
                      _estado: Optional[dict] = None) -> dict:
     """
     Canal del LSP(Extension): corre el frontend (lexer -> parser -> AST-tipado
@@ -196,7 +216,16 @@ def emit_diagnostics(path: str, *, from_stdin: bool = False,
     JSON, no del exit code (distingue 'compilo con errores' de 'el proceso fallo')
     
     Ante un archivo inexistente devuelve un diagnostico sintetico, no un traceback.
+
+    ``source``: el TEXTO a analizar, para quien lo tiene en memoria (un
+    servidor de lenguaje con el buffer del editor). Es lo mismo que
+    ``from_stdin`` sin pasar por la entrada estandar, que en un servidor es
+    el canal del protocolo. ``path`` sigue anclando las librerias.
     """
+    hay_texto = from_stdin or source is not None
+    from src.linker_p import nueva_compilacion
+    nueva_compilacion()     # la caché del linker es de ESTE análisis
+
     def _emit(payload: dict) -> dict:
         # Devuelve el DATO, no lo imprime: quien decide que esto salga por
         # stdout es la CLI. Un LSP embebido consume el dict directamente.
@@ -204,7 +233,7 @@ def emit_diagnostics(path: str, *, from_stdin: bool = False,
 
     # Con --stdin el archivo puede no existir todavia (un buffer sin guardar):
     # la ruta se usa para anclar la resolucion de .libsrx, no para leer.
-    if not from_stdin and not os.path.isfile(path):
+    if not hay_texto and not os.path.isfile(path):
         return _emit({"file": path, "diagnostics": [{
             "code": "IO000", "message": f"archivo no encontrado: {path}",
             "line": 1, "column": 1, "severity": "critical", "phase": "io"}]})
@@ -234,7 +263,9 @@ def emit_diagnostics(path: str, *, from_stdin: bool = False,
         # Mismo decodificado y normalizado de saltos de linea en ambos casos:
         # un buffer analizado por stdin tiene que dar exactamente los mismos
         # diagnosticos que el mismo texto guardado en disco.
-        if from_stdin:
+        if source is not None:
+            source = source_reader.decode(source.encode("utf-8"), file=path)
+        elif from_stdin:
             source = source_reader.decode(sys.stdin.buffer.read(), file=path)
         else:
             source = source_reader.read_file(path)

@@ -177,12 +177,15 @@ def test_lang_info_lexer():
         return reales[0].type.name
 
     for texto in ("0", "42", "1_000_000", "0xFF", "0xff_ff", "0b1010", "0B1_0",
-                  "0o755", "3.25", "1_0.2_5"):
+                  "0o755", "3.25", "1_0.2_5", "1e3", "2.5e-3", "1E+10",
+                  "1e300", "1_0e1_0", "0x1e3"):
         clase = "float" if re.fullmatch(numbers["float"], texto) else "int"
         assert re.fullmatch(numbers[clase], texto), texto
         assert un_literal(texto) == ("FLOAT_LIT" if clase == "float" else "INT_LIT"), texto
-    for texto in ("1__0", "1_", "0x", "0b2", "0o8", "0xFG"):
+    for texto in ("1__0", "1_", "0x", "0b2", "0o8", "0xFG", "1e", "1e+",
+                  "2.5e-", "1e_3"):
         assert not re.fullmatch(numbers["int"], texto), texto
+        assert not re.fullmatch(numbers["float"], texto), texto
         assert un_literal(texto) is None, texto
 
 

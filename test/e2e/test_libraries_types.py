@@ -155,3 +155,57 @@ fn main() -> int {
 }
 """,
     }, "valor=7 dos=0")
+
+
+# --------------------------------------------------------------------------- #
+# el nivel de módulo de una librería corre con SUS tipos
+# --------------------------------------------------------------------------- #
+
+_CON_GLOBALES = {
+    "cosa.libsrx": """
+enum Color { ROJO, VERDE, AZUL };
+struct { int x; float y; } Par;
+
+public var float mitad = 0.5;
+public var str texto_float = f"{mitad:.2f}";
+public var str texto_enum = f"{Color.VERDE}";
+public var Par par = Par{ x: 1, y: 2.5 };
+public var str texto_par = f"{par}";
+
+public fn dentro() -> str {
+    return f"{mitad:.2f} {Color.VERDE} {par}";
+}
+
+#export as cosa
+""",
+    "main.srcx": """
+#from io #import stdp
+#import cosa
+
+fn main() -> int {
+    stdp.println(cosa.texto_float);
+    stdp.println(cosa.texto_enum);
+    stdp.println(cosa.texto_par);
+    stdp.println(cosa.dentro());
+    return 0;
+}
+""",
+}
+
+
+def test_un_global_de_una_libreria_se_inicializa_con_los_tipos_de_la_libreria():
+    """El tipo de cada expresión viaja como un índice en el pool de SU
+    unidad. Las sentencias de nivel de módulo de una librería corrían con la
+    unidad principal puesta, así que ``f"{mitad:.2f}"`` en un ``var`` de la
+    librería resolvía su tipo en el pool del programa: un fallo interno
+    (``IndexError``) si el índice no existía allí, y otro tipo, en silencio,
+    si existía. Dentro de una función ya salía bien; la última línea lo
+    compara."""
+    code, out, err = run_project(_CON_GLOBALES, args=["--run", "interpreter"])
+    assert code == 0, err[-600:]
+    assert out.splitlines()[-4:] == [
+        "0.50",
+        "VERDE",
+        "Par{x: 1, y: 2.5}",
+        "0.50 VERDE Par{x: 1, y: 2.5}",
+    ], out

@@ -70,6 +70,32 @@ except Exception as exc:  # noqa: BLE001 - se recupera, pero conserva la causa
 _manager = None
 
 
+class _TaggedItem:
+    """Un :class:`~..values.EnumItem` (el entero de un enum estilo C que
+    sabe su nombre) dentro de una celda NATIVA.
+
+    El core C++ guarda todo ``int`` de Python como un ``int64_t`` y lo
+    devuelve como un ``int`` llano: el nombre se perdía en silencio y un
+    genérico volvía a escribir ``1`` en vez de ``VERDE`` (A08). Envuelto,
+    el core lo trata como cualquier objeto opaco (``T_EXTERN``) y vuelve
+    intacto. Solo existe entre ``_box`` y ``_unbox``."""
+
+    __slots__ = ("item",)
+
+    def __init__(self, item) -> None:
+        self.item = item
+
+
+def _box(value: Any) -> Any:
+    """Lo que se entrega al core: un ``EnumItem`` envuelto, lo demás igual."""
+    from ..values import EnumItem
+    return _TaggedItem(value) if isinstance(value, EnumItem) else value
+
+
+def _unbox(value: Any) -> Any:
+    return value.item if type(value) is _TaggedItem else value
+
+
 def manager():
     """Instancia (única por proceso) del backend de memoria nativo."""
     global _manager
@@ -96,17 +122,19 @@ class NativeCell:
     """Celda con nombre respaldada por ``memory_c``. Interfaz idéntica a
     :class:`~.pointer.Cell`; la maquina de estados vive en C++."""
 
-    __slots__ = ("_h", "name")
+    __slots__ = ("_h", "name", "released")
 
     def __init__(self, value: Any = None, *, name: str = "?") -> None:
         self.name = name
-        self._h = manager().create(value)
+        self._h = manager().create(_box(value))
+        #: la liberó '__release__' con su bloque (ver pointer.freed_message)
+        self.released = False
 
     @property
     def value(self) -> Any:
         """Lectura CRUDA (sin chequear estado): reprs/trazas, no una
         instruccion del lenguaje."""
-        return manager().peek(self._h)
+        return _unbox(manager().peek(self._h))
 
     @property
     def state(self) -> CellState:
@@ -116,10 +144,10 @@ class NativeCell:
         status, value = manager().read(self._h)
         if status != _OK:
             raise self._error(status, ln, col)
-        return value
+        return _unbox(value)
 
     def write(self, value: Any, *, ln: int = 0, col: int = 0) -> None:
-        status = manager().write(self._h, value)
+        status = manager().write(self._h, _box(value))
         if status != _OK:
             raise self._error(status, ln, col)
 
@@ -127,7 +155,7 @@ class NativeCell:
         status, value = manager().move_out(self._h)
         if status != _OK:
             raise self._error(status, ln, col)
-        return value
+        return _unbox(value)
 
     def free(self, *, ln: int = 0, col: int = 0) -> None:
         status = manager().free_cell(self._h)
@@ -136,6 +164,10 @@ class NativeCell:
 
     def _error(self, status: int, ln: int, col: int):
         cls = _STATUS_ERR.get(status, UseAfterFreeError)
+        if cls is UseAfterFreeError and self.released:
+            from .pointer import freed_message
+            return cls(f"{freed_message(self, 'se usa')} (backend nativo)",
+                       ln=ln, col=col)
         return cls(f"'{self.name}' {_MSG[cls]} (backend nativo)", ln=ln, col=col)
 
 

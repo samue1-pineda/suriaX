@@ -152,6 +152,12 @@ def parse(texto: str) -> Schema:
     """
     esquema = Schema()
     pila: List[object] = []          # Message | Dict (enum) en curso
+    # Los valores de un enum son HERMANOS del enum, no hijos (ámbito de C++):
+    # dos enums del mismo ámbito (el paquete, o el mensaje que los contiene)
+    # no pueden repetir un nombre de valor. protoc lo rechaza; aquí también,
+    # para que la suite lo vea aunque protoc no esté instalado.
+    valores_por_ambito: Dict[str, Dict[str, str]] = {}
+    enum_actual: List[tuple] = []   # (ambito, enum) de cada enum abierto
     oneof_actual: List[Optional[str]] = [None]
 
     for linea in _sin_comentarios(texto):
@@ -187,6 +193,9 @@ def parse(texto: str) -> Schema:
         if m:
             items: Dict[str, int] = {}
             esquema.enums[m.group(1)] = items
+            ambito = next((x.name for x in reversed(pila)
+                           if isinstance(x, Message)), "")
+            enum_actual.append((ambito, m.group(1)))
             pila.append(items)
             oneof_actual.append(None)
             continue
@@ -202,6 +211,17 @@ def parse(texto: str) -> Schema:
         if isinstance(actual, dict):
             m = _ITEM_ENUM.match(linea)
             if m:
+                ambito, enum = enum_actual[-1]
+                vistos = valores_por_ambito.setdefault(ambito, {})
+                otro = vistos.get(m.group(1))
+                if otro is not None and otro != enum:
+                    donde = f"del mensaje '{ambito}'" if ambito else "del paquete"
+                    raise SchemaError(
+                        f"el valor '{m.group(1)}' está en los enums '{otro}' y "
+                        f"'{enum}' a la vez: los valores de un enum comparten "
+                        f"el ámbito {donde} (protoc lo rechaza y el modelo "
+                        "C++ generado no compila)")
+                vistos[m.group(1)] = enum
                 actual[m.group(1)] = int(m.group(2))
             continue
         _leer_campo(actual, linea, oneof_actual[-1])

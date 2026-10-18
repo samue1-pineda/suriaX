@@ -77,13 +77,17 @@ def format_type(t, pb) -> str:
     genérico no sea decorativo).
     """
     kind = pb.TypeKind.Name(t.kind)
+    if kind == "FUNCTION_TYPE":
+        # 'args' son los parametros e 'inner' el retorno (ver hir.proto)
+        params = ", ".join(format_type(a, pb) for a in t.args)
+        return f"fn({params}) -> {format_type(t.inner, pb)}"
     if kind == "POINTER":
-        return format_type(t.inner, pb) + (" ptr mutable" if t.mut else " ptr")
+        return _wrapped(t.inner, pb) + (" ptr mutable" if t.mut else " ptr")
     if kind == "NULLABLE":
-        return format_type(t.inner, pb) + "?"
+        return _wrapped(t.inner, pb) + "?"
     if kind == "ERROR":
         # 'error' sola (sin inner) es un tipo legítimo: solo error.
-        return f"error {format_type(t.inner, pb)}" if t.HasField("inner") else "error"
+        return f"error {_wrapped(t.inner, pb)}" if t.HasField("inner") else "error"
     if kind == "NOMINAL":
         if not t.args:
             return t.name
@@ -94,11 +98,19 @@ def format_type(t, pb) -> str:
     return kind.lower()
 
 
+def _wrapped(t, pb) -> str:
+    """Un tipo funcion ENVUELTO se escribe entre parentesis: un sufijo tras
+    'fn(int) -> int' se pegaria al retorno ('(fn(int) -> int)?' no es
+    'fn(int) -> int?')."""
+    text = format_type(t, pb)
+    return f"({text})" if pb.TypeKind.Name(t.kind) == "FUNCTION_TYPE" else text
+
+
 class _Printer:
     """Estado de UNA impresión: stubs, pool de tipos resuelto y salida."""
 
     __slots__ = ("pb", "out", "types", "_kind_names", "marcas", "lineas",
-                 "_citadas")
+                 "_citadas", "_lambdas")
 
     def __init__(self, module, out: TextIO, marcas: Optional[dict] = None,
                  lineas: Optional[List[str]] = None) -> None:
@@ -115,6 +127,10 @@ class _Printer:
         self.marcas = marcas or {}
         self.lineas = lineas or []
         self._citadas: set = set()
+        # las LAMBDAS de la linea que se esta armando: una expresion es una
+        # sola linea, y el cuerpo de una lambda son sentencias. Se escriben
+        # justo DEBAJO de la linea que las contiene (ver 'line')
+        self._lambdas: list = []
 
     # -- utilidades ------------------------------------------------------ #
     def type_of(self, type_id: int) -> str:
@@ -132,6 +148,17 @@ class _Printer:
             body = f"{body}{' ' * pad}@{ln}:{col}"
         self.out.write(body)
         self.out.write("\n")
+        if self._lambdas:
+            # el cuerpo de cada lambda de esta linea, debajo y sangrado: que
+            # LEE del entorno (sus capturas) y sus sentencias
+            pending, self._lambdas = self._lambdas, []
+            for e in pending:
+                lam = e.lambda_expr
+                reads = (f"  ⟨lee: {', '.join(lam.captures)}⟩"
+                         if lam.captures else "")
+                self.line(f"cuerpo de la lambda{reads}", ln=e.ln, col=e.col,
+                          indent=indent + 1)
+                self.block(lam.body, indent + 2)
 
     # -- expresiones ----------------------------------------------------- #
     def expr(self, e) -> str:
@@ -160,16 +187,24 @@ class _Printer:
         """
         which = e.WhichOneof("node")
         text = self._expr_text(e, which)
-        tipo = self.type_of(e.type_id)
-        if tipo and which not in ("literal", "struct_literal", "identifier"):
+        tipo = self._type_suffix(e.type_id)
+        if tipo and which not in ("literal", "struct_literal", "identifier",
+                                  "lambda_expr"):
             return f"{text}:{tipo}"
         return text
+
+    def _type_suffix(self, type_id: int) -> str:
+        """El tipo como SUFIJO de una expresion. Un tipo funcion va entre
+        parentesis: sin ellos, 'f:fn(int) -> int(3)' no deja ver donde
+        termina el tipo y empieza la llamada."""
+        typ = self.type_of(type_id)
+        return f"({typ})" if typ.startswith("fn(") else typ
 
     def _expr_text(self, e, which: str) -> str:
         if which == "literal":
             return self._literal(e.literal)
         if which == "identifier":
-            tipo = self.type_of(e.type_id)
+            tipo = self._type_suffix(e.type_id)
             return f"{e.identifier.name}:{tipo}" if tipo else e.identifier.name
         if which == "binary":
             return (f"({self.expr(e.binary.left)} {e.binary.op} "
@@ -207,6 +242,14 @@ class _Printer:
                                        e.struct_literal.values))
             return (f"{e.struct_literal.type_name}{{{campos}}}"
                     + self._temp(e.struct_literal.temp_drop))
+        if which == "lambda_expr":
+            # la FIRMA en linea (ya es su tipo); el cuerpo, debajo
+            self._lambdas.append(e)
+            lam = e.lambda_expr
+            params = ", ".join(f"{self.type_of(p.type_id)} {p.name}"
+                               for p in lam.params)
+            ret = self.type_of(lam.return_type_id) or "void"
+            return f"lambda({params}) -> {ret}"
         if which == "interp":
             partes = []
             for part in e.interp.parts:
@@ -326,6 +369,11 @@ class _Printer:
         elif which == "throw_stmt":
             self.line(f"throw {self.expr(s.throw_stmt.value)}", ln=ln, col=col,
                       indent=indent)
+        elif which == "expect_stmt":
+            self.line(f"expect {self.expr(s.expect_stmt.condition)}", ln=ln, col=col,
+                      indent=indent)
+            if s.expect_stmt.HasField("body"):
+                self.block(s.expect_stmt.body, indent + 1)
         elif which == "try_stmt":
             self.line("try", ln=ln, col=col, indent=indent)
             self.block(s.try_stmt.try_block, indent + 1)
@@ -424,6 +472,12 @@ class _Printer:
         elif which == "test_decl":
             self.line(f'test "{d.test_decl.name}"', ln=d.ln, col=d.col)
             self.block(d.test_decl.body, 1)
+            if d.test_decl.HasField("errfinally"):
+                self.line("errfinally")
+                self.block(d.test_decl.errfinally, 1)
+            if d.test_decl.HasField("finally_block"):
+                self.line("finally")
+                self.block(d.test_decl.finally_block, 1)
             self.out.write("\n")
         elif which == "statement":
             self.stmt(d.statement, 0)

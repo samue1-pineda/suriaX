@@ -32,11 +32,11 @@ def parse_struct_decl(cursor: Cursor, ctx: ParserContext,
 
     cursor.expect(TokenType.R_BRACE)
     name_tok = cursor.expect_name()
-    params = parse_type_params(cursor, ctx)
+    params, bounds = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.SEMICOLON)
     return ast.StructDecl(ln=tok.ln, col=tok.col, fields=fields,
                           name=name_tok.lexeme, visibility=visibility,
-                          type_params=params)
+                          type_params=params, type_bounds=bounds)
 
 
 def _parse_field(cursor: Cursor, ctx: ParserContext) -> ast.Field:

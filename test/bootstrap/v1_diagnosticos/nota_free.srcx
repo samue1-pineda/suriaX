@@ -1,0 +1,10 @@
+struct { int v; } R;
+hook fn __free__(R ptr a) -> void { }
+struct { R r; R s; int n; } Duo;
+hook fn __free__(Duo ptr d) -> void {
+    if (d.n > 0) { } else { free &d.r; };
+    while (false) { free &d.s; };
+}
+struct { R r; } Uno;
+hook fn __free__(Uno ptr u) -> void { }
+fn main() -> int { var int x = "no"; return x; }

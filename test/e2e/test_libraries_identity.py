@@ -231,6 +231,9 @@ def test_el_vector_de_la_stdlib_guarda_cualquier_tipo():
         "    nums.push(20);\n"
         "    var vec.Vector<str> textos = vec.make<str>(2);\n"
         "    textos.push(\"hola\");\n"
+        # 'v[i] = x' REEMPLAZA un elemento que ya esta: antes se podia
+        # escribir en el espacio reservado, fuera de 'len'
+        "    textos.push(\"\");\n"
         "    textos[1] = \"mundo\";\n"
         "    stdp.println(f\"{nums.get(1)} {textos[0]} {textos[1]} {nums.len()}\");\n"
         "    return nums.pop();\n"

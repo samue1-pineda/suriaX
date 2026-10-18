@@ -1,0 +1,10 @@
+#from io #import stdp
+#import array.vector as vec
+fn main() -> int {
+    var vec.Vector<int> a = vec.dynamic<int>(4);
+    a.push(1);
+    var vec.Vector<int> b = a;
+    b.push(2);
+    stdp.println(f"a={a.len()} b={b.len()}");
+    return 0;
+}

@@ -42,6 +42,37 @@ struct {
 
 /- Los bytes del `.phir` del programa `raiz`, ya analizado en `r`.
    `fuente` es la ruta tal como la recibió el compilador (`source_file`). -/
+/- El primer nodo (en orden del fuente) que este emisor NO sabe emitir, o
+   -1. Un programa válido para la V0 puede usar algo que la V1 todavía no
+   compila (`src/readme.md`, el subconjunto): sin esta comprobación salía
+   como una sentencia VACÍA y el `.phir` quedaba incompleto sin aviso.
+   `no_emitible` es lo que marcó el resolver (`min`, una conversión implícita). -/
+public fn no_soportado(vec.Vector<ar.Nodo> ptr a, int n, res.Analisis ptr r) -> int {
+    if (que_falta(nd.clase(a, n)) != "" or r.no_emitible.contains(n)) { return n; };
+    var vec.Vector<int> hs = ar.hijos(a, n);
+    var int i = 0;
+    while (i < hs.len()) {
+        var int x = no_soportado(a, hs.get(i), r);
+        if (x >= 0) { return x; };
+        i = i + 1;
+    };
+    return -1;
+}
+
+/- Qué es una clase de nodo que la V1 no emite ("" si la emite). -/
+public fn que_falta(str clase) -> str {
+    if (clase == "TypeDecl") { return "una declaración 'type'"; };
+    if (clase == "TraitDecl" or clase == "TraitMethod") { return "un '@trait'"; };
+    if (clase == "DecoratorDecl") { return "un decorador (salvo un bloque '@impl')"; };
+    if (clase == "TestDecl") { return "un bloque 'test'"; };
+    if (clase == "ImportBinding") { return "un import ligado a un nombre ('const x = #import ...')"; };
+    if (clase == "SizeofExpr") { return "'sizeof'"; };
+    if (clase == "MetaTypeExpr") { return "el tipo 'type'"; };
+    if (clase == "SelfTypeExpr") { return "el tipo 'self'"; };
+    if (clase == "ErrorTypeExpr") { return "un tipo 'error'"; };
+    return "";
+}
+
 public fn emite(vec.Vector<ar.Nodo> ptr a, int raiz, res.Analisis ptr r, str fuente)
         -> vec.Vector<byte> {
     var Numeracion num = Numeracion{ pool: vec.dynamic<int>(16),

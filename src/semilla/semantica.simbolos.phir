@@ -1,0 +1,1732 @@
+lib/semantica/simbolos.libsrxê4
+—
+Local«
+Local> *	simbolos.LocalR
+clase
+clase@ *0R&
+
+es_mutable
+
+es_mutableB *0R
+nombre
+nombre? *0R"
+prestado
+prestadoC *0R
+tipo
+tipoA *0
+ù
+Simboloë
+Simbolo% *	simbolos.SimboloR
+clase
+clase' *0R
+col
+col) *0R$
+	constante
+	constante6 *0R*
+copias_desde
+copias_desde: *0R&
+
+es_mutable
+
+es_mutable+ *0R$
+	hook_kind
+	hook_kind0 *0R&
+
+hook_owner
+
+hook_owner1 *0R
+linea
+linea( *0R.
+miembros_desde
+miembros_desde. *0R"
+n_copias
+n_copias; *0R&
+
+n_miembros
+
+n_miembros/ *0R"
+n_params
+n_params- *0R$
+	n_tparams
+	n_tparams5 *0R
+nombre
+nombre& *0R
+opaco
+opaco8 *0R*
+params_desde
+params_desde, *0R
+tipo
+tipo* *0R(
+tipo_nombre
+tipo_nombre2 *0R,
+tparams_desde
+tparams_desde4 *0R(
+visibilidad
+visibilidad3 *0
+á
+Tabla˝
+TablaF *	simbolos.TablaRC
+	canonicos6
+	canonicosR *!	dictionary.Dictionary**0R1
+copias'
+copiasO *	vector.Vector*0R3
+dunders(
+dundersK *	vector.Vector*0R/
+hooks&
+hooksJ *	vector.Vector*0RC
+locales8
+localesP *%	vector.Vector*	simbolos.Local0R1
+marcas'
+marcasQ *	vector.Vector*0R5
+miembros)
+miembrosM *	vector.Vector*0R1
+params'
+paramsL *	vector.Vector*0RG
+simbolos;
+simbolosG *'	vector.Vector*	simbolos.Simbolo0R;
+tipos2
+tiposI *!	dictionary.Dictionary**0R3
+tparams(
+tparamsN *	vector.Vector*0R
+unidad
+unidadS *0R?
+valores4
+valoresH *!	dictionary.Dictionary**0
+⁄
+simbolos.Local«
+Local> *	simbolos.LocalR
+clase
+clase@ *0R&
+
+es_mutable
+
+es_mutableB *0R
+nombre
+nombre? *0R"
+prestado
+prestadoC *0R
+tipo
+tipoA *0
+¶
+simbolos.Simboloë
+Simbolo% *	simbolos.SimboloR
+clase
+clase' *0R
+col
+col) *0R$
+	constante
+	constante6 *0R*
+copias_desde
+copias_desde: *0R&
+
+es_mutable
+
+es_mutable+ *0R$
+	hook_kind
+	hook_kind0 *0R&
+
+hook_owner
+
+hook_owner1 *0R
+linea
+linea( *0R.
+miembros_desde
+miembros_desde. *0R"
+n_copias
+n_copias; *0R&
+
+n_miembros
+
+n_miembros/ *0R"
+n_params
+n_params- *0R$
+	n_tparams
+	n_tparams5 *0R
+nombre
+nombre& *0R
+opaco
+opaco8 *0R*
+params_desde
+params_desde, *0R
+tipo
+tipo* *0R(
+tipo_nombre
+tipo_nombre2 *0R,
+tparams_desde
+tparams_desde4 *0R(
+visibilidad
+visibilidad3 *0
+ê
+simbolos.Tabla˝
+TablaF *	simbolos.TablaRC
+	canonicos6
+	canonicosR *!	dictionary.Dictionary**0R1
+copias'
+copiasO *	vector.Vector*0R3
+dunders(
+dundersK *	vector.Vector*0R/
+hooks&
+hooksJ *	vector.Vector*0RC
+locales8
+localesP *%	vector.Vector*	simbolos.Local0R1
+marcas'
+marcasQ *	vector.Vector*0R5
+miembros)
+miembrosM *	vector.Vector*0R1
+params'
+paramsL *	vector.Vector*0RG
+simbolos;
+simbolosG *'	vector.Vector*	simbolos.Simbolo0R;
+tipos2
+tiposI *!	dictionary.Dictionary**0R3
+tparams(
+tparamsN *	vector.Vector*0R
+unidad
+unidadS *0R?
+valores4
+valoresH *!	dictionary.Dictionary**0
+DUNDER
+DUNDER# *
+ENUM
+ENUM *"
+	ENUM_ITEM
+	ENUM_ITEM *
+FIELD
+FIELD * 
+FUNCTION
+FUNCTION *
+HOOK
+HOOK! *
+IMPORT
+IMPORT  *
+PARAM
+PARAM *
+STRUCT
+STRUCT *
+TYPE
+TYPE" *
+VAR
+VAR *3
+abre+
+abreø *J	simbolos.Tabla I
+busca_dunder9
+busca_dunderÕ *J	simbolos.TablaJJE
+
+busca_hook7
+
+busca_hook± *J	simbolos.TablaJJC
+busca_local4
+busca_localŸ *J	simbolos.TablaJK
+busca_miembro:
+busca_miembro• *J	simbolos.TablaJJA
+
+busca_tipo3
+
+busca_tipoì *J	simbolos.TablaJC
+busca_valor4
+busca_valorç *J	simbolos.TablaJ<
+califica0
+calificac *J	simbolos.TablaJ7
+cierra-
+cierra¡ *J	simbolos.Tabla P
+copiaG
+copiaq *J	simbolos.TablaJJ	simbolos.Tabla R
+	copias_deE
+	copias_deá *	vector.Vector*J	simbolos.TablaJI
+define_dunder8
+define_dunder≈ *J	simbolos.Tabla JE
+define_hook6
+define_hook¿ *J	simbolos.Tabla JS
+define_localC
+define_local… *J	simbolos.Tabla JJJJQ
+define_prestado>
+define_prestado— *J	simbolos.Tabla JJW
+define_tipoH
+define_tipo∏ *J	simbolos.Tabla J	simbolos.SimboloY
+define_valorI
+define_valor∞ *J	simbolos.Tabla J	simbolos.Simbolo.
+dic'
+dic *	collections.dictionaryA
+
+es_mutable3
+
+es_mutableÔ *J	simbolos.TablaJM
+guardaC
+guarda™ *J	simbolos.Tabla J	simbolos.SimboloK
+inicio_del_bloque6
+inicio_del_bloque« *J	simbolos.TablaG
+local>
+local÷ *	simbolos.LocalJ	simbolos.TablaJE
+
+miembro_de7
+
+miembro_de† *J	simbolos.TablaJJA
+param_de5
+param_deõ *J	simbolos.TablaJJ^
+
+pon_copiasP
+
+pon_copiasì *J	simbolos.Tabla JJ	vector.Vector*b
+pon_miembrosR
+pon_miembrosÿ *J	simbolos.Tabla JJ	vector.Vector*^
+
+pon_paramsP
+
+pon_paramsÂ *J	simbolos.Tabla JJ	vector.Vector*`
+pon_tparamsQ
+pon_tparamsÚ *J	simbolos.Tabla JJ	vector.Vector*M
+simboloB
+simboloä *	simbolos.SimboloJ	simbolos.TablaJW
+simbolo_simpleE
+simbolo_simple† *	simbolos.SimboloJJJJJJ*
+tabla!
+tablaV *	simbolos.TablaI
+tipo_de_nombre7
+tipo_de_nombre‰ *J	simbolos.TablaJT
+
+tparams_deF
+
+tparams_deˇ *	vector.Vector*J	simbolos.TablaJ$
+vec
+vec *	array.vector_
+vector.VectorL
+	__index__
+û *	TJ	vector.Vector*	TJXbvector.Vectori
+vector.VectorV
+__index_set__
+§ *J	vector.Vector*	T JJ	TXbvector.Vector",z&
+array.vectorvecarray.vector"vec"@z:
+collections.dictionarydiccollections.dictionary"dic"0r*Z$
+constFUNCTION" R
+int(".r(Z"
+constSTRUCT" R
+int(",r&Z 
+constENUM" R
+int("1r+Z%
+const	ENUM_ITEM" R
+int("-r'Z!
+constPARAM" R
+int("+r%Z
+constVAR" R
+int("-r'Z!
+constFIELD" R
+int(". r( Z"
+constIMPORT"  R
+int(",!r&!Z 
+constHOOK"! R
+int
+(","r&"Z 
+constTYPE"" R
+int(".#r(#Z"
+constDUNDER"# R
+int("∂%ZØ
+Simbolo
+nombre	clase	lineacoltipo
+es_mutableparams_desden_paramsmiembros_desde
+n_miembros	hook_kind
+hook_ownertipo_nombrevisibilidadtparams_desde	n_tparams	constante	opacocopias_desden_copias"L>ZF
+Local
+nombre	clasetipo
+es_mutableprestado"≥FZ¨
+Tablasimbolosvalores	tipos	hooksdunders
+paramsmiembrostparams
+copiaslocales
+marcas	canonicos
+unidad"¯VRÒ
+tabla"Â
+‚WÇ⁄
+◊W 	 Õ
+simbolos.Tablasimbolosvalorestiposhooksdundersparamsmiembrostparamscopiaslocalesmarcas	canonicosunidad9W ä0
+Wö
+Wb
+vecdynamicW2 R
+int 6W@ ä-
+W@ö
+W@b
+dicmakeWS R
+int 6X ä-
+Xö
+Xb
+dicmakeX- R
+int9X9 ä0
+X9ö
+X9b
+vecdynamicXJ R
+int9Y ä0
+Yö
+Yb
+vecdynamicY- R
+int9Z ä0
+Zö
+Zb
+vecdynamicZ, R
+int9Z; ä0
+Z;ö
+Z;b
+vecdynamicZL R
+int9[ ä0
+[ö
+[b
+vecdynamic[- R
+int9[9 ä0
+[9ö
+[9b
+vecdynamic[J R
+int9\ ä0
+\ö
+\b
+vecdynamic\/ R
+int9\< ä0
+\<ö
+\<b
+vecdynamic\M R
+int6] ä-
+]ö
+]b
+dicmake]1 R
+int]> R
+str" 8	"¶cRü
+calificat
+
+nombre"˝
+`djZ
+;d	 r3
+==d	 ö
+	d	b
+tunidadd R
+str" 
+dÇ
+d" b
+nombre
+!eZ
+vari"e R
+int (
+êfrâ
+Kf rC
+<f b
+i1f ä(
+fb
+lenf b
+nombre
+strπ
+ng	jh
+Ig rA
+==(g í
+g b
+nombreg b
+ig R	
+char".
+g!Ç
+g( b
+nombre
+Gh	™@
+>h	 z6
+	h	b
+i)h r!
++h b
+ih R
+int
+cjÇ\
+Zj rR
++;j r3
++j ö
+	jb
+tunidadj R
+str".j b
+nombre8" qR√
+copia	desde
+i	hacia"ö
+krZe
+vars"Yr äP
+0rö)
+"r ö
+rb
+desdesimbolosgetr( b
+i
+vector.Vector(
+}sZw
+varparams"fs" ä]
+s"ö
+s"b
+vecdynamic<s3 r4
++s3 ö
+	s3b
+sn_paramss@ R
+int(
+!tZ
+vark"t R
+int (
+ûuró
+8u r0
+<u b
+ku ö
+	ub
+sn_params⁄
+éu™Ü
+Éu äz
+uö
+u b
+paramspushFu* ä=
+u*b
+
+param_deu3 
+b
+desdeu: b
+iu= b
+k
+vector.Vector
+GuB™@
+>uB z6
+	uBb
+k)uF r!
++uF b
+kuJ R
+int
+ÅvZ{
+varmiembros"hv$ ä_
+v$ö
+v$b
+vecdynamic>v5 r6
++ v5 ö
+	v5b
+s
+n_miembrosvD R
+int(
+-w™&
+$w z
+	wb
+kw	 R
+int 
+‚xr€
+:x r2
+<x b
+k x ö
+	xb
+s
+n_miembrosú
+–y	™»
+≈y	 äª
+!y	ö
+y	 b
+
+miembrospushÑy ä{
+yb
+copiay 
+b
+desdeHy$ ä?
+y$b
+
+miembro_dey/ 
+b
+desdey6 b
+iy9 b
+ky= b
+hacia
+vector.Vector
+Gz	™@
+>z	 z6
+	z	b
+k)z r!
++z b
+kz R
+int
+S|ZM
+vartparams";|# ä2
+|#b
+
+tparams_de|. 
+b
+desde|5 b
+i(
+Q}ZK
+varcopias":}" ä1
+}"b
+	copias_de}, 
+b
+desde}3 b
+i(
+M~ZG
+varnuevo"7~ ä.
+~b
+guarda~ b
+hacia~# b
+s(
+g™`
+^ äU
+b
+
+pon_params b
+hacia b
+nuevo ∫
+ b
+params
+rÄ™j
+hÄ ä^
+Äb
+pon_miembrosÄ b
+haciaÄ b
+nuevo!Ä  ∫
+Ä! b
+
+miembros
+pÅ™h
+fÅ ä\
+Åb
+pon_tparamsÅ b
+haciaÅ b
+nuevo Å ∫
+Å  b	
+tparams
+nÇ™f
+dÇ äZ
+Çb
+
+pon_copiasÇ b
+haciaÇ b
+nuevoÇ ∫
+Ç b
+copias
+ÉÇ
+É b
+nuevo8"…áR¡
+	copias_det
+i"£
+màZf
+vars"Zà äP
+/àö'
+ à ö
+
+àb
+tsimbolosgetà$ b
+i
+vector.Vector(
+ÄâZy
+varv"mâ äc
+âö
+âb
+vecdynamic@â. r7
++ â. ö
+
+â.b
+sn_copiasâ; R
+int(
+#äZ
+vark"ä R
+int (
+ÒãrÈ
+<ã r3
+<ã b
+k ã ö
+
+ãb
+sn_copias®
+÷å	™Õ
+ å	 äø
+å	ö
+å	 b
+vpushçå äÇ
+-åö%
+å ö
+
+åb
+tcopiasget@å r7
++$å ö
+
+åb
+scopias_desdeå. b
+k
+vector.Vector
+vector.Vector
+Mç	™E
+Cç	 z:
+
+ç	b
+k,ç r#
++ç b
+kç R
+int
+èÇ
+è b
+v8"äìRÇ
+
+pon_copiast	dueno	tipos"‘
+qîZj
+vars"^î äT
+/îö'
+ î ö
+
+îb
+tsimbolosgetî$ b
+dueno
+vector.Vector(
+Öï™}
+{ï zr
+$ïö
+ï b
+scopias_desdeJï ä@
+-ïö%
+ï ö
+
+ïb
+tcopiaslen
+vector.Vector
+sñ™k
+iñ z`
+ ñö
+ñ b
+sn_copias<ñ ä2
+ñö
+ñ b
+tiposlen
+vector.Vector
+#óZ
+vari"ó R
+int (
+€òr”
+Xò rO
+<ò b
+i<ò ä2
+òö
+ò b
+tiposlen
+vector.Vectorˆ
+§ô	™õ
+òô	 äç
+.ô	ö&
+ô	 ö
+
+ô	b
+tcopiaspushJô ä@
+ôö
+ô b
+tiposgetô! b
+i
+vector.Vector
+vector.Vector
+Mö	™E
+Cö	 z:
+
+ö	b
+i,ö r#
++ö b
+iö R
+int
+_ú™W
+Uú zL
+<úí4
+ ú ö
+
+úb
+tsimbolosú b
+duenoú b
+s8"–†R»
+simbolo_simple
+nombre	clase	lineacoltipo
+es_mutable"Ó
+Î¢Ç‚
+ﬂ¢  ‘
+simbolos.Simbolonombreclaselineacoltipo
+es_mutableparams_desden_paramsmiembros_desde
+n_miembros	hook_kind
+hook_ownertipo_nombrevisibilidadtparams_desde	n_tparams	constanteopacocopias_desden_copias¢ b
+nombre¢, b
+clase¢: b
+linea¢F b
+col¢Q b
+tipo£! b
+
+es_mutable£; R
+int £H R
+int §% R
+int §4 R
+int §B R
+int §Q R
+str" •" R
+str" •3 R
+str" •F R
+int •T R
+int ¶  R
+str" ¶+ R
+bool( ¶@ R
+int ¶M R
+int 8"Ç™R˙
+guardats"ﬂ
+e´™]
+[´ äQ
+0´ö(
+ ´ ö
+
+´b
+tsimbolospush´ b
+s
+vector.Vector
+v¨Çn
+l¨ rc
+-L¨ äB
+/¨ö'
+ ¨ ö
+
+¨b
+tsimboloslen
+vector.Vector¨ R
+int8"…∞R¡
+define_valorts"†
+©±j°
+x±	 än
+3±	ö+
+±	 ö
+
+±	b
+tvalorescontains± ö
+
+±b
+snombre
+dictionary.Dictionary%
+#±)Ç
+±0 R
+intˇˇˇˇˇˇˇˇˇ
+J≤ZC
+vari"7≤ ä-
+≤b
+guarda≤ b
+t≤ b
+s(
+ç≥™Ñ
+Å≥ äw
+.≥ö&
+≥ ö
+
+≥b
+tvaloresput≥ ö
+
+≥b
+snombre≥ b
+i
+dictionary.Dictionary
+¥Ç
+¥ b
+i8"√∏Rª
+define_tipots"õ
+ßπjü
+vπ	 äl
+1π	ö)
+π	 ö
+
+π	b
+ttiposcontainsπ ö
+
+πb
+snombre
+dictionary.Dictionary%
+#π'Ç
+π. R
+intˇˇˇˇˇˇˇˇˇ
+J∫ZC
+vari"7∫ ä-
+∫b
+guarda∫ b
+t∫ b
+s(
+äª™Å
+ª äu
+,ªö$
+ª ö
+
+ªb
+ttiposputª ö
+
+ªb
+snombreª b
+i
+dictionary.Dictionary
+ºÇ
+º b
+i8"ã¿RÉ
+define_hookti"d
+b¿=™Z
+X¿= äN
+-¿=ö%
+¿= ö
+
+¿=b
+thookspush¿J b
+i
+vector.Vector8"ﬁ≈R÷
+define_dunderti"¥
+m∆Zf
+vars"Z∆ äP
+/∆ö'
+ ∆ ö
+
+∆b
+tsimbolosget∆$ b
+i
+vector.Vector(
+ø«j∑
+ï«	 rã
+>=s«	 äi
+«	b
+busca_dunder« b
+t"« ö
+
+«b
+s
+hook_owner«' ö
+
+«'b
+snombre«4 R
+int 
+«9Ç
+«@ R
+bool( 
+d»™\
+Z» äP
+/»ö'
+» ö
+
+»b
+tdunderspush» b
+i
+vector.Vector
+…Ç
+… R
+bool(8"îÕRå
+busca_dundert
+	dueno
+nombre"€
+#ŒZ
+vark"Œ R
+int (
+éœrÜ
+gœ r^
+<œ b
+kKœ äA
+.œö&
+œ ö
+
+œb
+tdunderslen
+vector.Vectorö
+Ω–	Zµ
+vars"®– äù
+/–ö'
+ – ö
+
+–b
+tsimbolosgetY–( äO
+.–(ö&
+–( ö
+
+–(b
+tdundersget–6 b
+k
+vector.Vector
+vector.Vector(
+à—	jÄ
+ñ— rå
+andC— r:
+=="— ö
+
+—b
+s
+hook_owner— b
+dueno@—' r7
+==—' ö
+
+—'b
+snombre—3 b
+nombree
+c—=Ç[
+Y—D äO
+.—Dö&
+—D ö
+
+—Db
+tdundersget—R b
+k
+vector.Vector
+M“	™E
+C“	 z:
+
+“	b
+k,“ r#
++“ b
+k“ R
+int
+#‘Ç
+‘ R
+intˇˇˇˇˇˇˇˇˇ8"ùÿRï
+pon_miembrost	duenoindices"„
+qŸZj
+vars"^Ÿ äT
+/Ÿö'
+ Ÿ ö
+
+Ÿb
+tsimbolosgetŸ$ b
+dueno
+vector.Vector(
+ä⁄™Å
+⁄ zv
+&⁄ö
+⁄ b
+smiembros_desdeL⁄ äB
+/⁄ö'
+ ⁄ ö
+
+⁄b
+tmiembroslen
+vector.Vector
+w€™o
+m€ zd
+"€ö
+€ b
+s
+n_miembros>€ ä4
+!€ö
+€ b	
+indiceslen
+vector.Vector
+#‹Z
+vari"‹ R
+int (
+·›rŸ
+Z› rQ
+<› b
+i>› ä4
+!›ö
+› b	
+indiceslen
+vector.Vector˙
+®ﬁ	™ü
+úﬁ	 äë
+0ﬁ	ö(
+ ﬁ	 ö
+
+ﬁ	b
+tmiembrospushLﬁ äB
+!ﬁö
+ﬁ b	
+indicesgetﬁ% b
+i
+vector.Vector
+vector.Vector
+Mﬂ	™E
+Cﬂ	 z:
+
+ﬂ	b
+i,ﬂ r#
++ﬂ b
+iﬂ R
+int
+_·™W
+U· zL
+<·í4
+ · ö
+
+·b
+tsimbolos· b
+dueno· b
+s8"äÂRÇ
+
+pon_paramst	dueno	tipos"‘
+qÊZj
+vars"^Ê äT
+/Êö'
+ Ê ö
+
+Êb
+tsimbolosgetÊ$ b
+dueno
+vector.Vector(
+ÖÁ™}
+{Á zr
+$Áö
+Á b
+sparams_desdeJÁ ä@
+-Áö%
+Á ö
+
+Áb
+tparamslen
+vector.Vector
+sË™k
+iË z`
+ Ëö
+Ë b
+sn_params<Ë ä2
+Ëö
+Ë b
+tiposlen
+vector.Vector
+#ÈZ
+vari"È R
+int (
+€Ír”
+XÍ rO
+<Í b
+i<Í ä2
+Íö
+Í b
+tiposlen
+vector.Vectorˆ
+§Î	™õ
+òÎ	 äç
+.Î	ö&
+Î	 ö
+
+Î	b
+tparamspushJÎ ä@
+Îö
+Î b
+tiposgetÎ! b
+i
+vector.Vector
+vector.Vector
+MÏ	™E
+CÏ	 z:
+
+Ï	b
+i,Ï r#
++Ï b
+iÏ R
+int
+_Ó™W
+UÓ zL
+<Óí4
+ Ó ö
+
+Ób
+tsimbolosÓ b
+duenoÓ b
+s8"óÚRè
+pon_tparamst	duenonombres"ﬁ
+qÛZj
+vars"^Û äT
+/Ûö'
+ Û ö
+
+Ûb
+tsimbolosgetÛ$ b
+dueno
+vector.Vector(
+áÙ™
+}Ù zt
+%Ùö
+Ù b
+stparams_desdeKÙ äA
+.Ùö&
+Ù ö
+
+Ùb
+ttparamslen
+vector.Vector
+vı™n
+lı zc
+!ıö
+ı b
+s	n_tparams>ı ä4
+!ıö
+ı b	
+nombreslen
+vector.Vector
+#ˆZ
+vari"ˆ R
+int (
+‡˜rÿ
+Z˜ rQ
+<˜ b
+i>˜ ä4
+!˜ö
+˜ b	
+nombreslen
+vector.Vector˘
+ß¯	™û
+õ¯	 äê
+/¯	ö'
+¯	 ö
+
+¯	b
+ttparamspushL¯ äB
+!¯ö
+¯ b	
+nombresget¯$ b
+i
+vector.Vector
+vector.Vector
+M˘	™E
+C˘	 z:
+
+˘	b
+i,˘ r#
++˘ b
+i˘ R
+int
+_˚™W
+U˚ zL
+<˚í4
+ ˚ ö
+
+˚b
+tsimbolos˚ b
+dueno˚ b
+s8"ŒˇR∆
+
+tparams_det
+i"ß
+mÄZf
+vars"ZÄ äP
+/Äö'
+ Ä ö
+
+Äb
+tsimbolosgetÄ$ b
+i
+vector.Vector(
+ÅÅZz
+varr"nÅ äd
+Åö
+Åb
+vecdynamicAÅ. r8
++!Å. ö
+
+Å.b
+s	n_tparamsÅ< R
+int(
+#ÇZ
+vark"Ç R
+int (
+ÙÉrÏ
+=É r4
+<É b
+k!É ö
+
+Éb
+s	n_tparams™
+ÿÑ	™œ
+ÃÑ	 ä¡
+Ñ	ö
+Ñ	 b
+rpushèÑ äÑ
+.Ñö&
+Ñ ö
+
+Ñb
+ttparamsgetAÑ r8
++%Ñ ö
+
+Ñb
+stparams_desdeÑ0 b
+k
+vector.Vector
+vector.Vector
+MÖ	™E
+CÖ	 z:
+
+Ö	b
+k,Ö r#
++Ö b
+kÖ R
+int
+áÇ
+á b
+r8"âäRÅ
+simbolot
+i"f
+dä4Ç\
+Zä; äP
+/ä;ö'
+ ä; ö
+
+ä;b
+tsimbolosgetäJ b
+i
+vector.Vector8"æçR∂
+busca_valort
+
+nombre"ë
+Èéj·
+ké	 äa
+3é	ö+
+é	 ö
+
+é	b
+tvalorescontainsé b
+nombre
+dictionary.Dictionaryr
+pé'Çh
+fé. ä\
+.é.ö&
+é. ö
+
+é.b
+tvaloresgeté< b
+nombre
+dictionary.Dictionary
+#èÇ
+è R
+intˇˇˇˇˇˇˇˇˇ8"©ìR°
+
+busca_tipot
+
+nombre"˝
+Âîj›
+iî	 ä_
+1î	ö)
+î	 ö
+
+î	b
+ttiposcontainsî b
+nombre
+dictionary.Dictionaryp
+nî%Çf
+dî, äZ
+,î,ö$
+î, ö
+
+î,b
+ttiposgetî8 b
+nombre
+dictionary.Dictionary
+ÌñjÂ
+mñ	 äc
+5ñ	ö-
+!ñ	 ö
+
+ñ	b
+t	canonicoscontainsñ b
+nombre
+dictionary.Dictionaryt
+rñ)Çj
+hñ0 ä^
+0ñ0ö(
+!ñ0 ö
+
+ñ0b
+t	canonicosgetñ@ b
+nombre
+dictionary.Dictionary
+#óÇ
+ó R
+intˇˇˇˇˇˇˇˇˇ8"öõRí
+param_det
+ik"Ó
+ÎúÇ‚
+ﬂú ä‘
+-úö%
+ú ö
+
+úb
+tparamsgetëú rá
++tú öj
+Zú äP
+/úö'
+ ú ö
+
+úb
+tsimbolosgetú( b
+i
+vector.Vectorparams_desdeú: b
+k
+vector.Vector8"††Rò
+
+miembro_det
+ik"Ú
+Ô°ÇÊ
+„° äÿ
+/°ö'
+ ° ö
+
+°b
+tmiembrosgetì° râ
++v° öl
+Z° äP
+/°ö'
+ ° ö
+
+°b
+tsimbolosget°* b
+i
+vector.Vectormiembros_desde°> b
+k
+vector.Vector8"¶•Rû
+busca_miembrot
+i
+nombre"
+#¶Z
+vark"¶ R
+int (
+ÖßZ~
+varn"rß öh
+Zß äP
+/ßö'
+ ß ö
+
+ßb
+tsimbolosgetß  b
+i
+vector.Vector
+n_miembros(
+õ®rì
+(® r
+<® b
+k® b
+nÊ
+\©	ZU
+varm"I© ä?
+©b
+
+miembro_de©  
+b
+t©# b
+i©& b
+k(
+∂™	jÆ
+ë™ rá
+==n™ öd
+Z™ äP
+/™ö'
+ ™ ö
+
+™b
+tsimbolosget™ b
+m
+vector.Vectornombre™) b
+nombre
+™3Ç
+™: b
+m
+M´	™E
+C´	 z:
+
+´	b
+k,´ r#
++´ b
+k´ R
+int
+#≠Ç
+≠ R
+intˇˇˇˇˇˇˇˇˇ8"ã±RÉ
+
+busca_hookt
+	duenokind"÷
+#≤Z
+vark"≤ R
+int (
+â≥rÅ
+e≥ r\
+<≥ b
+kI≥ ä?
+,≥ö$
+≥ ö
+
+≥b
+thookslen
+vector.Vectoró
+ª¥	Z≥
+vars"¶¥ äõ
+/¥ö'
+ ¥ ö
+
+¥b
+tsimbolosgetW¥( äM
+,¥(ö$
+¥( ö
+
+¥(b
+thooksget¥4 b
+k
+vector.Vector
+vector.Vector(
+áµ	jˇ
+óµ rç
+andCµ r:
+=="µ ö
+
+µb
+s
+hook_ownerµ b
+duenoAµ' r8
+==!µ' ö
+
+µ'b
+s	hook_kindµ6 b
+kindc
+aµ>ÇY
+WµE äM
+,µEö$
+µE ö
+
+µEb
+thooksgetµQ b
+k
+vector.Vector
+M∂	™E
+C∂	 z:
+
+∂	b
+k,∂ r#
++∂ b
+k∂ R
+int
+#∏Ç
+∏ R
+intˇˇˇˇˇˇˇˇˇ8"¬øR∫
+abret"®
+•ø/™ú
+ôø/ äé
+.ø/ö&
+ø/ ö
+
+ø/b
+tmarcaspushKø= äA
+.ø=ö&
+ø= ö
+
+ø=b
+tlocaleslen
+vector.Vector
+vector.Vector8"–¡R»
+cierrat"¥
+a¬ZZ
+varhasta"J¬ ä@
+-¬ö%
+¬ ö
+
+¬b
+tmarcaspop
+vector.Vector(
+Œ√r∆
+k√ rb
+>K√ äA
+.√ö&
+√ ö
+
+√b
+tlocaleslen
+vector.Vector√ b
+hastaW
+U√'™M
+K√' äA
+.√'ö&
+√' ö
+
+√'b
+tlocalespop
+vector.Vector8"Ì«RÂ
+inicio_del_bloquet
+"∆
+√«3Ç∫
+∑«: ä¨
+-«:ö%
+«: ö
+
+«:b
+tmarcasgetj«G ra
+-J«G ä@
+-«Gö%
+«G ö
+
+«Gb
+tmarcaslen
+vector.Vector«X R
+int
+vector.Vector8"ÿ…R–
+define_localt
+nombre	clasetipo
+es_mutable"Ö
+ÇÀ™˘
+ˆÀ äÎ
+/Àö'
+À ö
+
+Àb
+tlocalespush¶À  õ
+simbolos.Localnombreclasetipo
+es_mutableprestadoÀ# b
+nombreÀ2 b
+claseÀ? b
+tipoÀQ b
+
+es_mutableÃ% R
+bool( 
+vector.Vector8"∫—R≤
+define_prestadot
+nombretipo"ˇ
+¸“™Û
+“ äÂ
+/“ö'
+“ ö
+
+“b
+tlocalespush†“  ï
+simbolos.Localnombreclasetipo
+es_mutableprestado“# b
+nombre“2 b
+VAR“= b
+tipo“O R
+bool( ”% R
+bool(
+vector.Vector8"Ö÷R~
+localt
+i"e
+c÷0Ç[
+Y÷7 äO
+.÷7ö&
+÷7 ö
+
+÷7b
+tlocalesget÷E b
+i
+vector.Vector8"ñŸRé
+busca_localt
+
+nombre"È
+~⁄Zw
+vari"k⁄ rb
+-K⁄ äA
+.⁄ö&
+⁄ ö
+
+⁄b
+tlocaleslen
+vector.Vector⁄# R
+int(
+¡€rπ
+-€ r$
+>=€ b
+i€ R
+int á
+µ‹	j≠
+ê‹ rÜ
+==m‹ öc
+Y‹ äO
+.‹ö&
+‹ ö
+
+‹b
+tlocalesget‹ b
+i
+vector.Vectornombre‹( b
+nombre
+‹2Ç
+‹9 b
+i
+M›	™E
+C›	 z:
+
+›	b
+i,› r#
+-› b
+i› R
+int
+#ﬂÇ
+ﬂ R
+intˇˇˇˇˇˇˇˇˇ8"Ë‰R‡
+tipo_de_nombret
+
+nombre"∏
+TÂZM
+varl"AÂ ä7
+Âb
+busca_localÂ 
+b
+tÂ  b
+nombre(
+∞Êj®
+-Ê	 r$
+>=Ê	 b
+lÊ R
+int w
+uÊÇm
+kÊ öa
+YÊ äO
+.Êö&
+Ê ö
+
+Êb
+tlocalesgetÊ( b
+l
+vector.Vectortipo
+TÁZM
+varg"AÁ ä7
+Áb
+busca_valorÁ 
+b
+tÁ  b
+nombre(
+±Ëj©
+-Ë	 r$
+>=Ë	 b
+gË R
+int x
+vËÇn
+lË öb
+ZË äP
+/Ëö'
+ Ë ö
+
+Ëb
+tsimbolosgetË) b
+g
+vector.Vectortipo
+#ÈÇ
+È R
+intˇˇˇˇˇˇˇˇˇ8"ËÔR‡
+
+es_mutablet
+
+nombre"º
+TZM
+varl"A ä7
+b
+busca_local 
+b
+t  b
+nombre(
+∂ÒjÆ
+-Ò	 r$
+>=Ò	 b
+lÒ R
+int }
+{ÒÇs
+qÒ ög
+YÒ äO
+.Òö&
+Ò ö
+
+Òb
+tlocalesgetÒ( b
+l
+vector.Vector
+es_mutable
+TÚZM
+varg"AÚ ä7
+Úb
+busca_valorÚ 
+b
+tÚ  b
+nombre(
+∑ÛjØ
+-Û	 r$
+>=Û	 b
+gÛ R
+int ~
+|ÛÇt
+rÛ öh
+ZÛ äP
+/Ûö'
+ Û ö
+
+Ûb
+tsimbolosgetÛ) b
+g
+vector.Vector
+es_mutable
+ÙÇ
+Ù R
+bool(8"˜Ç
+
+simbolos*!
+array.vectorarray.vector.phir*5
+collections.dictionarycollections.dictionary.phir2 2222'	vector.Vector*	simbolos.Simbolo2!	dictionary.Dictionary**2	vector.Vector*2	vector.Vector*2%	vector.Vector*	simbolos.Local2	simbolos.Tabla2	simbolos.Tabla22	simbolos.Tabla 2	simbolos.Simbolo22	vector.Vector* 2	vector.Vector* 2	vector.Vector*2	vector.Vector*2	simbolos.Local

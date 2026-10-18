@@ -1,0 +1,6 @@
+#from io #import stdp
+#import text
+fn main() -> int {
+    stdp.println(f"{text.starts_with("hola", "ho")}");
+    return 0;
+}

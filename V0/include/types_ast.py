@@ -34,6 +34,7 @@ class TypeKind(Enum):
     ERROR = auto()       # 'error T' (inner) o 'error' solo (inner None): union T-o-error
     SELF = auto()        # placeholder 'self' en la firma de un trait (ver SELF_TYPE)
     BYTE = auto()        # 'byte': entero SIN signo de 8 bits (0..255)
+    FUNCTION = auto()    # 'fn(A, B) -> R': 'args' = parametros, 'inner' = retorno
 
 
 @dataclass(slots=True, frozen=True)
@@ -53,6 +54,15 @@ class Type:
     compilador no los puede confundir. Una tupla (no lista) para que ``Type``
     siga siendo hashable — se usa como clave en la tabla de conversiones y en
     el pool de tipos del HIR.
+
+    Un tipo ``FUNCTION`` (``fn(int, str) -> bool``) REUSA los dos campos en
+    vez de añadir otros: ``args`` son los tipos de sus PARAMETROS, en orden, e
+    ``inner`` el de su RETORNO (``void`` si no devuelve nada). Es la misma
+    forma que tiene en el HIR, y por eso todo lo que ya recorre ``args`` e
+    ``inner`` (igualdad, hash, el pool de tipos) lo trata bien sin saber que
+    existe. Lo que SI tiene que saberlo es quien reconstruye un tipo por
+    partes (sustituir, canonicalizar): un ``Type(t.kind, inner=...)`` sin
+    ``args`` perderia los parametros.
     """
 
     kind: TypeKind
@@ -62,19 +72,42 @@ class Type:
     args: Tuple["Type", ...] = ()
 
     def __repr__(self) -> str:
+        """El tipo escrito como se escribe en el LENGUAJE (``C ptr mutable``).
+
+        Es el texto de todos los diagnosticos, del indice del editor y de los
+        volcados. Fue prefijo (``ptr mutable C``) por historia del frontend,
+        y por eso habia dos formateadores que no coincidian: los mensajes que
+        usaban este hablaban al reves de como se escribe el codigo."""
+        if self.kind is TypeKind.FUNCTION:
+            params = ", ".join(repr(a) for a in self.args)
+            return f"fn({params}) -> {self.inner!r}"
         if self.kind is TypeKind.POINTER:
-            return f"ptr mutable {self.inner!r}" if self.mut else f"ptr {self.inner!r}"
+            return f"{_parenthesized(self.inner)} ptr mutable" if self.mut \
+                else f"{_parenthesized(self.inner)} ptr"
         if self.kind is TypeKind.NULLABLE:
-            return f"{self.inner!r}?"
+            return f"{_parenthesized(self.inner)}?"
         if self.kind is TypeKind.NOMINAL:
             if self.args:
                 return f"{self.name}<{', '.join(repr(a) for a in self.args)}>"
             return f"{self.name}"
         if self.kind is TypeKind.ERROR:
-            return f"error {self.inner!r}" if self.inner is not None else "error"
+            return f"error {_parenthesized(self.inner)}" \
+                if self.inner is not None else "error"
         if self.kind is TypeKind.SELF:
             return "self"
         return self.kind.name.lower()
+
+
+def _parenthesized(t: Optional[Type]) -> str:
+    """``repr`` de ``t``, entre parentesis si es un tipo funcion.
+
+    Un sufijo escrito tras ``fn(int) -> int`` se pega al RETORNO
+    (``fn(int) -> int?`` devuelve un ``int?``), asi que el tipo funcion
+    envuelto se escribe con parentesis: ``(fn(int) -> int)?``. Sin ellos el
+    texto de un diagnostico describiria otro tipo."""
+    if t is not None and t.kind is TypeKind.FUNCTION:
+        return f"({t!r})"
+    return repr(t)
 
 
 # --- tabla O(1) de tipos primitivos, construida una sola vez al importar ---
@@ -133,6 +166,16 @@ def error_of(inner: Optional[Type]) -> Type:
     return Type(TypeKind.ERROR, inner=inner)
 
 
+def function_of(params: Tuple[Type, ...], ret: Type) -> Type:
+    """``fn(params) -> ret``: el tipo de una funcion usada como VALOR."""
+    return Type(TypeKind.FUNCTION, inner=ret, args=tuple(params))
+
+
+def is_function(t: Optional[Type]) -> bool:
+    """¿``t`` es un tipo funcion (sin envolver)?"""
+    return t is not None and t.kind is TypeKind.FUNCTION
+
+
 def is_meta(t: Optional[Type]) -> bool:
     """¿``t`` es el metatipo ``type``? (helper para no comparar ``kind`` a mano)"""
     return t is not None and t.kind is TypeKind.META
@@ -149,5 +192,7 @@ __all__ = [
     "nullable_of",
     "nominal",
     "error_of",
+    "function_of",
+    "is_function",
     "is_meta",
 ]

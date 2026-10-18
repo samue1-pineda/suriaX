@@ -1,0 +1,9 @@
+#from io #import stdp
+#import sistema
+#import array.vector as vec
+fn main() -> int {
+    var vec.Vector<str> orden = vec.dynamic<str>(1);
+    orden.push("dumps");
+    var sistema.comandos.Resultado r = sistema.comandos.ejecutar(&orden);
+    return 0;
+}

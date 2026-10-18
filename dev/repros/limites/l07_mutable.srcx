@@ -1,0 +1,7 @@
+fn main() -> int {
+    var int n = 1;
+    var int ptr pn = &n;
+    var (int ptr mutable)? q = null;
+    var int ptr r = q ?? pn;
+    return 0;
+}

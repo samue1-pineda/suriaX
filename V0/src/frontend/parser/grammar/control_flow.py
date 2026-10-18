@@ -128,11 +128,22 @@ def parse_return_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ReturnStmt:
     return ast.ReturnStmt(ln=tok.ln, col=tok.col, value=value)
 
 
+def _jump_out_of_loop(word: str, ctx: ParserContext) -> str:
+    """El texto del PAR013 de un ``break``/``continue`` sin bucle. Si hay un
+    bucle FUERA de la lambda que lo contiene, la causa es la lambda (A03)."""
+    if ctx.lambda_hides_loop:
+        return (f"'{word}' dentro de una lambda no llega al bucle de fuera: "
+                "la lambda es una funcion aparte y corta el bucle ('break' y "
+                "'continue' solo valen en un bucle de su propio cuerpo). Para "
+                "parar desde ella, devuelve un valor y decide fuera")
+    return f"'{word}' fuera de un bucle"
+
+
 def parse_break_stmt(cursor: Cursor, ctx: ParserContext) -> ast.BreakStmt:
     tok = cursor.expect(TokenType.BREAK)
     if not ctx.in_loop():
         raise ParseError.InvalidStatementError(
-            "'break' fuera de un bucle", line=tok.ln, column=tok.col,
+            _jump_out_of_loop("break", ctx), line=tok.ln, column=tok.col,
         )
     if ctx.jump_leaves_finally():
         raise ParseError.ExitFromFinallyError(
@@ -147,7 +158,7 @@ def parse_continue_stmt(cursor: Cursor, ctx: ParserContext) -> ast.ContinueStmt:
     tok = cursor.expect(TokenType.CONTINUE)
     if not ctx.in_loop():
         raise ParseError.InvalidStatementError(
-            "'continue' fuera de un bucle", line=tok.ln, column=tok.col,
+            _jump_out_of_loop("continue", ctx), line=tok.ln, column=tok.col,
         )
     if ctx.jump_leaves_finally():
         raise ParseError.ExitFromFinallyError(

@@ -23,7 +23,10 @@ from ..context import ParserContext
 from ..cursor import Cursor
 
 
-def parse_block(cursor: Cursor, ctx: ParserContext) -> ast.Block:
+def parse_block(cursor: Cursor, ctx: ParserContext, *,
+                trailing_semicolon: bool = True) -> ast.Block:
+    """``trailing_semicolon=False``: el bloque es el cuerpo de una EXPRESION
+    (una lambda) y el ``;`` que lo siga es de la sentencia que la contiene."""
     open_tok = cursor.expect(TokenType.L_BRACE)
 
     from .statements import parse_statement  # import diferido: rompe el ciclo block<->statements
@@ -32,7 +35,8 @@ def parse_block(cursor: Cursor, ctx: ParserContext) -> ast.Block:
         statements.append(parse_statement(cursor, ctx))
 
     cursor.expect(TokenType.R_BRACE)
-    cursor.match(TokenType.SEMICOLON)  # ';' opcional tras '}' (superset tolerante)
+    if trailing_semicolon:
+        cursor.match(TokenType.SEMICOLON)  # ';' opcional tras '}' (superset tolerante)
     return ast.Block(ln=open_tok.ln, col=open_tok.col, statements=statements)
 
 

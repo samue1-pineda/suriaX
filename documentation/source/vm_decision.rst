@@ -4,7 +4,7 @@ Una máquina para el MIR
 ========================
 
 *Por qué suriaX ejecuta en una VM de registros además del intérprete, y qué
-dijo la medición* — **v0.3.1**
+dijo la medición* — **v0.4.1**
 
 suriaX tiene dos formas de ejecutar un programa:
 

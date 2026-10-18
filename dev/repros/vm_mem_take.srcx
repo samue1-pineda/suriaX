@@ -1,0 +1,10 @@
+#from io #import stdp
+#import mem
+fn main() -> int {
+    var int ptr mutable b = mem.reserve<int>(2);
+    b[0] = 5;
+    var int x = mem.take<int>(b, 0);
+    stdp.println(f"tomado={x} despues={b[0]}");
+    mem.release<int>(b);
+    return 0;
+}

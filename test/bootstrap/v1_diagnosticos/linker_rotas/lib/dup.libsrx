@@ -1,0 +1,4 @@
+public fn f() -> int { return 1; }
+public fn f() -> int { return 2; }
+hook fn __banana__(int a) -> int { return a; }
+#export as dup

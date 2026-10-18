@@ -206,12 +206,27 @@ def canonical(t: Optional[Type], scope: Scope) -> Optional[Type]:
         if name == t.name and all(x is y for x, y in zip(args, t.args)):
             return t
         return Type(TypeKind.NOMINAL, name=name, args=args)
+    if t.kind is TypeKind.FUNCTION:
+        # 'fn(a.Node) -> int': los parametros y el retorno son tipos como
+        # cualquier otro, y la identidad del tipo funcion es la suya
+        return _rebuild_function(t, lambda x: canonical(x, scope))
     if t.inner is None:
         return t
     inner = canonical(t.inner, scope)
     if inner is t.inner:
         return t
     return Type(t.kind, name=t.name, inner=inner, mut=t.mut)
+
+
+def _rebuild_function(t: Type, f) -> Type:
+    """``t`` (un tipo funcion) con ``f`` aplicada a sus parametros y a su
+    retorno. Devuelve el MISMO objeto si nada cambia: es el camino de casi
+    todos los tipos, y ``Type`` es frozen."""
+    params = tuple(f(p) for p in t.args)
+    ret = f(t.inner)
+    if ret is t.inner and all(x is y for x, y in zip(params, t.args)):
+        return t
+    return Type(TypeKind.FUNCTION, inner=ret, args=params)
 
 
 def substitute(t: Optional[Type], mapa: dict) -> Optional[Type]:
@@ -237,6 +252,10 @@ def substitute(t: Optional[Type], mapa: dict) -> Optional[Type]:
         args = tuple(substitute(a, mapa) for a in t.args)
         return t if args == t.args else Type(TypeKind.NOMINAL, name=t.name,
                                              args=args)
+    if t.kind is TypeKind.FUNCTION:
+        # 'fn(T ptr, T ptr) -> int' dentro de 'Vector<T>', visto desde un
+        # 'Vector<int>', es 'fn(int ptr, int ptr) -> int'
+        return _rebuild_function(t, lambda x: substitute(x, mapa))
     if t.inner is None:
         return t
     inner = substitute(t.inner, mapa)
@@ -321,7 +340,10 @@ def _posee(t: Optional[Type], scope: Scope, table: SymbolTable,
         if t in visitados:
             return False
         visitados.add(t)
-        return any(_posee(p, scope, table, visitados)          # regla 5
+        # regla 5 SOBRE EL TIPO CONCRETO, como la 3: el payload 'T' de un
+        # 'Res<R, int>' es un 'R', y sin sustituir no poseia nada
+        mapa = bindings(simbolo, t)
+        return any(_posee(substitute(p, mapa), scope, table, visitados)
                    for item in simbolo.members.values()
                    for p in (item.param_types or ()))
     if simbolo.kind is not SymbolKind.STRUCT or not simbolo.members:
@@ -375,6 +397,9 @@ def mentions_param(t: Optional[Type], params) -> bool:
         if not t.args and t.name in params:
             return True
         return any(mentions_param(a, params) for a in t.args)
+    if t.kind is TypeKind.FUNCTION:
+        return any(mentions_param(a, params) for a in t.args) \
+            or mentions_param(t.inner, params)
     return mentions_param(getattr(t, "inner", None), params)
 
 
@@ -475,6 +500,15 @@ def _same_nominal(a: Optional[Type], b: Optional[Type]) -> bool:
             and all(_mismo_tipo(x, y) for x, y in zip(a.args, b.args)))
 
 
+def same_type(a: Optional[Type], b: Optional[Type]) -> bool:
+    """¿``a`` y ``b`` son EXACTAMENTE el mismo tipo (módulo calificación)?
+
+    La pregunta de las posiciones que no admiten ninguna conversión, ni
+    siquiera soltar mutabilidad: el defecto de ``x ?? d`` tiene que ser el
+    ``T`` de ``x: T?``, no algo asignable a él."""
+    return _mismo_tipo(a, b)
+
+
 def _mismo_tipo(a: Optional[Type], b: Optional[Type]) -> bool:
     """Igualdad de tipos módulo calificación de los nominales.
 
@@ -491,6 +525,13 @@ def _mismo_tipo(a: Optional[Type], b: Optional[Type]) -> bool:
         return False
     if a.kind is TypeKind.NOMINAL:
         return _same_nominal(a, b)
+    if a.kind is TypeKind.FUNCTION:
+        # INVARIANTE en todo: parametros y retorno tienen que ser los mismos
+        # tipos. Sin varianza no hay reglas que explicar (un 'fn(ptr int)'
+        # no acepta un 'fn(ptr mutable int)' aunque el puntero suelto si)
+        return len(a.args) == len(b.args) \
+            and all(_mismo_tipo(x, y) for x, y in zip(a.args, b.args)) \
+            and _mismo_tipo(a.inner, b.inner)
     return a.mut == b.mut and _mismo_tipo(a.inner, b.inner)
 
 
@@ -527,6 +568,12 @@ def is_assignable(target: Optional[Type], value: Optional[Type]) -> bool:
         return True
     if target == value or _same_nominal(target, value):
         return True
+    if target.kind is TypeKind.FUNCTION:
+        # un valor funcion entra SOLO en su tipo exacto (ni varianza ni
+        # conversiones): 'fn(int) -> int' no es un 'fn(int) -> int?'. Lo que
+        # se compara es la identidad modulo calificacion de los nominales
+        # ('fn(a.Node)' y 'fn(Node)' dentro de 'a' son el mismo tipo).
+        return _mismo_tipo(target, value)
     # T? = T y T? = U?  (envolver en nullable nunca pierde informacion). Se
     # RECURRE al inner para que las coerciones internas compongan: un
     # 'ptr mutable T' es asignable a 'ptr T?' (soltar mutabilidad DENTRO del

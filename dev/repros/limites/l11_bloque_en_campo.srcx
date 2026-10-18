@@ -1,0 +1,11 @@
+#from io #import stdp
+#import mem
+struct { int ptr mutable b; } Caja;
+fn main() -> int {
+    var Caja a = Caja{ b: mem.reserve<int>(1) };
+    a.b[0] = 1;
+    var Caja c = a;
+    c.b[0] = 2;
+    stdp.println(f"a={a.b[0]} c={c.b[0]}");
+    return 0;
+}

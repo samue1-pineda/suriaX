@@ -1,0 +1,6 @@
+#from io #import stdp
+fn main() -> int {
+    var float x = 1.5e3;
+    stdp.println(f"{x}");
+    return 0;
+}

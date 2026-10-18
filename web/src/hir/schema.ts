@@ -50,6 +50,14 @@ export const TypeKind = {
   META: 10,
   ERROR: 11,
   BYTE: 12,
+  /**
+   * Tipo función (`fn(int, str) -> bool`): una función con nombre usada como
+   * VALOR. `args` son los tipos de los parámetros, en orden, e `inner` el del
+   * retorno (siempre presente; `void` si no devuelve nada). Hoy solo lo
+   * ejecuta el intérprete: el target web lo rechaza con `WEB103` (ver
+   * `target/restrictions.ts`).
+   */
+  FUNCTION_TYPE: 13,
 } as const;
 export type TypeKind = (typeof TypeKind)[keyof typeof TypeKind];
 
@@ -93,7 +101,7 @@ export type HookKind = (typeof HookKind)[keyof typeof HookKind];
 /** Nombre legible de un `TypeKind` (diagnósticos y volcados). */
 export const TYPE_KIND_NAMES: readonly string[] = [
   "<?>", "void", "bool", "int", "float", "char", "str",
-  "pointer", "nullable", "nominal", "type", "error", "byte",
+  "pointer", "nullable", "nominal", "type", "error", "byte", "fn",
 ];
 
 /** Nombre legible de un `SymbolKind`, indexado por su valor. */
@@ -226,7 +234,11 @@ export type InterpPart =
 
 /** `message Expr`: posición + tipo resuelto + variante del `oneof`. */
 export interface Expr extends Pos {
-  /** Tipo que resolvió la Semántica; `null` = aún no inferible. */
+  /**
+   * Tipo que resolvió la Semántica; `null` = aún no inferible. Llega por el
+   * pool (`type_id`, esquema 2) o inline (`restype`, esquema 1): el
+   * decodificador da la MISMA forma en los dos casos.
+   */
   readonly restype: Type | null;
   readonly node: ExprNode;
 }
@@ -273,6 +285,19 @@ export type ExprNode =
       /** Paralelo a `values`: mismo índice = mismo campo. */
       readonly fieldNames: readonly string[];
       readonly values: readonly Expr[];
+    }
+  /**
+   * `lambda (int x) -> bool: x > k`: una función sin nombre que LEE su
+   * entorno (`captures`). Solo llega como argumento de un parámetro de tipo
+   * función. El target web no la ejecuta y la deniega siempre (`WEB104`),
+   * sea cual sea la política, igual que una función como valor (`WEB103`).
+   */
+  | {
+      readonly case: "lambdaExpr";
+      readonly params: readonly Parameter[];
+      readonly returnType: Type | null;
+      readonly body: Block | null;
+      readonly captures: readonly string[];
     }
   | { readonly case: "none" };
 
@@ -347,6 +372,18 @@ export type StmtNode =
       /** 'finally': corre al salir por cualquier camino; null = no hay. */
       readonly finallyBlock: Block | null;
     }
+  | {
+      /**
+       * `expect (condición) [bloque];` — solo dentro de un `test`. Si la
+       * condición es falsa la prueba termina ahí (ningún `catch` lo atrapa).
+       */
+      readonly case: "expect";
+      readonly condition: Expr;
+      /** Corre solo si la condición se cumple; null = no se escribió. */
+      readonly body: Block | null;
+      /** La condición tal como se escribió: el mensaje del fallo la cita. */
+      readonly text: string;
+    }
   | { readonly case: "none" };
 
 /** Una rama 'catch'. Sin `type`, atrapa cualquier valor. */
@@ -391,7 +428,9 @@ export interface EnumItem {
   readonly name: string;
   readonly value: Expr | null;
   /**
-   * Tipos del PAYLOAD (`Numero(int)`), como índices en `Module.types`.
+   * Tipos del PAYLOAD (`Numero(int)`), como índices en `Module.types`. En un
+   * `.phir` del esquema 1 llegan inline (`payload_types`) y el decodificador
+   * los numera como lo haría el pool del 2, así que el valor es el mismo.
    *
    * Vacío = el item es una constante entera. No vacío = el enum es un tipo
    * SUMA y sus valores dejan de ser enteros. El `.proto` lo dice con estas
@@ -411,6 +450,16 @@ export interface EnumDecl {
 export interface TestDecl {
   readonly name: string;
   readonly body: Block | null;
+  /** Corre SOLO si la prueba falló; null = no se escribió. */
+  readonly errfinally: Block | null;
+  /** Corre siempre, después de `errfinally`; null = no se escribió. */
+  readonly finallyBlock: Block | null;
+}
+
+/** Los bloques que una prueba escribió: su cuerpo y sus dos cláusulas. */
+export function testBlocks(test: TestDecl): Block[] {
+  return [test.body, test.errfinally, test.finallyBlock]
+    .filter((b): b is Block => b !== null);
 }
 
 export interface ExternBlock {
@@ -470,6 +519,10 @@ export interface LibraryRef {
 }
 
 export interface Module {
+  /**
+   * La versión que se LEYÓ (1 o 2). Las formas del modelo no dependen de
+   * ella: el esquema 1 se normaliza al decodificar.
+   */
   readonly schemaVersion: number;
   readonly sourceFile: string;
   readonly symbols: SymbolTable;
@@ -501,12 +554,15 @@ export const EMPTY_BLOCK: Block = { statements: [] };
 export function formatType(t: Type | null): string {
   if (t === null || t.kind === TypeKind.TYPE_UNSPECIFIED) return "<?>";
   switch (t.kind) {
+    case TypeKind.FUNCTION_TYPE:
+      // `args` son los parámetros e `inner` el retorno (ver hir.proto)
+      return `fn(${t.args.map(formatType).join(", ")}) -> ${formatType(t.inner)}`;
     case TypeKind.POINTER:
-      return formatType(t.inner) + (t.mut ? " ptr mutable" : " ptr");
+      return wrappedType(t.inner) + (t.mut ? " ptr mutable" : " ptr");
     case TypeKind.NULLABLE:
-      return formatType(t.inner) + "?";
+      return wrappedType(t.inner) + "?";
     case TypeKind.ERROR:
-      return t.inner === null ? "error" : `error ${formatType(t.inner)}`;
+      return t.inner === null ? "error" : `error ${wrappedType(t.inner)}`;
     case TypeKind.NOMINAL:
       return t.args.length === 0
         ? t.name
@@ -514,6 +570,33 @@ export function formatType(t: Type | null): string {
     default:
       return TYPE_KIND_NAMES[t.kind] ?? "<?>";
   }
+}
+
+/**
+ * Un tipo función ENVUELTO se escribe entre paréntesis: un sufijo tras
+ * `fn(int) -> int` se pegaría al retorno (`(fn(int) -> int)?` no es
+ * `fn(int) -> int?`). Espejo de `pretty._wrapped`.
+ */
+function wrappedType(t: Type | null): string {
+  const text = formatType(t);
+  return t !== null && t.kind === TypeKind.FUNCTION_TYPE ? `(${text})` : text;
+}
+
+/**
+ * El primer tipo función dentro de `t` (él mismo, su `inner` o sus `args`, a
+ * cualquier profundidad: `(fn(int) -> int)?`, `Caja<fn() -> int>`), o `null`
+ * si no hay ninguno.
+ */
+export function findFunctionType(t: Type | null): Type | null {
+  if (t === null) return null;
+  if (t.kind === TypeKind.FUNCTION_TYPE) return t;
+  const inner = findFunctionType(t.inner);
+  if (inner !== null) return inner;
+  for (const arg of t.args) {
+    const found = findFunctionType(arg);
+    if (found !== null) return found;
+  }
+  return null;
 }
 
 /**

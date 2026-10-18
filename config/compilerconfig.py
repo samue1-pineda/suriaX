@@ -122,10 +122,19 @@ def _print_report() -> int:
     report = check_dependencies()
     all_ok = True
     for name, info in report.items():
-        mark = "OK " if info["ok"] else "FALTA"
+        opcional = info.get("optional", False)
+        if info["ok"]:
+            mark = "OK "
+        else:
+            mark = "OPCIONAL" if opcional else "FALTA"
         print(f"  [{mark}] {name}: {info['detail']}")
         if not info["ok"]:
-            all_ok = False
+            if opcional:
+                # una opcional que falta no es un fallo del entorno: se dice
+                # para que sirve, y '--check' sigue terminando en 0
+                print(f"          (opcional: {info['use']})")
+            else:
+                all_ok = False
             print(f"          -> {info['install']}")
 
     config = reload_config()

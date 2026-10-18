@@ -1,4 +1,4 @@
-/- sistema.archivos: leer, escribir y listar.
+/- sistema.archivos: leer, escribir, listar, borrar y renombrar.
 
  Reglas que valen igual en el intérprete y en la VM:
  - Un archivo se lee y se escribe como texto UTF-8, sin traducir los fines
@@ -17,6 +17,10 @@
 internal fn __leer_archivo__(str ruta) -> str;
 internal fn __escribir_archivo__(str ruta, str texto) -> void;
 internal fn __existe__(str ruta) -> bool;
+internal fn __crear_carpeta__(str ruta) -> void;
+internal fn __borrar__(str ruta) -> void;
+internal fn __renombrar__(str origen, str destino) -> void;
+internal fn __modificado__(str ruta) -> int;
 internal fn __entradas__(str ruta) -> int;
 internal fn __entrada__(str ruta, int i) -> str;
 // binario: la memoria la reserva el lenguaje; el host solo copia bytes
@@ -59,6 +63,32 @@ public fn write_bytes(str path, vec.Vector<byte> ptr data) -> void {
 // ¿Existe un archivo o una carpeta con esa ruta?
 public fn existe(str ruta) -> bool {
     return __existe__(ruta);
+}
+
+// Crea la carpeta 'ruta' y las que le falten por encima (como 'mkdir -p'):
+// si ya existe no hace nada. Si hay un ARCHIVO con ese nombre, o no se puede
+// crear, lanza ErrorDeArchivo.
+public fn crear_carpeta(str ruta) -> void {
+    __crear_carpeta__(ruta);
+}
+
+// Borra un archivo, o una carpeta VACÍA. Si no existe, o es una carpeta con
+// cosas dentro, lanza ErrorDeArchivo: vaciarla es decisión del programa.
+public fn borrar(str ruta) -> void {
+    __borrar__(ruta);
+}
+
+// Mueve 'origen' a 'destino' de una vez: quien mire ve el viejo o el nuevo,
+// nunca uno a medias. Si 'destino' ya es un archivo, se reemplaza. Es la
+// forma segura de reescribir un archivo: escribir un temporal y renombrarlo.
+public fn renombrar(str origen, str destino) -> void {
+    __renombrar__(origen, destino);
+}
+
+// Cuándo cambió por última vez, en milisegundos desde 1970 (la misma unidad
+// que 'tiempo.ahora()'). Es lo que mira un build para saber qué rehacer.
+public fn modificado(str ruta) -> int {
+    return __modificado__(ruta);
 }
 
 // Los nombres de lo que hay en una carpeta, ordenados.

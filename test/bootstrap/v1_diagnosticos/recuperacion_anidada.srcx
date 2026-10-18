@@ -1,0 +1,16 @@
+fn f(int a) -> int {
+    while (a > 0) {
+        if (a == 3) {
+            match (a) {
+                case 1 { return ; }
+                case { return 2; }
+            };
+        };
+        a = a - ;
+    };
+    try { a = 1; } catch ( { a = 2; };
+    with (var int x = ) { a = x; };
+    return a;
+}
+fn main() -> int { break; return f(3); }
+fn g() -> int { return cast<>(1); }

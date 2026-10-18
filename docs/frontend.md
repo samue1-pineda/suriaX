@@ -38,6 +38,6 @@ Salida: `list[Token]` terminada en `EOF`. Detalle de tokens en
 
 ## Pendiente
 
-Lo que falla hoy en el frontend está en [c_errorstfix.md](../c_errorstfix.md)
-(p. ej. la línea `frontend OK` aparece aunque haya errores). El plan está en
+Lo que falla hoy en el frontend está en [c_errorstfix.md](../c_errorstfix.md).
+El plan está en
 [ROADMAP.md](../ROADMAP.md).

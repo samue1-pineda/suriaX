@@ -45,6 +45,9 @@ class CompileOptions:
     hir_pretty: Optional[str] = None
     dump_symbols: Optional[str] = None
     hir_text: bool = False
+    #: esquema del '.phir' que se emite ('--hir-schema'): 2 (por defecto, con
+    #: pool de tipos) o 1 (tipos inline, el rollback). Ver hir.proto.
+    hir_schema: int = 2
     #: ejecutar: None = no (salvo que el target lo pida), "" = en el motor del
     #: yaml, "compiler" / "interpreter" = ese. 'True' vale como "".
     run: Optional[object] = None

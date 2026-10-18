@@ -1,0 +1,9 @@
+#from io #import stdp
+struct { int x; } P;
+hook fn __cmp__(P ptr a, P ptr b) -> int { return a.x - b.x; }
+fn main() -> int {
+    var P a = P{ x: 2 };
+    var P b = P{ x: 1 };
+    stdp.println(f"{a < b}");
+    return 0;
+}

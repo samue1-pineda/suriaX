@@ -1,0 +1,10 @@
+fn main() -> int {
+    var int a = 0x;
+    var int b = 1 $ 2;
+    var str c = "sin cerrar;
+    var char d = 'ab';
+    return a + ;
+}
+#nada
+@
+fn otra() -> int { return 0b102; }

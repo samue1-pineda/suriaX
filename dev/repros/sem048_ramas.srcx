@@ -1,0 +1,7 @@
+#from io #import stdp
+fn f(int x) -> int {
+    if (x > 0) { return 1; } else { return 2; }
+    stdp.println("inalcanzable");
+    return 3;
+}
+fn main() -> int { return f(1); }

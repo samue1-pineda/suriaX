@@ -1,0 +1,6 @@
+#from io #import stdp
+fn aplica(int x, fn(int) -> int f) -> int { return f(x); }
+fn main() -> int {
+    stdp.println(f"{aplica(3, lambda (int x) -> int: x + 1)}");
+    return 0;
+}

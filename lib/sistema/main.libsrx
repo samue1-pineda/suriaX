@@ -3,8 +3,13 @@
  Es un PAQUETE con un submódulo por área, para que crecer (tiempo, entorno,
  procesos hijos) sea añadir un archivo y no reescribir este:
 
-     sistema.archivos   leer, escribir, existe, listar
+     sistema.archivos   leer, escribir, existe, listar, borrar, renombrar,
+                        modificado
      sistema.proceso    argumentos, argumento, escribir_error, salir
+     sistema.entrada    la entrada estándar: linea, todo, terminada
+     sistema.comandos   ejecutar otro programa y recibir lo que hizo
+     sistema.tiempo     ahora, reloj, dormir
+     sistema.rutas      unir, normalizar y descomponer rutas
 
      #import sistema.archivos as arch
      #import sistema.proceso as proc

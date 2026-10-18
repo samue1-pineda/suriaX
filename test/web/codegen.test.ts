@@ -460,3 +460,29 @@ test("una variable le gana al import que se llama igual", () => {
   assert.ok(sombra, diagnostics.map((d) => `${d.code} ${d.message}`).join("\n"));
   assert.equal(sombra.code, WebCode.CODEGEN_UNSUPPORTED);
 });
+
+// --------------------------------------------------------------------------- //
+// desenvolver un 'T?' y los enums genéricos (paso 3): el target web todavía
+// no los ejecuta y los RECHAZA con su código y su posición, nunca compila
+// otra cosa. 'case v' sin su campo 'binds' sería comparar con una variable
+// 'v'; aquí ni se llega, porque el sujeto 'int?' ya no se representa.
+// --------------------------------------------------------------------------- //
+
+test("'case v', '??' y un enum genérico se rechazan con su código, sin generar nada", () => {
+  const result = generate(loadModule(fixture("opcional.phir"), "opcional.phir"));
+  assert.equal(result.ok, false);
+  assert.equal(result.wasm, null);
+  assert.equal(result.js, null);
+  const found = result.diagnostics.map((d) => `${d.code} ${d.line}:${d.column}`);
+  for (const expected of [
+    `${WebCode.CODEGEN_UNSUPPORTED} 4:1`,   // enum Res<T, E> (lleva payload)
+    `${WebCode.CODEGEN_TYPE} 7:5`,          // match (x) con x: int?
+    `${WebCode.CODEGEN_UNSUPPORTED} 9:14`,  // case v: 'v' no es una variable
+    `${WebCode.CODEGEN_UNSUPPORTED} 15:12`, // x ?? 7
+    `${WebCode.CODEGEN_UNSUPPORTED} 19:27`, // Res<int, int>.Ok(4)
+  ]) {
+    assert.ok(found.includes(expected), `falta ${expected} en: ${found.join(", ")}`);
+  }
+  const coalesce = result.diagnostics.find((d) => d.line === 15 && d.column === 12);
+  assert.match(coalesce!.message, /el operador '\?\?'/);
+});

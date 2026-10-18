@@ -50,26 +50,40 @@ La organización del código sigue esa división:
 Precedencia de operadores
 --------------------------
 
-De menor a mayor fuerza de enlace. Todos los binarios son asociativos por la
-izquierda.
+De menor a mayor fuerza de enlace (la fuente es
+``parser/precedence.py``). Los binarios son asociativos por la izquierda,
+salvo la asignación y ``??``, que asocian por la **derecha**: ``a = b = c`` es
+``a = (b = c)`` y ``a ?? b ?? c`` es ``a ?? (b ?? c)``.
 
 .. table::
    :widths: auto
 
-   ======  ============================  ==========================================
-   Nivel   Operadores                    Ejemplo
-   ======  ============================  ==========================================
-   1       ``or``                        ``a or b``
-   2       ``and``                       ``a and b``
-   3       ``==``  ``!=``                 ``x == y``
-   4       ``<``  ``<=``  ``>``  ``>=``   ``x < y``
-   5       ``+``  ``-``                   ``a + b``
-   6       ``*``  ``/``                   ``a * b``
-   7       ``not``  ``-``  ``&``          ``not activo``, ``-x``, ``&x``
-   8       ``.``  ``(...)``  ``[...]``    ``obj.campo``, ``f(1)``, ``v[i]``
-   ======  ============================  ==========================================
+   ======  ======================================  ==========================================
+   Nivel   Operadores                              Ejemplo
+   ======  ======================================  ==========================================
+   1       ``=``  ``+=``  ``-=`` ... ``>>=``       ``x = y``  (derecha)
+   2       ``??``                                  ``x ?? 0``  (derecha)
+   3       ``or``                                  ``a or b``
+   4       ``and``                                 ``a and b``
+   5       ``==``  ``!=``                          ``x == y``
+   6       ``<``  ``<=``  ``>``  ``>=``            ``x < y``
+   7       ``|``                                   ``a | b``
+   8       ``^``                                   ``a ^ b``
+   9       ``&``                                   ``a & b``
+   10      ``<<``  ``>>``                          ``a << 3``
+   11      ``+``  ``-``                            ``a + b``
+   12      ``*``  ``/``  ``%``                     ``a * b``
+   13      ``not``  ``-``  ``~``  ``&``            ``not activo``, ``-x``, ``&x``
+   14      ``.``  ``(...)``  ``[...]``             ``obj.campo``, ``f(1)``, ``v[i]``
+   ======  ======================================  ==========================================
 
-``and`` y ``or`` **cortocircuitan**: el lado derecho solo se evalúa si el
+``??`` (desenvolver un ``T?`` con un valor por defecto, ver :ref:`el sistema
+de tipos <desenvolver-opcional>`) va donde lo ponen C# y Swift: por debajo de
+``or``, así que ``x ?? a or b`` es ``x ?? (a or b)``. No es un token del
+lexer: como ``>>``, son dos ``?`` **pegados** que el parser junta en posición
+de operador, y por eso ``int??`` sigue siendo un tipo.
+
+``and``, ``or`` y ``??`` **cortocircuitan**: el lado derecho solo se evalúa si el
 resultado no está decidido. Es una propiedad de la evaluación, no de la
 sintaxis, pero condiciona a los backends.
 
@@ -134,11 +148,26 @@ real produciría veinte falsos.
 Límite de anidamiento
 ----------------------
 
-Las expresiones se analizan recursivamente, así que un programa con
-anidamiento extremo agotaría la pila del intérprete de Python. El compilador
-sube el límite de recursión y convierte el desbordamiento en un diagnóstico
-controlado, ``PAR025`` (``ExpressionTooDeepError``), con su posición — nunca
-en un *traceback*.
+Una declaración puede anidar hasta **500 niveles** en su árbol. Lo que anida
+de más es ``PAR025`` (``ExpressionTooDeepError``), con la posición del primer
+nodo que se pasa, y la declaración entera se descarta: las demás del archivo
+se siguen analizando.
+
+Cuenta todo lo que deja un nodo dentro de otro: un bloque dentro de un bloque
+(dos niveles por cada ``if`` anidado, el ``if`` y su bloque), una llamada
+dentro de una llamada, y también una **cadena de operadores**. ``a + b + c``
+no anida al escribirse, pero se analiza como ``(a + b) + c``: un nivel por
+operador. Una suma de unos 496 términos cabe; una de 600, no.
+
+El límite es del lenguaje y no de la máquina que compila: el árbol lo
+recorren después pasadas recursivas y el HIR lo guarda como mensajes
+anidados, que cada lector acota a su vez. Sin él, una expresión larga pasaba
+el parser y acababa en un fallo interno más adelante, a una profundidad que
+dependía de quién llamase al compilador.
+
+Los paréntesis no dejan nodo, así que no cuentan; pero el parser los lee de
+forma recursiva, y miles de ellos anidados agotarían la pila de Python. Ese
+desbordamiento se convierte en el mismo ``PAR025`` — nunca en un *traceback*.
 
 .. _directivas-parser:
 

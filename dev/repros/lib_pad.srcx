@@ -1,0 +1,7 @@
+#from io #import stdp
+#import text
+fn main() -> int {
+    stdp.println(f"[{text.pad_left("ab", 4, '.')}]");
+    stdp.println(f"[{text.pad_left("日本", 4, '.')}]");
+    return 0;
+}

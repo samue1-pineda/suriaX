@@ -126,7 +126,7 @@ fn main() -> int {
     stdp.println(f"area {a} de {nombre}");
     stdp.println(cast<str>(a));
 
-    dt.int8 chico;
+    dt.int8 chico = 0;
     var int tam = sizeof(p);
 
     try {
@@ -158,6 +158,7 @@ fn main() -> int {
 test "el area sale de los campos" {
     var Punto q = Punto{ x: 2, y: 5 };
     stdp.println("probando");
+    expect (q.x == 2);
 }
 
 #extern cpp{

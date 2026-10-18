@@ -1,0 +1,7 @@
+#from io #import stdp
+enum Forma { Circulo(int), Nada };
+fn main() -> int {
+    var Forma f = Forma.Circulo(3);
+    stdp.println("hola");
+    return 0;
+}

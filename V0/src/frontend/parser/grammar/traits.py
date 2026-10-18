@@ -8,11 +8,15 @@ Dos formas (ver ``ast_nodes.TraitDecl``):
                    "(" [ type_list ] ")" [ "->" type ] ";"
     trait_method = [ specifier ] "fn" ( IDENTIFIER | DUNDER )
                    "(" [ type_list ] ")" [ "->" type ] ";"
-    type_list    = type { "," type }
+    type_list    = type [ IDENTIFIER ] { "," type [ IDENTIFIER ] }
 
-Un método de trait es un PROTOTIPO: sus parámetros son solo TIPOS (sin nombre),
-y uno de ellos suele ser ``self`` (el tipo que hará ``@impl``). El nombre del
-método debe ser dunder (``__x__``); la Semántica lo valida.
+Un método de trait es un PROTOTIPO: lo que cuenta de cada parámetro es su
+TIPO, y uno de ellos suele ser ``self`` (el tipo que hará ``@impl``). El
+nombre del parámetro es OPCIONAL y no significa nada para el contrato
+(``self ptr`` y ``self ptr s`` piden lo mismo): se admite para que el trait
+se lea igual que el prototipo de una función. El nombre del método dice con
+qué se cumple: un ``__x__`` con un ``dunder fn``, y un nombre llano con un
+método de un bloque ``@impl Tipo { ... }`` (lo valida la Semántica).
 
 ``@trait`` NO usa el mecanismo general de decoradores (``DecoratorDecl``)
 porque su cuerpo tiene gramática propia (prototipos, no campos de datos).
@@ -90,14 +94,23 @@ def _parse_trait_method(cursor: Cursor, ctx: ParserContext) -> ast.TraitMethod:
 
 
 def _parse_type_list(cursor: Cursor, ctx: ParserContext) -> List[ast.TypeExpr]:
-    """Parámetros de un prototipo: TIPOS separados por coma, sin nombre."""
+    """Parámetros de un prototipo: TIPOS separados por coma, cada uno con un
+    nombre opcional que se descarta (el contrato es la firma de tipos)."""
     params: List[ast.TypeExpr] = []
     if cursor.check(TokenType.R_PAREN):
         return params
-    params.append(parse_type(cursor, ctx))
+    params.append(_trait_param(cursor, ctx))
     while cursor.match(TokenType.COMMA):
-        params.append(parse_type(cursor, ctx))
+        params.append(_trait_param(cursor, ctx))
     return params
+
+
+def _trait_param(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
+    """``type [ IDENTIFIER ]``: tras un tipo completo no puede seguir otro
+    nombre que no sea el del parámetro, así que leerlo no es ambiguo."""
+    t = parse_type(cursor, ctx)
+    cursor.match(TokenType.IDENTIFIER)
+    return t
 
 
 __all__ = ["parse_trait_decl"]

@@ -13,6 +13,88 @@
 namespace suriax::mir {
 namespace {
 
+// VM002: desenvolver un 'T?' ('case v' en un 'match', 'x ?? d', una variante
+// sobre un sujeto 'E?') y los enums GENERICOS ('enum Res<T, E>'). Los ejecuta
+// el interprete; la VM los RECHAZA al bajar a MIR, con su posicion, nunca
+// ejecuta otra cosa: leido sin su campo 'binds', 'case v' seria comparar con
+// un slot 'v' sin valor (no entraria nunca, en silencio), y el payload 'T' de
+// un enum generico se bajaria con el ancho de un entero sin sustituir.
+const char kOptionCode[] = "VM002";
+
+std::string option_message(const std::string& source, const std::string& what) {
+    return std::string(kOptionCode) + ": '" + source + "' " + what +
+           ": la VM todavia no lo ejecuta. Ejecutalo con el interprete: "
+           "python V0/main.py <fuente>.srcx --run interpreter";
+}
+
+// VM003: una llamada que la Semantica comprobo contra una COTA y no contra un
+// tipo ('print(x)' con 'T: Print', 'x.area()' con 'T: Forma'). El HIR la
+// marca con un HookRef cuyo dueño es el PARAMETRO de tipo ('T'), igual que
+// 'hash(x)': el destino depende de la instancia. El interprete la despacha
+// con el tipo del valor; la VM todavia no, y la RECHAZA al bajar a MIR con su
+// posicion. Sin esto salia como una llamada 'SIN RESOLVER', sin codigo.
+const char kBoundCallCode[] = "VM003";
+
+// VM004: una LAMBDA ('lambda (int x) -> bool: x > k'). La ejecuta el
+// interprete, con un cuerpo que ve el marco donde se escribio (sus capturas);
+// la VM todavia no tiene ni el valor ni ese marco, y la RECHAZA al bajar a
+// MIR con su posicion. Va ANTES que VM001: su tipo es un 'fn(A) -> R', pero
+// lo que falta no es solo el valor funcion sino la captura.
+const char kLambdaCode[] = "VM004";
+
+std::string lambda_message(const std::string& source) {
+    return std::string(kLambdaCode) + ": '" + source + "' usa una lambda: la "
+           "VM todavia no las ejecuta (ni el valor funcion ni lo que lee de su "
+           "entorno). Ejecutalo con el interprete: python V0/main.py "
+           "<fuente>.srcx --run interpreter";
+}
+
+// VM005: 'print(x)' con 'x' un PRIMITIVO ('print(5)'). El interprete y el
+// target web lo escriben como un f-string escribe '{x}'; la VM no tiene una
+// instruccion que escriba sin pasar por '__write__' de 'io', que el programa
+// puede no importar, y lo RECHAZA al bajar a MIR con su posicion. Antes
+// salia sin codigo ('el unico nativo que baja al MIR es len...').
+const char kPrintPrimitiveCode[] = "VM005";
+
+std::string print_primitive_message(const std::string& source, const std::string& type) {
+    return std::string(kPrintPrimitiveCode) + ": '" + source + "' escribe un '" +
+           type + "' con 'print(x)': la VM todavia no lo ejecuta. Usa un "
+           "f-string ('stdp.print(f\"{x}\")') o ejecutalo con el interprete: "
+           "python V0/main.py <fuente>.srcx --run interpreter";
+}
+
+std::string bound_call_message(const std::string& source, const std::string& owner) {
+    return std::string(kBoundCallCode) + ": '" + source + "' llama a algo que "
+           "promete una cota de '" + owner + "' (un 'print' de 'Print' o un "
+           "metodo de un trait): la VM todavia no despacha por el tipo de la "
+           "instancia. Ejecutalo con el interprete: python V0/main.py "
+           "<fuente>.srcx --run interpreter";
+}
+
+// ¿'name' es un PARAMETRO de tipo de alguna declaracion del modulo ('T' de
+// 'fn f<T>', de un '@impl Caja<T>' o de 'struct ... Caja<T>')?
+bool declares_type_param(const pb::Module& module, const std::string& name) {
+    const auto has = [&](const auto& params) {
+        for (const std::string& p : params) {
+            if (p == name) return true;
+        }
+        return false;
+    };
+    for (const pb::Decl& decl : module.items()) {
+        if (decl.node_case() == pb::Decl::kFunction && has(decl.function().type_params())) {
+            return true;
+        }
+        if (decl.node_case() == pb::Decl::kStructDecl &&
+            has(decl.struct_decl().type_params())) {
+            return true;
+        }
+        if (decl.node_case() == pb::Decl::kEnumDecl && has(decl.enum_decl().type_params())) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // TypeKind del esquema -> tipo del MIR. Solo importa el ANCHO: 'bool', 'char'
 // y un 'enum' sin payload son enteros en la maquina, y la distincion del
 // lenguaje ya la verifico el frontend.
@@ -750,6 +832,31 @@ public:
              const std::vector<hir::Slot>& slots,
              std::uint32_t ln, std::uint32_t col,
              const std::vector<std::string>& direcciones = {}) {
+        // VM001 antes que nada: un slot o un retorno de tipo funcion no es un
+        // tipo que falte representar, es una construccion que la VM no
+        // ejecuta todavia, y el mensaje lo tiene que decir asi.
+        //
+        // En el PROGRAMA se rechaza al bajar (y 'suri --run compiler' lo
+        // ejecuta en el interprete). En una LIBRERIA no: 'array.vector'
+        // declara 'sort_by(fn(T ptr, T ptr) -> int cmp)' y todo programa que
+        // usa un Vector la importa. La funcion se baja a un cuerpo que FALLA
+        // con VM001 si alguien la llama —y quien la llame desde el programa
+        // ya se rechazo al bajar, porque le pasa un valor funcion—.
+        const pb::Type* function_type = nullptr;
+        for (const hir::Slot& slot : slots) {
+            function_type = function_type_of(slot.type_id);
+            if (function_type != nullptr) break;
+        }
+        if (function_type == nullptr) function_type = function_type_of(decl.return_type_id());
+        if (function_type != nullptr) {
+            if (unidad_.empty()) {
+                fallo(hir::function_values_message(module_.source_file(), *function_type),
+                      ln, col);
+                return false;
+            }
+            trap_function_value(decl, slots, *function_type, ln, col);
+            return true;
+        }
         for (const hir::Slot& slot : slots) {
             Type tipo;
             if (!tipo_de(module_, slot.type_id, tipo)) {
@@ -793,7 +900,13 @@ public:
                 continue;
             }
             const pb::Type t = concreto(module_.types(static_cast<int>(tipo->second)));
-            if (es_escalar(t) || t.kind() == pb::STR) celdas_.insert(indice);
+            // un enum SIN payload es un entero: con su direccion tomada vive
+            // en una celda, como un 'int' (antes '&e' daba el valor y 'p[0]'
+            // fallaba solo en la VM)
+            if (es_escalar(t) || t.kind() == pb::STR ||
+                (t.kind() == pb::NOMINAL && es_enum_simple(t.name()))) {
+                celdas_.insert(indice);
+            }
         }
 
         // Una BANDERA por local destruible. Se crean aqui, con el resto de
@@ -2718,10 +2831,43 @@ private:
     // 'siguiente' una vez por caso.
     bool seleccion(const pb::Stmt& s) {
         const pb::MatchStmt& nodo = s.match_stmt();
+        // VM002 antes de bajar nada: 'case v' (binds) LIGA el contenido de un
+        // 'T?', y una variante sobre un sujeto 'E?' tendria que saltarse el
+        // null antes de leer la etiqueta. Ninguna de las dos se baja todavia.
+        pb::Type tipo_sujeto;
+        const bool opcional = tipo_concreto_de(nodo.subject(), tipo_sujeto) &&
+                              tipo_sujeto.kind() == pb::NULLABLE;
+        for (const pb::CaseArm& arm : nodo.cases()) {
+            // una variante con payload ('E.A(x)', tambien pelada: 'A(x)') o
+            // una variante unidad de un enum SUMA ('E.Nada')
+            std::string variante;
+            const bool es_variante =
+                opcional &&
+                (arm.pattern().node_case() == pb::Expr::kCall ||
+                 suma_de_miembro(arm.pattern(), variante) != nullptr);
+            if (arm.binds() || es_variante) {
+                fallo(option_message(module_.source_file(),
+                                     arm.binds() ? "desenvuelve un 'T?' con 'case v'"
+                                                 : "compara una variante con un sujeto 'E?'"),
+                      arm.pattern().ln(), arm.pattern().col());
+                return false;
+            }
+        }
         Reg sujeto = kNoReg;
         if (!expresion(nodo.subject(), sujeto, false)) return false;
-        const std::uint32_t slot = slot_nuevo(
-            es_flotante(nodo.subject()) ? Type::F64 : Type::I64, "<sujeto>");
+        // el sujeto se DESREFERENCIA solo: un puntero a un objeto ya es el
+        // objeto (su handle), pero uno a un escalar o a un enum sin payload
+        // es una celda, y se compara lo que guarda (antes no coincidia nunca)
+        bool flotante = es_flotante(nodo.subject());
+        pb::Type apuntado;
+        if (tipo_concreto_de(nodo.subject(), apuntado) && apuntado.kind() == pb::POINTER &&
+            apuntado.has_inner() &&
+            (es_escalar(apuntado.inner()) ||
+             (apuntado.inner().kind() == pb::NOMINAL && es_enum_simple(apuntado.inner().name())))) {
+            sujeto = leer_celda(sujeto, s.ln(), s.col());
+            flotante = apuntado.inner().kind() == pb::FLOAT;
+        }
+        const std::uint32_t slot = slot_nuevo(flotante ? Type::F64 : Type::I64, "<sujeto>");
         Inst store;
         store.op = Op::StoreLocal;
         store.slot = slot;
@@ -2921,6 +3067,17 @@ private:
     // expresiones
     // ------------------------------------------------------------------ //
     bool expresion(const pb::Expr& e, Reg& dst, bool descartar) {
+        if (e.node_case() == pb::Expr::kLambdaExpr) {
+            fallo(lambda_message(module_.source_file()), e.ln(), e.col());
+            return false;
+        }
+        // una funcion NOMBRADA como valor ('aplica(doble, 2)') o una llamada a
+        // traves de un valor no tienen un slot propio que lo delate
+        if (reject_function_value(e.type_id(), e.ln(), e.col())) return false;
+        if (e.node_case() == pb::Expr::kCall &&
+            reject_function_value(e.call().callee().type_id(), e.ln(), e.col())) {
+            return false;
+        }
         switch (e.node_case()) {
             case pb::Expr::kLiteral:
                 return literal(e, dst);
@@ -3028,6 +3185,12 @@ private:
         // aqui se ve por que el CFG explicito paga. El resultado se acumula
         // en un local temporal porque el MIR no tiene phi.
         if (op == "and" || op == "or") return logica(e, dst);
+        if (op == "??") {
+            fallo(option_message(module_.source_file(),
+                                 "desenvuelve un 'T?' con '?\?'"),
+                  e.ln(), e.col());
+            return false;
+        }
 
         Reg izq = kNoReg;
         Reg der = kNoReg;
@@ -3700,6 +3863,57 @@ private:
     // El tipo escrito como se lee, para un diagnostico. Un mensaje que solo
     // diga "un tipo que no represento" no le sirve a quien tiene que decidir
     // si eso importa.
+    // VM001: ¿el tipo 'type_id' del pool de esta unidad es, o contiene, un
+    // tipo funcion ('fn(A) -> R', tambien dentro de un '?' o de los
+    // argumentos de un generico)? Entonces se rechaza con su posicion: las
+    // funciones como valores solo las ejecuta el interprete. Se mira AQUI, al
+    // bajar cada funcion, y no al cargar la imagen: una libreria puede
+    // declarar 'sort_by(fn(T ptr, T ptr) -> int cmp)' y un programa que no la
+    // usa tiene que seguir corriendo en la VM.
+    bool reject_function_value(std::uint32_t type_id, std::uint32_t ln,
+                               std::uint32_t col) {
+        const pb::Type* found = function_type_of(type_id);
+        if (found == nullptr) return false;
+        fallo(hir::function_values_message(module_.source_file(), *found), ln, col);
+        return true;
+    }
+
+    // El primer tipo funcion dentro del tipo 'type_id' del pool, o nullptr.
+    const pb::Type* function_type_of(std::uint32_t type_id) const {
+        if (type_id == 0 || type_id >= static_cast<std::uint32_t>(module_.types_size())) {
+            return nullptr;
+        }
+        return hir::find_function_type(module_.types(static_cast<int>(type_id)));
+    }
+
+    // El cuerpo de una funcion de LIBRERIA que recibe o devuelve un valor
+    // funcion: los mismos parametros (para que la llamada cuadre) y una
+    // sola instruccion que falla con VM001 en su posicion. Explicito al
+    // EJECUTARLA, nunca otro comportamiento; y si nadie la llama, no cuesta
+    // nada.
+    void trap_function_value(const pb::FunctionDecl& decl,
+                             const std::vector<hir::Slot>& slots,
+                             const pb::Type& found, std::uint32_t ln, std::uint32_t col) {
+        for (const hir::Slot& slot : slots) {
+            if (!slot.parameter) continue;
+            Type tipo = Type::I64;  // un valor funcion nunca llega: basta el ancho
+            tipo_de(module_, slot.type_id, tipo);
+            fn_.slots.push_back(tipo);
+            fn_.slot_names.push_back(slot.name);
+            fn_.params++;
+        }
+        if (!tipo_de(module_, decl.return_type_id(), fn_.result)) fn_.result = Type::I64;
+        actual_ = nuevo_bloque();
+        Inst fallar;
+        fallar.op = Op::Fallar;
+        fallar.imm = interna(hir::function_values_message(module_.source_file(), found));
+        fallar.line = ln;
+        fallar.col = col;
+        emitir(std::move(fallar));
+        fn_.blocks[actual_].term = Term::Return;
+        fn_.blocks[actual_].has_value = false;
+    }
+
     std::string notacion(std::uint32_t id) const {
         if (id >= static_cast<std::uint32_t>(module_.types_size())) {
             return "desconocido";
@@ -4505,6 +4719,14 @@ private:
             fallo("esta llamada no se resolvio", e.ln(), e.col());
             return false;
         }
+        // VM003: el dueño del hook es un PARAMETRO de tipo de esta unidad, no
+        // un tipo: la llamada la prometio una cota (ver 'bound_call_message')
+        const std::string& dueno_hook = e.call().hook().owner_type();
+        if (sitio->target == hir::CallTarget::Unresolved && !dueno_hook.empty() &&
+            declares_type_param(module_, dueno_hook)) {
+            fallo(bound_call_message(module_.source_file(), dueno_hook), e.ln(), e.col());
+            return false;
+        }
         Inst inst;
         if (sitio->target == hir::CallTarget::Function) {
             inst.op = Op::Call;
@@ -4609,9 +4831,26 @@ private:
         // 'args', viaja en el callee.
         if (sitio->target == hir::CallTarget::Method) {
             Reg receptor = kNoReg;
-            if (!expresion(e.call().callee().member().obj(), receptor, false)) {
-                return false;
+            const pb::Expr& objeto = e.call().callee().member().obj();
+            // un receptor 'T ptr' que vive en una celda (un enum sin
+            // payload) recibe el PRESTAMO de la celda, no su valor: como
+            // '&e', y como el interprete
+            bool prestado = false;
+            if (parametro_es_puntero(inst, 0) && objeto.node_case() == pb::Expr::kIdentifier) {
+                const auto slot = nombres_.find(objeto.identifier().name());
+                if (slot != nombres_.end() && es_celda(slot->second)) {
+                    receptor = nuevo_reg();
+                    Inst borrow;
+                    borrow.op = Op::Borrow;
+                    borrow.dst = receptor;
+                    borrow.slot = slot->second;
+                    borrow.line = objeto.ln();
+                    borrow.col = objeto.col();
+                    emitir(std::move(borrow));
+                    prestado = true;
+                }
             }
+            if (!prestado && !expresion(objeto, receptor, false)) return false;
             inst.args.push_back(receptor);
         }
         // El parametro por valor es el nuevo dueño de su argumento, pero
@@ -4847,6 +5086,11 @@ private:
     bool nativa(const pb::Expr& e, Reg& dst) {
         const pb::HookRef& ref = e.call().hook();
         if (ref.kind() == pb::HASH) return hash_de(e, dst);
+        if (ref.kind() == pb::PRINT) {
+            fallo(print_primitive_message(module_.source_file(), ref.owner_type()),
+                  e.ln(), e.col());
+            return false;
+        }
         if (ref.kind() != pb::LEN || e.call().args_size() != 1) {
             fallo("el unico nativo que baja al MIR es 'len' de una cadena",
                   e.ln(), e.col());
@@ -5467,6 +5711,28 @@ const pb::Type* tipo_del_objeto(const pb::Expr& e, const hir::Function& f,
 
 Program lower(const hir::Image& image, const hir::Program& resolved) {
     Program program;
+    // VM002: un enum GENERICO ('enum Res<T, E> { Ok(T), Err(E) }') lleva
+    // payloads de tipo 'T' que la VM no sustituye (el ancho, la destruccion y
+    // el texto saldrian del 'T' sin ligar). Se rechaza donde se declara, en
+    // cualquier unidad cargada.
+    {
+        std::vector<const hir::Unit*> todas;
+        for (const std::unique_ptr<hir::Unit>& u : image.units()) todas.push_back(u.get());
+        todas.push_back(&image.main());
+        for (const hir::Unit* unidad : todas) {
+            for (const pb::Decl& d : unidad->module().items()) {
+                if (d.node_case() != pb::Decl::kEnumDecl ||
+                    d.enum_decl().type_params_size() == 0) {
+                    continue;
+                }
+                program.unsupported.push_back(Unsupported{
+                    option_message(unidad->module().source_file(),
+                                   "declara el enum generico '" +
+                                       d.enum_decl().name() + "'"),
+                    d.ln(), d.col()});
+            }
+        }
+    }
     Formas formas(image, program);
     Instancias instancias(image, resolved, program, formas);
     program.entry = resolved.entry;

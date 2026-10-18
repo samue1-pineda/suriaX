@@ -193,6 +193,8 @@ def collect(source: str, *, path: str = "<buffer>") -> Dict[str, Any]:
     ``path`` ancla la resolución de librerías; no hace falta que exista en
     disco (un buffer sin guardar es el caso normal de un visualizador).
     """
+    from src.linker_p import nueva_compilacion
+    nueva_compilacion()     # la caché del linker es de ESTA recolección
     payload: Dict[str, Any] = {
         "source": source,
         "path": path,
@@ -264,8 +266,12 @@ def collect(source: str, *, path: str = "<buffer>") -> Dict[str, Any]:
         from src.HIR.emmit_IR import build_module, module_to_text, serialize
         from src.HIR.pretty import format_type, pretty
         from src.HIR.stubs import load_hir_pb2
-    except Exception as exc:  # protobuf no instalado
-        fallo("hir", f"la fase HIR necesita protobuf: {exc}")
+    except Exception as exc:  # noqa: BLE001 - se informa con su causa
+        # El emisor ya no depende de protobuf (codec propio): culparlo
+        # mandaba a instalar algo que no arregla nada. Que el emisor no cargue
+        # es un fallo INTERNO del compilador; se dice con la causa real.
+        fallo("hir", "fallo interno: no se pudo cargar el emisor del HIR "
+                     f"({type(exc).__name__}: {exc})")
         fallo("link", "sin HIR no hay unidades que ligar")
         return payload
 

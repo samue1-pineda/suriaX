@@ -1,12 +1,16 @@
 """``enum_decl`` (EBNF):
 
 ::
-    enum_decl = "enum" IDENTIFIER "{" enum_item { "," enum_item } [ "," ] "}"
+    enum_decl = "enum" IDENTIFIER [ type_params ] "{" enum_item { "," enum_item } [ "," ] "}"
     enum_item = IDENTIFIER ( "(" type { "," type } ")" | [ "=" expression ] )
 
 La forma con parentesis es una variante con PAYLOAD ('Literal(int)'): el
 enum deja de ser un conjunto de enteros con nombre y pasa a ser un tipo
 SUMA. Ver ``ast_nodes.EnumDecl.es_suma``.
+
+``type_params`` tras el nombre lo hace GENERICO (``enum Res<T, E> { Ok(T),
+Err(E) };``). El nombre va delante de las llaves, asi que los parametros van
+pegados a el, como en la declaracion de una funcion (``fn f<T>``).
 
 ``;`` final: **obligatorio** (decision explicita de usuario -- a diferencia
 de ``fn``/``if``/``while``/``region``/``match``, que la toleran opcional,
@@ -29,13 +33,14 @@ except ImportError:  # pragma: no cover - ejecucion directa
 from .. import pratt
 from ..context import ParserContext
 from ..cursor import Cursor
-from .types import parse_type
+from .types import parse_type, parse_type_params
 
 
 def parse_enum_decl(cursor: Cursor, ctx: ParserContext,
                     visibility: Optional[str] = None) -> ast.EnumDecl:
     tok = cursor.expect(TokenType.ENUM)
     name_tok = cursor.expect_name()
+    type_params, type_bounds = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.L_BRACE)
 
     items: List[ast.EnumItem] = []
@@ -49,7 +54,8 @@ def parse_enum_decl(cursor: Cursor, ctx: ParserContext,
     cursor.expect(TokenType.R_BRACE)
     cursor.expect(TokenType.SEMICOLON)  # obligatorio
     return ast.EnumDecl(ln=tok.ln, col=tok.col, name=name_tok.lexeme,
-                        items=items, visibility=visibility)
+                        items=items, visibility=visibility,
+                        type_params=type_params, type_bounds=type_bounds)
 
 
 def _parse_enum_item(cursor: Cursor, ctx: ParserContext) -> ast.EnumItem:

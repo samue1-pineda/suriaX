@@ -33,7 +33,8 @@ entrada ya está probada.
 
 | Pieza | Archivo | Qué hace |
 |---|---|---|
-| Lector | [`include/suriax/hir/loader.hpp`](include/suriax/hir/loader.hpp) | `.phir` → `Module`, con **fail-fast** de `schema_version`. |
+| Lector | [`include/suriax/hir/loader.hpp`](include/suriax/hir/loader.hpp) | `.phir` → `Module`, con **fail-fast** de `schema_version`. Acepta los esquemas 1 y 2. |
+| Esquema 1 | [`src/schema_v1.cpp`](src/schema_v1.cpp) | Normaliza un `.phir` del esquema 1 (tipos inline, sin pool) a la forma del 2 al cargarlo: el MIR, la VM y las vistas tienen un solo camino. |
 | Unidad | idem (`Unit`) | Índices locales: funciones, dunder por `(nombre, línea)`, valores de `enum`, bloques `test`. |
 | Module linker | idem (`Image`, `load_image`) | Liga main + `.libsrx` transitivamente; índices de hooks y de conversiones en O(1). |
 | Vistas | [`include/suriax/hir/view.hpp`](include/suriax/hir/view.hpp) | La legible y el resumen — **byte-idénticas** a las de Python. |
@@ -191,7 +192,11 @@ el contenido. Un `.phir` de otra versión no es "casi correcto": es un
 artefacto cuyo significado cambió. Las versiones soportadas están en
 `kSupportedSchemaVersions` y se mueven a la vez que las de
 `runtime/interpreter/loader.py` y `web/src/hir/decode.ts` — son los tres
-lectores vivos del contrato.
+lectores vivos del contrato. Hoy son la 1 y la 2: el esquema 1 (el *rollback*,
+`--hir-schema 1`) se normaliza en `load_module` con el mismo resultado y el
+mismo orden de pool que el lector de Python
+(`test/backend/test_backend_cpp_schema_v1.py`); un 1 que mezcla los dos
+esquemas se rechaza.
 
 **2. Ningún nodo se salta en silencio.** El recorrido es un `switch` por cada
 `oneof` **sin rama `default`**: añadir un caso al esquema rompe la compilación
@@ -203,9 +208,23 @@ que este lector no conoce, que protobuf deja en los campos desconocidos) se
 
 ## Lo que sigue (y no está)
 
+- **Funciones como valores** (`fn(A) -> R`, `TypeKind.FUNCTION_TYPE` = 13): las
+  ejecuta solo el intérprete. El lowering a MIR rechaza con `VM001`, en su
+  posición, cada función del programa que recibe, devuelve o guarda una, y
+  cada expresión que la produce; `--check-mir` falla y `suri --run compiler`
+  lo ejecuta en el intérprete. Una función de LIBRERÍA así (`Vector.sort_by`)
+  se baja a un cuerpo que falla con `VM001` si se llama: rechazarla al cargar
+  dejaba fuera de la VM a todo programa con un `Vector`. Las vistas
+  (`--summary`, `--pretty`, `--verify`) las leen y escriben `fn(A) -> R` byte
+  a byte como Python. El kind se nombra por su número (`kFunctionTypeKind`):
+  el número es el contrato del cable; el nombre, no.
+- **El resto de lo que añadió la 0.4.1**: `case v` sobre un `T?`, `??` y los
+  enums genéricos (`VM002`), lo que despacha una cota (`VM003`), las lambdas
+  (`VM004`) y `print` de un primitivo (`VM005`) se rechazan con su posición;
+  las llamadas al host nuevas son `RT008` al ejecutar, y hay diferencias de
+  comportamiento con el intérprete (las globales, `__cmp__`, la igualdad por
+  valor). La lista, en [c_errorstfix.md](../c_errorstfix.md), sección 1.
 - El **JIT** y cualquier artefacto nativo: la VM interpreta el MIR.
-- Bajar `&` sobre un CAMPO escalar (`&p.x`; hoy se rechaza con su
-  posición). Sobre un local, un parámetro o una global ya baja.
 - Seguir los préstamos **entre** bloques en la verificación.
 - **Registrar la decisión "sin SSA"**: el MIR no tiene nodos φ (un valor que
   llega por dos caminos va a un local temporal), pero el porqué y las

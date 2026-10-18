@@ -1,0 +1,8 @@
+#import mem
+fn main() -> int {
+    var int ptr mutable p = mem.reserve<int>(2);
+    p[0] = 1;
+    var int x = p[1.0];
+    mem.release<int>(p);
+    return 0;
+}

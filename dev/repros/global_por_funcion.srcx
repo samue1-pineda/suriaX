@@ -1,0 +1,8 @@
+#from io #import stdp
+fn lee() -> int { return b; }
+var int a = lee();
+var int b = 5;
+fn main() -> int {
+    stdp.println(f"{a}");
+    return 0;
+}

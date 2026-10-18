@@ -1,0 +1,20 @@
+#from io #import stdp
+
+struct { int x; } P;
+enum Forma { Circulo(int), Nada };
+
+fn main() -> int {
+    var P a = P{ x: 1 };
+    var P b = a;
+    var P c = P{ x: 1 };
+    stdp.println(f"a == a: {a == a}");
+    stdp.println(f"a == b (b es copia de a): {a == b}");
+    stdp.println(f"a == c (mismo valor): {a == c}");
+    var Forma f = Forma.Circulo(3);
+    var Forma g = f;
+    stdp.println(f"f == f: {f == f}");
+    stdp.println(f"f == g (copia): {f == g}");
+    stdp.println(f"f == Circulo(3): {f == Forma.Circulo(3)}");
+    stdp.println(f"Nada == Nada: {Forma.Nada == Forma.Nada}");
+    return 0;
+}

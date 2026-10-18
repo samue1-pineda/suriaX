@@ -1,0 +1,7 @@
+// 01 — hola mundo: lo mínimo que imprime un programa.
+#from io #import stdp
+
+fn main() -> int {
+    stdp.println("hola mundo");
+    return 0;
+}

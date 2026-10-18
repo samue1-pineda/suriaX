@@ -1,0 +1,5 @@
+public fn suma(int a, int b) -> int { return a + b; }
+internal fn secreto() -> int { return 1; }
+private fn privado() -> int { return 2; }
+public struct { int x; } Punto;
+#export as calc

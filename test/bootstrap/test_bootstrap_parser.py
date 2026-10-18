@@ -268,7 +268,6 @@ def test_declaraciones():
         "fn pon(Caja ptr mutable self, T x) { } }\n"
         "@trait public struct { fn __len__(self ptr) -> int; hook fn __print__(self ptr); } Medible;\n"
         "@trait fn __hash__(self ptr) -> int;\n"
-        "test \"una prueba\" { }\n"
         "#export package as pk\n")
 
 
@@ -342,3 +341,17 @@ def test_los_errores_de_sintaxis_coinciden():
         "fn f() -> void { s = f\"{.x}\"; }",
     ):
         _primer_error(fuente)
+
+
+#: por qué la V1 no se compara todavía en lo nuevo de las pruebas
+V1_SIN_PRUEBAS = ("la V1 todavía no conoce 'expect' ni 'errfinally' (ni que un 'test' exige "
+                  "un 'expect'): se construyeron primero en la V0; la V1 se pone al día "
+                  "cuando la V0 se estabilice (decisión del mantenedor)")
+
+
+def test_las_pruebas_del_lenguaje():
+    """Una prueba con ``expect`` y sus cláusulas: el árbol de la V1 tiene que
+    ser el de la V0. PENDIENTE: se omite diciéndolo, no en silencio."""
+    from helpers import omitir
+    omitir(V1_SIN_PRUEBAS)
+    _compara('test "una prueba" { expect (1 == 1) { } } errfinally { } finally { }')

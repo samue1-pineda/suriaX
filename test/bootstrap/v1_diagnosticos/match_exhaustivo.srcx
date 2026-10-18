@@ -1,0 +1,31 @@
+enum Color { ROJO, VERDE, AZUL };
+enum Forma { Circulo(int), Punto };
+fn a(Color c) -> int {
+    match (c) {
+        case Color.ROJO: { return 1; }
+        case VERDE: { return 2; }
+    }
+    return 0;
+}
+fn b(Forma f) -> int {
+    match (f) {
+        case Forma.Circulo(r): { return r; }
+    }
+    return 0;
+}
+fn c(Color c, int n) -> int {
+    match (c) {
+        case Color.ROJO: { return 1; }
+        case n: { return 2; }
+    }
+    return 0;
+}
+fn d(Color c) -> int {
+    match (c) {
+        case Color.ROJO: { return 1; }
+        case Color.VERDE: { return 2; }
+        case Color.AZUL: { return 3; }
+    }
+    return 0;
+}
+fn main() -> int { return a(Color.ROJO) + b(Forma.Punto) + c(Color.AZUL, 1) + d(Color.AZUL); }

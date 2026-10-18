@@ -1,0 +1,36 @@
+// 02 — aritmética básica: precedencia, '/' y '%' con operandos negativos.
+// En suriaX '/' y '%' entre int TRUNCAN hacia cero (como C): -7 / 2 == -3 y
+// -7 % 2 == -1. Python hace división entera al piso (-7 // 2 == -4), así que
+// aquí se ve si el intérprete (Python), la VM (C++) y el web (JS/wasm)
+// coinciden.
+#from io #import stdp
+
+fn main() -> int {
+    var int a = 7;
+    var int b = 2;
+    stdp.println(f"precedencia 2 + 3 * 4 = {2 + 3 * 4}");
+    stdp.println(f"parentesis (2 + 3) * 4 = {(2 + 3) * 4}");
+    stdp.println(f"resta asociativa 10 - 4 - 3 = {10 - 4 - 3}");
+    stdp.println(f"division asociativa 100 / 10 / 5 = {100 / 10 / 5}");
+    stdp.println(f"7 / 2 = {a / b}");
+    stdp.println(f"7 % 2 = {a % b}");
+    stdp.println(f"-7 / 2 = {(0 - a) / b}");
+    stdp.println(f"-7 % 2 = {(0 - a) % b}");
+    stdp.println(f"7 / -2 = {a / (0 - b)}");
+    stdp.println(f"7 % -2 = {a % (0 - b)}");
+    stdp.println(f"-7 / -2 = {(0 - a) / (0 - b)}");
+    stdp.println(f"-7 % -2 = {(0 - a) % (0 - b)}");
+    stdp.println(f"-1 / 3 = {-1 / 3}");
+    stdp.println(f"-1 % 3 = {-1 % 3}");
+    stdp.println(f"-9 % 3 = {-9 % 3}");
+    stdp.println(f"unario -a * -b = {-a * -b}");
+    var float x = 7.0;
+    var float y = 2.0;
+    stdp.println(f"float 7.0 / 2.0 = {x / y}");
+    stdp.println(f"float -7.0 / 2.0 = {(0.0 - x) / y}");
+    stdp.println(f"float 0.1 + 0.2 = {0.1 + 0.2}");
+    stdp.println(f"float 1.0 / 3.0 = {1.0 / 3.0}");
+    stdp.println(f"float 1e16 + 1.0 = {10000000000000000.0 + 1.0}");
+    stdp.println(f"mezcla (a * 3 - b) % 5 = {(a * 3 - b) % 5}");
+    return 0;
+}

@@ -19,6 +19,7 @@
 #import frontend.tokens as tk
 #import frontend.lexer as lx
 #import frontend.cursor as cu
+#import frontend.diagnosticos as dg
 #import frontend.parser as ps
 #import frontend.arbol as ar
 #import semantica.tipos as tip
@@ -27,6 +28,7 @@
 #import sistema.archivos as arch
 #import array.vector as vec
 #import collections.dictionary as dic
+#import text
 
 public const str EXT_LIB = ".libsrx";
 public const str EXT_FUENTE = ".srcx";
@@ -48,6 +50,8 @@ struct {
     int n_hooks;
     int subs_desde;     // en Contexto.lista: índices de librería
     int n_subs;
+    int internos_desde; // en Contexto.internos: sus nombres 'internal' (no se exportan)
+    int n_internos;
 } Libreria;
 
 /- El estado de UNA compilación, compartido por todas sus unidades. -/
@@ -60,7 +64,14 @@ struct {
     dic.Dictionary<str, bool> cargando;  // ruta -> se está cargando (ciclos)
     str raiz;                            // la raíz del proyecto
     str stdlib;                          // la 'lib/' del compilador
-    vec.Vector<str> errores;
+    dic.Dictionary<str, bool> fallidas;  // ruta -> no cargó (su error ya se dijo: no se repite)
+    vec.Vector<str> internos;            // los nombres 'internal' de cada librería, seguidos
+    // los errores de un SUBMÓDULO de paquete que no cargó: se dicen recién
+    // cuando un import lo pide ('pq.roto', o el paquete entero)
+    vec.Vector<dg.Diagnostico> fallos;
+    vec.Vector<int> fallo_paquete;
+    vec.Vector<str> fallo_nombre;
+    vec.Vector<bool> fallo_dicho;
 } Contexto;
 
 /- El contexto de una compilación. `raiz`: la carpeta del
@@ -70,7 +81,9 @@ public fn contexto(str raiz, str stdlib) -> Contexto {
     return Contexto{ u: tip.universo(), exportes: sim.tabla(), libs: vec.dynamic<Libreria>(8),
                      lista: vec.dynamic<int>(64), por_ruta: dic.make<str, int>(16),
                      cargando: dic.make<str, bool>(8), raiz: raiz, stdlib: stdlib,
-                     errores: vec.dynamic<str>(4) };
+                     fallidas: dic.make<str, bool>(2), internos: vec.dynamic<str>(4),
+                     fallos: vec.dynamic<dg.Diagnostico>(1), fallo_paquete: vec.dynamic<int>(1),
+                     fallo_nombre: vec.dynamic<str>(1), fallo_dicho: vec.dynamic<bool>(1) };
 }
 
 public fn lib(Contexto ptr c, int i) -> Libreria { return c.libs.get(i); }
@@ -81,6 +94,46 @@ public fn de_lista(Contexto ptr c, int desde, int k) -> int { return c.lista.get
 // ------------------------------------------------------------------------ //
 // la raíz del proyecto y las rutas de búsqueda (resolver.py)
 // ------------------------------------------------------------------------ //
+
+/- La ruta de una librería tal como viaja en el HIR (`Module.source_file`),
+   REPRODUCIBLE (`linker_p.resolver.ruta_publica`): dentro de la stdlib,
+   `<stdlib>/IO/main.libsrx`; dentro del proyecto, relativa a su raíz; fuera
+   de los dos, absoluta. Siempre con `/`. -/
+public fn ruta_publica(Contexto ptr c, str archivo) -> str {
+    var str absoluta = rt.absoluta(archivo);
+    var str r = debajo_de(absoluta, c.stdlib);
+    if (r != "") { return "<stdlib>/" + r; };
+    r = debajo_de(absoluta, c.raiz);
+    if (r != "") { return r; };
+    return con_barras(absoluta);
+}
+
+/- `ruta` relativa a la carpeta `base`, con `/`; "" si no está debajo. En
+   Windows (separador `\`) sin distinguir mayúsculas, como el sistema. -/
+fn debajo_de(str ruta, str base) -> str {
+    if (base == "") { return ""; };
+    var str b = rt.absoluta(base);
+    var str prefijo = b + rt.separador();
+    if (len(ruta) <= len(prefijo)) { return ""; };
+    var str inicio = text.slice(ruta, 0, len(prefijo));
+    var bool igual = inicio == prefijo;
+    if (rt.separador() == "\\") { igual = minusculas(inicio) == minusculas(prefijo); };
+    if (not igual) { return ""; };
+    return con_barras(text.slice(ruta, len(prefijo), len(ruta)));
+}
+
+/- `ruta` con `/` en vez del separador del sistema. -/
+fn con_barras(str ruta) -> str {
+    var str sep = rt.separador();
+    if (sep == "/") { return ruta; };
+    var str r = "";
+    var int i = 0;
+    while (i < len(ruta)) {
+        if (ruta[i] == sep[0]) { r = r + "/"; } else { r = r + cast<str>(ruta[i]); };
+        i = i + 1;
+    };
+    return r;
+}
 
 /- La raíz del proyecto de `fuente` (ruta absoluta): la carpeta del
    `.suriaX_config.yaml` más cercano subiendo, o la del fuente si no hay. -/
@@ -144,7 +197,7 @@ fn agrega_ruta(vec.Vector<str> ptr mutable rutas, str r) -> void {
 }
 
 /- `nombre` en minúsculas (solo ASCII: basta para nombres de librería). -/
-fn minusculas(str s) -> str {
+public fn minusculas(str s) -> str {
     var str r = "";
     var int i = 0;
     while (i < len(s)) {
@@ -247,12 +300,12 @@ fn termina_en_lib(str n) -> bool {
 struct {
     cu.Parser p;
     int raiz;
-    vec.Vector<str> errores;
+    vec.Vector<dg.Diagnostico> errores;   // léxicos y de sintaxis, en ese orden
 } Arbol;
 
 /- Lee y parsea `ruta`. -/
 public fn lee(str ruta) -> Arbol {
-    var vec.Vector<str> errores = vec.dynamic<str>(4);
+    var vec.Vector<dg.Diagnostico> errores = vec.dynamic<dg.Diagnostico>(4);
     var vec.Vector<tk.Token> toks = lx.tokenizar(arch.leer(ruta), &errores);
     var int ultimo = toks.len() - 1;
     var cu.Parser p = cu.Parser{ toks: move toks, pos: 0, fin: ultimo,

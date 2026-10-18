@@ -1,0 +1,4 @@
+enum Algo { Uno(void), Dos(int, void) };
+struct { void nada; int x; } S;
+var void global = 1;
+fn main() -> int { return 0; }

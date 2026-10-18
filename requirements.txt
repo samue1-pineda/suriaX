@@ -25,3 +25,5 @@ pyyaml             # formato de compilacion (.suriaX_config.yaml)
 #   El servidor NO añade dependencias: usa 'http.server' de la biblioteca
 #   estandar. Necesita node 22+ en el sistema para el panel de WebAssembly
 #   — sin node ese panel lo dice, no se queda vacio.
+#   Tampoco necesita NADA de esta lista: corre con un Python sin paquetes
+#   (ver playground/README.md).

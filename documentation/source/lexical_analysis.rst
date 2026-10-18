@@ -113,6 +113,9 @@ pertenecían al modelo por regiones, retirado con él (ver
     Lexema          Significado
     ==============  ==========================================================
     ``fn``          Declara una función (:ref:`FUNCTION <function-def>`).
+    ``lambda``      Una función sin nombre, como argumento de una llamada
+                    (``lambda (int x) -> bool: x > 3``; ver
+                    :ref:`lambdas <lambdas>`).
     ``return``      Devuelve el control y, opcionalmente, un valor.
     ``if``          Ejecuta condicionalmente un bloque.
     ``else``        Rama alternativa de un ``if``.
@@ -396,8 +399,11 @@ SIZEOF (``sizeof``)
 
 operador que devuelve el tamaño en memoria de un tipo o de un valor. El
 tamaño lo aporta el hook ``__sizeof__`` del tipo: los primitivos no lo
-declaran —su layout es cosa del backend— así que ``sizeof(int)`` es
-``RT011`` al ejecutar.
+declaran —su layout es cosa de cada motor— así que ``sizeof(int)`` no
+compila (:ref:`SEM001 <SEM001-def>`), igual que ``sizeof`` de un tipo propio
+sin el hook o de una función. Dentro de un genérico, ``sizeof`` de su ``T``
+lo decide cada instancia, en la llamada. Para un tamaño fijo están los tipos
+de ``d_types`` (``sizeof(dt.int32)``).
 
 Entre los paréntesis va un **tipo** o el **nombre de un valor**; se escriben
 igual y cuál es lo decide la Semántica, que es la única que sabe en qué
@@ -435,6 +441,7 @@ directiva del compilador (ver :ref:`directivas <directivas>`).
 
    test "suma basica" {
        var int r = suma(2, 3);
+       expect (r == 5);
    }
 
 .. _tipos de datos:
@@ -502,13 +509,25 @@ literal con prefijo es un **patrón de bits** (la regla de Java): puede usar los
 FLOAT (``float``)
 ~~~~~~~~~~~~~~~~~~
 
-número en coma flotante. múltiples puntos decimales generan :ref:`LEX006 <LEX006-def>`.
+número en coma flotante: una parte decimal (``3.25``), un exponente
+(``1e3``, ``2.5e-3``, ``1E+10``) o los dos. con exponente el literal es
+SIEMPRE ``float`` (``1e3`` vale ``1000.0`` y no entra en un ``int``); un
+literal con base no lleva exponente (``0x1e3`` es el entero hexadecimal). el
+valor es el ``double`` más cercano al decimal escrito, el mismo que da
+``text.parse_float`` con el mismo texto. múltiples puntos decimales o un
+exponente sin dígitos (``1e+``) generan :ref:`LEX007 <LEX007-def>`; un valor
+que no cabe en un ``float`` (``1e400``), :ref:`LEX006 <LEX006-def>`, y
+también uno distinto de cero tan pequeño que quedaría en ``0.0``
+(``1e-400``): casi seguro es una errata, y si se quiere un cero se escribe
+``0.0``. ``text.parse_float`` en cambio da ``0.0`` con ese texto, porque lee
+datos y no código.
 
 .. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
    float pi = 3.1416;
+   float mil = 1e3;
 
 .. _byte-def:
 
@@ -549,13 +568,22 @@ STRING (``str``)
 ~~~~~~~~~~~~~~~~~
 
 secuencia de code points Unicode almacenada sin pérdida (ver :ref:`tabla unicode <unicode-ref>`). una
-cadena sin cierre produce :ref:`LEX002 <LEX002-def>`.
+cadena sin cierre produce :ref:`LEX003 <LEX003-def>`.
+
+una f-string (``f"..."``) interpola ``{expresion}``. lo que va entre ``{`` y
+``}`` es CÓDIGO, como en Python 3.12 y C#: un literal dentro se escribe tal
+cual, sin escapar sus comillas (``f"{len("ab")}"``, ``f"{'}'}"``), y sus
+comillas y llaves no cierran nada. un ``\`` fuera de un literal dentro de la
+interpolación es :ref:`LEX005 <LEX005-def>`, con la forma correcta en el
+mensaje. la interpolación no cruza un salto de línea, y un error dentro de
+ella apunta a su línea y columna reales.
 
 .. code-block:: srcx
    :linenos:
    :emphasize-lines: 1
 
    str saludo = "hola!";
+   str largo = f"{len("hola")} letras";
 
 .. _bool-def:
 
@@ -828,7 +856,9 @@ Tres decisiones:
   **pegados** y en posición de operador. Así ``Vector<Vector<int>>`` cierra dos
   genéricos sin partir ningún token (el problema que tuvo C++ hasta C++11), y
   ``a > > b`` no es un desplazamiento. ``SHIFT_RIGHT`` y ``SHIFT_RIGHT_ASSIGN``
-  existen como tokens, pero solo los arma el parser.
+  existen como tokens, pero solo los arma el parser. Lo mismo ``??``
+  (``NULL_COALESCE``, desenvolver un ``T?``): dos ``?`` pegados en posición de
+  operador, para que ``int??`` siga siendo un tipo.
 - **Un desplazamiento fuera de** ``[0, 64)`` **es una excepción**
   (``excepciones.DesplazamientoInvalido``, ``EXC005``): en C es comportamiento
   indefinido y en Python da un entero de otro tamaño.
@@ -1432,7 +1462,7 @@ dos veces en el mismo archivo es ``SEM002``):
 
    #export as cadena
 
-si no existe la libreria se arroja un :ref:`LEX003<LEX003-def>`
+si no existe la libreria se arroja un :ref:`SEM009<SEM009-def>`, que dice en qué rutas se buscó
 
 * :ref:`test<test_directive-def>`: permite probar una etapa del compilador, una generacion o en el caso del HIR/MIR/Backend
 

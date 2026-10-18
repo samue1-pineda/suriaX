@@ -149,6 +149,22 @@ class TokenType(Enum):
     SHIFT_RIGHT_ASSIGN = 111  # >>=  (lo arma el parser: '>' + '>=' pegados)
     BYTE = 112         # 'byte' (tipo: un entero SIN signo de 8 bits, 0..255)
 
+    # --- pruebas: 'test "nombre" { expect (cond); } errfinally { } finally { }' ---
+    EXPECT = 113       # 'expect (cond) [bloque]': la comprobacion de un 'test'
+    ERRFINALLY = 114   # 'errfinally': clausula de un 'test', corre solo si fallo
+
+    # '??' (desenvolver un 'T?' con un valor por defecto: 'x ?? 0'). Como
+    # '>>', NO lo emite el lexer: son dos NULLABLE ('?') PEGADOS, y el parser
+    # los junta solo en posicion de operador. Asi 'int??' sigue siendo un tipo
+    # con dos sufijos y ningun token se parte.
+    NULL_COALESCE = 115
+
+    # 'lambda': una funcion SIN nombre escrita donde se usa, con sus tipos
+    # escritos ('lambda (int x) -> bool: x > 3'). Solo vale como ARGUMENTO
+    # de una llamada, en un parametro de tipo funcion: no escapa (ver
+    # documentation/source/type_system.rst, "Lambdas").
+    LAMBDA = 116
+
 
 # --- tablas de busqueda O(1) usadas por los scanners ---
 #
@@ -175,6 +191,7 @@ KEYWORDS: dict[str, TokenType] = {
     "var": TokenType.VAR,
     "mutable": TokenType.MUTABLE,  # tipos puntero ('ptr mutable T')
     "fn": TokenType.FUNCTION,
+    "lambda": TokenType.LAMBDA,
     "struct": TokenType.STRUCT,
     "enum": TokenType.ENUM,
     "sizeof": TokenType.SIZEOF,
@@ -203,6 +220,9 @@ KEYWORDS: dict[str, TokenType] = {
     "break": TokenType.BREAK,
     "continue": TokenType.CONTINUE,
     "test": TokenType.TEST,
+    # pruebas: solo dentro de un 'test' (y 'errfinally', solo tras su bloque)
+    "expect": TokenType.EXPECT,
+    "errfinally": TokenType.ERRFINALLY,
     # memoria: ownership + move-semantics
     "move": TokenType.MOVE,
     "free": TokenType.FREE,
@@ -235,12 +255,16 @@ class Interp:
 
     Por ahora solo guarda el texto crudo de la expresion (``expr``). El parser
     es quien la analizara como una expresion real; el lexer solo la delimita.
-    ``col`` es la columna (1-based) donde empieza la expresion en el fuente,
-    util para reportar errores precisos.
+    ``col`` y ``ln`` son la columna (1-based) y la linea donde empieza la
+    expresion en el fuente: el parser ubica cada nodo de la interpolacion a
+    partir de ahi. La linea es la de ESTA interpolacion, no la del token: dos
+    literales adyacentes en lineas distintas se funden en un solo token, que
+    conserva la posicion del primero.
     """
 
     expr: str
     col: int
+    ln: int = 0
 
     def __repr__(self) -> str:
         return f"Interp({self.expr!r})"

@@ -1,0 +1,33 @@
+#import array.vector as vec
+struct { int v; } R;
+hook fn __free__(R ptr self) -> void { throw 1; }
+struct { R r; } Caja;
+struct { Lazo l; } Lazo;
+struct { Bucle2 b; } Bucle1;
+struct { Bucle1 a; } Bucle2;
+enum Arbol { Hoja, Nodo(Arbol) };
+fn toma(R r) -> int { return 1; }
+fn dir() -> int ptr {
+    var int x = 1;
+    return &x;
+}
+fn presta(Caja ptr c) -> R {
+    var R x = move c.r;
+    return c.r;
+}
+fn main() -> int {
+    var R a = R{ v: 1 };
+    var R b = a;
+    var R c = R{ v: 2 };
+    c = a;
+    var int n = toma(a);
+    var Caja k = Caja{ r: a };
+    var int v = 5;
+    free v;
+    int vec.Vector w[2];
+    w.push(1);
+    w.push(2);
+    w.push(3);
+    w.push(4);
+    return n;
+}

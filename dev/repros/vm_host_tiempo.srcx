@@ -1,0 +1,7 @@
+#from io #import stdp
+#import sistema
+fn main() -> int {
+    var int t = sistema.tiempo.ahora();
+    stdp.println(f"{t > 0}");
+    return 0;
+}

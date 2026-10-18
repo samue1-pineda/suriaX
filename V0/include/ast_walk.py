@@ -92,4 +92,40 @@ def dispatch_walk(root: Any, handlers: Dict[type, Callable[[Any], None]]) -> Non
             handler(node)
 
 
-__all__ = ["walk", "dispatch_walk", "child_fields"]
+def deeper_than(root: Any, limit: int) -> Any:
+    """El primer nodo que queda a MAS de ``limit`` niveles bajo ``root``.
+
+    ``None`` si el arbol cabe. ``root`` esta en el nivel 1 y cada nodo hijo,
+    un nivel mas; las listas no cuentan (son la forma de tener varios hijos).
+
+    Iterativo a proposito: es la funcion que decide si un arbol es demasiado
+    profundo para las pasadas recursivas, asi que no puede ser una de ellas.
+    Corta en el primer nodo que se pasa — un arbol adversarial no se recorre
+    entero para rechazarlo.
+    """
+    nodes = [root]
+    depths = [1]
+    while nodes:
+        node = nodes.pop()
+        depth = depths.pop()
+        if node.__class__ is list:
+            for child in node:
+                if isinstance(child, ASTNode):
+                    nodes.append(child)
+                    depths.append(depth)
+            continue
+        if depth > limit:
+            return node
+        below = depth + 1
+        for name in child_fields(type(node)):
+            child = getattr(node, name)
+            if child.__class__ is list:
+                nodes.append(child)
+                depths.append(below)
+            elif isinstance(child, ASTNode):
+                nodes.append(child)
+                depths.append(below)
+    return None
+
+
+__all__ = ["walk", "dispatch_walk", "child_fields", "deeper_than"]

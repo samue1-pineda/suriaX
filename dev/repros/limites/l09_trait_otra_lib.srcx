@@ -1,0 +1,3 @@
+#import array.vector as vec
+fn f<T: vec.Ord>(T x) -> void { }
+fn main() -> int { return 0; }

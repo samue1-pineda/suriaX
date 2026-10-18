@@ -1,5 +1,7 @@
 # Registro de cambios
 
+[![Versión](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/samue1-pineda/suriaX/badges/version.json)](version.py)
+
 Lo que cambió en cada versión de suriaX, de la más nueva a la más antigua.
 Lo que **sigue fallando** en la versión publicada está en
 [c_errorstfix.md](c_errorstfix.md); cuando algo de allí se corrige, sale de
@@ -11,14 +13,302 @@ la lección.
 
 ---
 
-## [0.3.1] — en desarrollo
+## [0.4.1] — en desarrollo
+
+La 0.4.0 (el commit del punto fijo del bootstrap) no tuvo entrada propia:
+sus cambios están en esta sección, junto con los de la 0.4.1.
 
 La 0.3.0 fue un rescate de urgencia. Esta versión repone lo que faltó, pone
 la documentación al día, estabiliza el linker, los genéricos y las
 excepciones, y empieza el bootstrap.
 
+**El paradigma queda declarado:** suriaX es un lenguaje **imperativo con
+herramientas funcionales** que usa **programación genérica**. Imperativo de
+sistemas, con propiedad (move, free, préstamos); de lo funcional, lo que no
+rompe la propiedad: funciones como valores, enums con datos y `match`,
+`map`/`filter`/`fold`, `const` y lambdas que no escapan. Tipado estático,
+fuerte y nominal, sin inferencia: variables, parámetros y retornos se
+anotan siempre. La programación genérica está más cerca de Ada que de la STL
+de C++. De los templates toma lo que no cuesta seguridad de tipos: la
+deducción de los argumentos de tipo desde los argumentos de la llamada y
+cotas al estilo de los conceptos (`<T: Ord>`). La especialización, SFINAE y
+la metaprogramación no entran. El recorrido genérico de contenedores llega
+junto al `for`, en una versión posterior.
+
 ### Añadido
 
+- **El esquema 1 del HIR vuelve a funcionar (rollback).** El esquema está
+  versionado: `python V0/main.py prog.srcx --emit-hir --hir-schema 1` emite el
+  esquema inicial (cada tipo escrito dentro de su nodo, sin pool de tipos), y
+  el intérprete, la VM y el target web aceptan el 1 y el 2. Al cargar un 1 lo
+  normalizan a la forma de hoy, así que el MIR, la VM y el WebAssembly tienen
+  un solo camino. Los campos del 1 volvieron con su tag y su significado
+  originales (`Expr.restype = 3`, `VarDecl.type = 2`, `Parameter.type = 1`,
+  `FunctionDecl.return_type = 3`, `Field.type = 1`); los que nacieron después
+  llevan un gemelo con tag nuevo (`LambdaExpr.return_type = 5`,
+  `EnumItem.payload_types = 4`). Medido: el mismo programa da la misma
+  ejecución en los dos esquemas, normalizar un 1 da el 2 byte a byte, y un 2
+  sale idéntico al de antes (221 `.phir`). El 2 sigue siendo el de por
+  defecto porque ocupa menos (la V1 completa pesa un 32 % más en el 1). El
+  `.proto` original del esquema 1 queda en `dev/diff/schema/`.
+- **Un diferencial de dos compiladores por tres targets** (`dev/diff/`):
+  cada programa se compila con la V0 y con la V1, y cada HIR se ejecuta en el
+  intérprete, la VM y el target web (WebAssembly). Compara la salida byte a
+  byte y el código de salida, y mide la emisión, la lectura y la ejecución
+  (30 corridas, la primera descartada, la mediana). Los resultados están en
+  `dev/diff/RESULTS.md` y los pasos para replicarlos, en su README. El
+  intérprete y la VM coinciden en todo; el target web, en el resultado de lo
+  que soporta, salvo la división por cero y `MIN / -1` (ver
+  `c_errorstfix.md`).
+- **Una reproducción para cada error conocido** (`dev/repros/`):
+  `bash dev/repros/run.sh <programa> [i] [c] [w] [v1]` lo muestra en el
+  intérprete, la VM, el target web o la V1, y cada entrada de
+  `c_errorstfix.md` dice qué sale hoy.
+- **El playground separa al compilador del target web.** Eran un solo
+  archivo y el fallo de uno se llevaba al otro: si node tardaba de más, el
+  servidor respondía un 500 y la página perdía también las fases que el
+  compilador sí había producido. Ahora son capas (`playground/capas/`) con un
+  adaptador por proveedor, y cada uno responde con uno de cuatro estados:
+  `ok`, `error_del_programa`, `no_disponible` o `error_interno`. Si falla el
+  target web, las fases del compilador llegan intactas; si falla el
+  compilador, el servidor contesta igual y dice quién falló. La arquitectura,
+  las normas que sigue y las que le faltan están en
+  [playground/ARQUITECTURA.md](playground/ARQUITECTURA.md).
+- **La API del playground está descrita y versionada**:
+  [playground/openapi.json](playground/openapi.json) (OpenAPI 3.1), que el
+  servidor publica en `GET /api/openapi.json`. Las respuestas llevan `api`,
+  `status` y `providers`; los errores HTTP, la forma de la RFC 9457. Una
+  prueba compara la descripción con las respuestas de verdad.
+- **Un depurador.** `python V0/main.py --dap` arranca el depurador
+  hablando el protocolo estándar (DAP), que entienden VS Code, Neovim, Emacs
+  y otros. Puntos de parada (también dentro de una librería), paso a paso
+  —pasar, entrar, salir—, pausa, la pila de llamadas y las variables, que se
+  despliegan (los campos de un `struct`, aquello a lo que apunta un puntero).
+  Y una columna que es de suriaX: la **propiedad** de cada variable — `dueña`,
+  `prestada`, `movida` o `liberada`. El intérprete ya llevaba esa cuenta (es
+  la que hace cumplir el uso tras `move` y tras `free`); el depurador la deja
+  ver sin leer el valor, así que mirar una variable movida no es el error que
+  sería usarla. **Se detiene donde el programa falla** —un error de
+  ejecución, un `throw` que ningún `catch` espera, un `expect` que no se
+  cumple— con la pila y las variables todavía vivas. Acepta las banderas del
+  compilador (`"flags": ["--test"]` depura las pruebas; `--trace-memory`
+  escribe la traza en la consola), leídas con el mismo analizador que la
+  terminal. Corre en el intérprete; con el depurador apagado su coste no se
+  distingue del ruido de la medición.
+- **Lo que una herramienta de línea de comandos le pide a la máquina**
+  (en el intérprete). `sistema.entrada` lee la entrada estándar, así que un
+  programa ya funciona en una tubería (`cat datos.txt | prog`).
+  `sistema.archivos` gana `borrar` (un archivo o una carpeta vacía),
+  `renombrar` (de una vez: la forma segura de reescribir un archivo) y
+  `modificado` (la fecha, en milisegundos). `sistema.comandos` lanza otro
+  programa sin intérprete de órdenes de por medio —un argumento con espacios
+  o con `;` es un argumento— y devuelve su código, su salida y sus errores.
+  `sistema.tiempo` da la hora, un reloj para medir y `dormir`. Bajo el
+  depurador la entrada está vacía: allí la entrada estándar es el canal del
+  editor. La VM y el target web todavía no las tienen.
+- **`Vector.at_mut(i)` y `Dictionary.at_mut(clave)`**: un `ptr mutable` al
+  elemento, para cambiarlo en su sitio. Deja de valer si el contenedor crece
+  (`RT003`).
+- **Predicados en `Vector`**: `v.any(p)`, `v.all(p)`, `v.count_if(p)` y
+  `v.find(p)` con `p: fn(T ptr) -> bool` (una función con nombre o una
+  lambda). `any`, `all` y `find` se detienen en cuanto saben la respuesta;
+  `find` da el índice del primero que cumple como un `int?` (`null` si
+  ninguno). El predicado recibe una copia, como en `filter`: con un `T` con
+  destructor son `SEM038`.
+- **`result.Result<T, E>`** (`Ok(T)`, `Err(E)`), un enum genérico estándar
+  en su propio paquete, con `is_ok()` y `unwrap_or(d)`. Va aparte para que la
+  VM, que rechaza con `VM002` todo programa que cargue un enum genérico, siga
+  ejecutando los programas que no lo importan.
+- **`Dictionary.get_or(k, default)`**: el valor o `default`, sin lanzar y sin
+  agregar la clave. **`Dictionary.items()`**: un `Vector<Pair<K, V>>` con
+  copias, en el orden de `keys()`, con el nuevo
+  **`collections.pair.Pair<K, V>`** (`key`, `value`). Con un valor con
+  destructor los dos son `SEM038`, como `get` y `values()`.
+- **`print` es variádico**: `print("total:", n, 1.5)` escribe cada
+  argumento separado por un espacio, sin salto de línea al final, en orden.
+  Solo como sentencia; dentro de una expresión, o sin argumentos, es
+  `SEM008`. El HIR no cambia: la semántica lo descompone en `print` de un
+  argumento.
+- **Lambdas que no escapan**: `lambda (int ptr x) -> bool: x[0] > 3` o, con
+  más de una sentencia, `lambda (int ptr x) -> bool { ...; return ...; }`.
+  Los tipos se escriben siempre. Solo pueden ser el argumento de un
+  parámetro `fn(...) -> R` (`SEM050`), y leen los locales y parámetros de
+  alrededor sin poder modificarlos (`SEM003`/`SEM015`/`SEM036`). Un
+  parámetro de tipo función es **prestado**: solo se llama o se pasa a otro
+  (`SEM051`); para guardar una función recibida se declara
+  `(fn(...) -> R)?`. Participan en la deducción:
+  `func.map(&v, lambda (int ptr x) -> str: f"{x[0]}")`. Las ejecuta el
+  intérprete; la VM las rechaza con `VM004` y el target web con `WEB104`.
+- **Cotas en los genéricos**: `<T: Ord + Contrato>` en funciones, structs,
+  enums, `type` y `@impl`. Con la cota, `<`, `hash`, `print` y los métodos
+  del contrato se comprueban en la definición, y cada instancia la cumple en
+  su llamada: el error dice qué cota falta y desde qué argumento se dedujo el
+  tipo. Sin cota todo sigue igual (comprobación por instancia, `SEM043`).
+- **Conceptos nativos `Eq`, `Ord`, `Hash` y `Print`**, que se cumplen solos:
+  los tipos nativos que ya los tienen y un tipo propio con el hook
+  (`__cmp__` lo hace `Ord`). Son nombres predefinidos que solo existen como
+  cota; un trait del programa con el mismo nombre manda.
+- **Traits que piden métodos de `@impl`**, además de dunders: un método de
+  nombre llano en el contrato se cumple con uno del `@impl` del tipo.
+- **Deducción de argumentos de tipo**, un subconjunto de la de los templates
+  de C++: se leen de los argumentos en las formas `T`, `T ptr`, `T?`,
+  `Nombre<..T..>` y `fn(..T..) -> R`, sin conversiones. `func.map(&v, f)` ya
+  no necesita `<int, str>`. Dos argumentos que dan tipos distintos, o un `T`
+  que no se puede leer, es `AST007`; se escriben todos o ninguno. Sigue sin
+  haber inferencia: las variables se anotan siempre.
+- **Métodos genéricos**: `fn map<U>(...)` dentro de `@impl Caja<T>`.
+- **`Vector.sort` pide `T: Ord`**: el error sale en la llamada a `sort`.
+- La VM rechaza con `VM003` lo que despacha una cota en ejecución
+  (`print(x)` con `T: Print`, `x.metodo()` con un contrato); las cotas, la
+  deducción y los métodos genéricos no cambian el HIR.
+- **Desenvolver un `T?`**: `match` con `case null` y `case v` (`v` es el
+  contenido, prestado como el payload de `case E.A(x)`), y `x ?? d`, que da
+  `d` si `x` es `null` y solo entonces lo evalúa (asocia a la derecha, por
+  debajo de `or`; `d` tiene que ser exactamente `T`). No hay estrechamiento
+  tras un `if (x != null)`: se desenvuelve con `match` o `??`.
+- **Enums genéricos**: `enum Res<T, E> { Ok(T), Err(E), };`. Las variantes
+  se escriben siempre con sus tipos, `Res<int, str>.Ok(5)`, también en un
+  `case`; sin ellos es `SEM027`.
+- Solo el intérprete ejecuta `??`, `case v` y los enums genéricos: la VM los
+  rechaza con `VM002` y el target web con `WEB100`/`WEB101`. El HIR los lleva
+  con dos campos nuevos (`CaseArm.binds`, `EnumDecl.type_params`), aditivos.
+- **Funciones con nombre como valores**: el tipo `fn(int, str) -> bool`
+  (sin `->`, devuelve `void`; una función opcional va entre paréntesis,
+  `(fn(int) -> int)?`). Son valores las funciones del módulo, las de una
+  librería (`stdp.println`) y los métodos `Tipo.metodo`; se guardan en una
+  variable, un campo o un vector, se pasan, se devuelven y se llaman. La
+  llamada se comprueba como una directa (aridad, tipos y `move`), `==` es
+  identidad y un f-string la escribe `<fn doble>`. No capturan nada: una
+  función genérica, un prototipo, un hook o un método de un tipo genérico no
+  pueden ser valores (`SEM044`). El HIR lo lleva con un `TypeKind` nuevo
+  (`FUNCTION_TYPE = 13`), aditivo. Solo en el intérprete: la VM las
+  rechaza con `VM001` al bajar al MIR, con la posición de la función o la
+  expresión (`suri --run compiler` cae entonces al intérprete; una función de
+  librería como `Vector.sort_by` solo falla si se llama), y el target web con
+  `WEB103`, con cualquier política. Las vistas de la VM y `formatType` del
+  web escriben `fn(A) -> R` igual que `--hir-pretty`.
+- **`Vector.sort_by(f)` y `Vector.filter(f)`**: `sort_by` ordena con una
+  `fn(T ptr, T ptr) -> int` (negativo, 0 o positivo, como `__cmp__`), estable
+  y sin copiar, así que vale para un `T` con destructor. `filter` devuelve un
+  vector nuevo con copias de los que cumplen una `fn(T ptr) -> bool`
+  (`SEM038` con un `T` con destructor).
+- **Paquete `func`**: `func.map<T, U>(&v, f)` y `func.fold<T, A>(&v, init,
+  f)`. Hoy los argumentos de tipo se escriben, y `f` recibe un puntero a una
+  copia del elemento, así que con un `T` con destructor son `SEM038`.
+- **Hook `__cmp__`**: `hook fn __cmp__(T ptr a, T ptr b) -> int` (negativo,
+  0 o positivo) da `<`, `<=`, `>` y `>=` a un tipo propio. Los enums sin datos
+  se ordenan por su valor, como los números.
+- **Los genéricos pueden ordenar su `T`**: `a < b` sobre un `T` se acepta y
+  cada instancia comprueba que su tipo concreto se ordene (`SEM039`, en la
+  llamada). Antes era imposible escribir un sort o un heap genéricos.
+- **`Vector.sort()`**: estable (mezcla de abajo hacia arriba, O(n log n)) y
+  sin copiar los elementos, así que vale también para tipos con destructor.
+  Y `==` entre vectores: mismo largo y mismos elementos.
+- **`text` para herramientas que analizan texto** (en el intérprete).
+  Nuevas: `split` (como `str.split(sep)` de Python), `split_whitespace`,
+  `lines` (corta en `\n` y `\r\n`, igual que `sistema.entrada`),
+  `trim`/`trim_start`/`trim_end`, `contains`, `count`, `rfind`, `replace`,
+  `repeat`, `pad_left`/`pad_right`, y con Unicode completo y sin idioma:
+  `lower`, `upper` (`upper("ß")` es `"SS"`), `is_digit` (dígito decimal de
+  cualquier escritura), `is_alpha`, `is_alnum`, `is_space`, `is_upper`,
+  `is_lower`, sobre un `char`. Un argumento sin respuesta (separador vacío,
+  `repeat` negativo) es `excepciones.ValorInvalido`. Partir, recortar,
+  contar y las clases son llamadas al host: escritas en suriaX, partir un
+  archivo de 10 000 líneas tardaba 2,8 s en el intérprete; en el host, 21 ms.
+- **`&n == &n` era `false`**: se comparaban dos envoltorios del puntero en
+  vez de la dirección.
+- **`SEM033` a `SEM038` no salían en `--emit-lang-info`** (faltaban en el
+  `__all__` de su módulo).
+- **El runner de pruebas ya no muere si una prueba termina el proceso**
+  (`SystemExit`): cuenta como un fallo más y la corrida sigue, con su resumen.
+- **Una sola lista de las llamadas al host**
+  ([lib/LLAMADAS_AL_HOST.md](lib/LLAMADAS_AL_HOST.md)): cada una con su firma
+  y qué motor la cumple. Estaba repartida entre la librería, el intérprete y
+  la VM sin que nada comprobara que dijeran lo mismo; ahora una prueba los
+  compara.
+- **La extensión de VS Code dice lo que está mal mientras escribes.** Un
+  servidor de lenguaje nuevo (`python V0/main.py --lsp`, en `tooling/lsp`)
+  habla el protocolo estándar (LSP): errores del texto sin guardar, hover con
+  la firma y el comentario, ir a la definición (también dentro de una
+  librería), el esquema del archivo y completar. No reimplementa nada: pide
+  al compilador lo mismo que `--emit-index`, en el mismo proceso, y sirve a
+  cualquier editor que hable LSP. La extensión pasa a ser un cliente delgado
+  —dos archivos de JavaScript escritos a mano, sin paquetes de npm ni paso de
+  compilación— que lanza el servidor y el depurador con los ajustes
+  `suriax.pythonPath` y `suriax.compilerRoot`; en una carpeta sin confianza
+  solo colorea. Un fallo del compilador no tumba al servidor: sale como
+  `ICE000` en el documento. `tooling/vscode/empaquetar.py` arma el `.vsix`
+  sin vsce. El reparto completo y lo que falta están en
+  [tooling/vscode/ARQUITECTURA.md](tooling/vscode/ARQUITECTURA.md). Sin
+  probar todavía en una ventana real de VS Code.
+- **Los canales del editor reciben el texto como argumento**
+  (`emit_diagnostics`/`emit_index(..., source=...)`): quien tiene el buffer en
+  memoria ya no tiene que pasarlo por la entrada estándar.
+- **Una extensión de VS Code** ([tooling/vscode](tooling/vscode/README.md)):
+  reconoce `.srcx` y `.libsrx`, colorea con las categorías del lenguaje
+  (`move` y `free` no se pintan como un `if`), trae los fragmentos y lanza el
+  depurador. No tiene JavaScript ni dependencias: sus archivos se **generan**
+  desde lo que publica `--emit-lang-info`, y una prueba compara la gramática
+  de colores con el lexer sobre todo el suriaX del repositorio. Preliminar y
+  sin publicar.
+- **El playground tiene su propia lista de lo que se puede usar.** El target
+  web gana perfiles (`node web/main.ts prog.phir --policy <nombre>`): `web-v1`
+  (el de siempre), `unrestricted` y `playground`, que añade una lista blanca
+  de librerías: `io`, `math` y `excepciones`. Un `#import text` daba cuarenta
+  `WEB002` dentro de una librería que el usuario no escribió; ahora es un
+  `WEB007` en su `#import` que dice por qué, y distingue "nunca" (`sistema`:
+  el playground no tiene archivos ni procesos) de "todavía no" (`text`,
+  `array`, `collections`, `d_types`, `mem`: usan lo que el target aún no
+  baja). La tabla completa está en el README del playground.
+- **La página dice cuándo el fallo no es tuyo.** Un fallo interno del
+  compilador o del target web se rotula "FALLO INTERNO — no es un error de tu
+  programa" y enseña lo que el proceso escribió al fallar. Antes, como llega
+  sin diagnósticos, la barra de estado decía "Compilado sin diagnósticos".
+- **La página lleva política de contenido (CSP)** y Mermaid se carga con la
+  versión exacta (`11.17.2`) en vez de `@11`. Las pestañas se recorren con
+  las flechas del teclado y el estado se anuncia a un lector de pantalla.
+- **`GET /api/health` y `python playground/server.py --check`**: dicen qué
+  tiene el entorno y qué le falta, sin compilar nada.
+- **Guía para usar, publicar y conectarse al playground** en su
+  [README](playground/README.md), con un `Dockerfile` (Python y node, sin
+  paquetes) y el `Procfile`, que se había perdido en el rescate de la 0.3.0.
+  El `Dockerfile` está escrito pero sin construir.
+- **Las pruebas comprueban: `expect`, `errfinally` y `finally`.**
+  `test "nombre" { expect (condición); } errfinally { ... } finally { ... }`.
+  Un `expect` que no se cumple termina la prueba y el reporte cita la
+  condición y sus valores (`expect falló: total == 10 (izquierda: 7, derecha:
+  10)`); ningún `catch` lo atrapa. `errfinally` corre solo si la prueba falló
+  y `finally` siempre, después; las dos son opcionales. `expect` solo vale
+  dentro de un `test` y una prueba sin ninguno no compila (`PAR029`).
+  `expect` y `errfinally` pasan a ser palabras reservadas.
+- **`--test`**: `python V0/main.py prog.srcx --test` compila y corre las
+  pruebas del programa en un paso (una línea PASS/FAIL por prueba, código 1
+  si alguna falla). Corren en el intérprete.
+- **La V2: el compilador de suriaX compilado por sí mismo, versionado como
+  semilla** (`src/semilla/`). Con ella y la VM suriaX se compila sin la V0:
+  `suriax-hir src/semilla/main.srcx.phir --run -- prog.srcx salida/prog.phir
+  --stdlib lib`. `python src/semilla/regenera.py` la regenera con ella misma
+  (sin la V0) y solo la reemplaza si se compila a sí misma igual (el punto
+  fijo); `--desde-v0` arranca de la V0. Una prueba avisa cuando la V1 cambia
+  y la semilla quedó vieja.
+- **El `.phir` es reproducible**: la ruta de cada librería ya no es la
+  absoluta de la máquina sino relativa a su raíz (`<stdlib>/io/main.libsrx`,
+  o relativa al proyecto: `lib/calc.libsrx`), en la V0 y en la V1. El mismo
+  programa da los mismos bytes en cualquier carpeta y máquina, y con la
+  stdlib en cualquier lugar.
+- **La V1 da los diagnósticos de la V0** (lote 18): TODOS los que la V0
+  puede dar —léxicos, de sintaxis, de nombres y tipos, de propiedad y
+  memoria, de hooks, traits y genéricos, del linker y las notas—, la lista
+  completa en el mismo orden, con el mismo archivo, código, línea y columna,
+  como `ruta:linea:col: CODIGO mensaje` (el error de una librería, con el
+  archivo de la librería). Con un error no escribe el `.phir`; un aviso
+  (`SEM030`) o una nota no la detienen. Una librería que no carga deja un
+  import "opaco" que no arrastra errores en cascada, como en la V0. Lo
+  comprueba una prueba diferencial sobre los programas de las pruebas
+  negativas y de gramática y 24 sondas (3 de ellas, proyectos con librerías).
+- **`sistema.archivos.crear_carpeta(ruta)`** crea una carpeta con las que le
+  falten (`mkdir -p`), en el intérprete y en la VM. La V1 la usa para crear
+  la carpeta de salida, como la V0.
 - **Excepciones del runtime que se pueden atrapar (`EXC`).** Dividir entre
   cero (`EXC001`) o leer fuera de un índice (`EXC002`) ya no termina el
   programa de golpe: el runtime lanza un valor y el `try` más cercano lo
@@ -225,6 +515,99 @@ excepciones, y empieza el bootstrap.
 
 ### Cambiado
 
+- **Las cotas `Ord` y `Hash` de un TIPO se comprueban por instancia**, como
+  las de una función: `Box<U>` con `struct Box<T: Ord>`, dentro de una
+  función genérica cuyo `U` no promete `Ord`, ya no es `SEM043`; la llamada
+  que lo instancia con un tipo sin orden es `SEM039`. `Print` y los traits
+  siguen pidiendo la cota.
+- **Una excepción de la librería estándar lleva la posición de la llamada
+  del programa** en `e.linea`/`e.columna` y en el mensaje sin atrapar, no una
+  línea de la librería; el `IndiceFueraDeRango` de `Vector` sin atrapar sale
+  como `EXC002`. Solo en el intérprete.
+- **`print(x)` escribe un primitivo en todas partes**, como un f-string
+  (antes `print(5)` era `SEM001` fuera de un genérico). Un `int ptr` o un
+  `int?` siguen siendo `SEM001`. La VM lo rechaza con `VM005`; el target web
+  lo traduce.
+- **`sizeof` de un tipo sin `__sizeof__` no compila** (`SEM001`): un
+  primitivo (`sizeof(int)`), un tipo propio sin el hook o una función. Antes
+  compilaba y era siempre `RT011` al ejecutar. Dentro de un genérico,
+  `sizeof` de su `T` lo decide cada instancia, en la llamada. Para un tamaño
+  fijo están los tipos de `d_types` (`sizeof(dt.int32)`).
+- **Construcciones dudosas son error**: un `case` repetido (`SEM046`), un
+  patrón que liga el mismo nombre dos veces (`SEM002`) y una sentencia que
+  calcula un valor y lo tira (`f;`, `a == b;`, `x;`: `SEM047`). El código
+  detrás de `return`, `throw`, `break` o `continue` en el mismo bloque es un
+  **aviso** (`SEM048`).
+- **Aviso `SEM049`**: una función pública de una librería que nombra en su
+  firma un tipo que el consumidor no ve.
+- **`func.map(&v, f)` sin argumentos de tipo** da un solo `AST007` que dice
+  cuáles faltan y cómo se escriben (antes, tres `AST006` confusos).
+- **`--test` aísla cada prueba**: corre con sus globales recién iniciadas
+  (también las de las librerías) y las destruye al terminar, así que el
+  resultado ya no depende del orden. `PASS` y `FAIL` salen los dos por la
+  salida estándar y en orden; antes los fallos iban por la de error y se
+  desordenaban en una tubería. El código de salida no cambia.
+- **Un error que nadie atrapa destruye las globales**, sea un `throw`, una
+  `EXCxxx` o un `RT` (un `File` global se vuelca): ya se destruían los
+  locales al desenrollar, y las globales eran lo único que quedaba vivo. El
+  error se escribe primero. Solo `sistema.proceso.salir` termina sin
+  destruirlas.
+- **`--check` marca `protobuf` y `pybind11` como `[OPCIONAL]`** y termina
+  en 0 si solo faltan ellos.
+- **Literales con exponente**: `1e3`, `2.5e-3`, `1E+10`, `1e300` son
+  siempre `float` (`0x1e3` sigue siendo un entero hexadecimal). Un literal
+  que no cabe en un `float` es `LEX006`, también uno distinto de cero que
+  quedaría en `0.0` (`1e-400`, casi seguro una errata); `1e` sin dígitos,
+  `LEX007`. Valen lo mismo que `text.parse_float` del mismo texto, que con
+  `1e-400` da `0.0` porque lee datos, no código.
+- **F-strings con la regla de Python 3.12 y C#**: entre `{` y `}` va código,
+  y sus literales se escriben sin escapar (`f"{'}'}"`, `f"{len("ab")}"`); sus
+  comillas y llaves no cierran la cadena. Un `\` en la interpolación es
+  `LEX005`, con la forma correcta en el mensaje.
+- **`(fn(int) -> int)? h = null;` declara sin `var`**, como ya lo hacía
+  `fn(int) -> int g`. Con un tipo con nombre (`(Caja ptr)? p`) sigue siendo
+  una expresión, porque `(c) = d;` es válido; si falla, el error sugiere
+  `var`.
+- **`dos(a < b, c > (d))` sigue siendo una llamada genérica**, pero si esa
+  lectura falla el error explica la ambigüedad y sugiere `(a < b)`.
+- **Mensajes**: una palabra reservada usada como nombre lo dice (`int
+  error;`, `PAR003`); `PAR025` distingue bloques anidados, cadenas de
+  operadores y expresiones anidadas.
+
+- **Devolver por valor COPIA** (también `throw`, el campo de un literal, el
+  payload de una variante y ligar un enum con datos): `dame().n = 5` cambiaba
+  la global que `dame` devolvió, y `v.get(0).push(8)` el vector guardado.
+- **`SEM041`: escribir en una copia temporal** (`v[i].n = 5`, `v[i].push(x)`,
+  `f().n = 5`): con la copia, el cambio se perdería en silencio. Para
+  modificar un elemento en su sitio, `at_mut`.
+- **`SEM040`: una variable sin valor** (`var int x;`). Valía `null`: `x + 1`
+  era un fallo interno y un `bool` sin valor tomaba la rama falsa en silencio.
+  El mensaje sugiere un valor según el tipo.
+- **`SEM032` también en `return g;` y `throw g;`** con `g` una global con
+  destructor: el recurso se destruía dos veces.
+- **Las globales se destruyen al terminar el programa** (en el intérprete),
+  en orden inverso a su declaración y las de las librerías después. Un `File`
+  global no llegaba a escribirse. No se destruyen si el programa termina por
+  un error sin atrapar ni con `salir`.
+- **`==` compara valores.** Sin `__eq__`, dos structs son iguales si lo son
+  sus campos (recursivamente) y dos enums con datos si son la misma variante
+  con el mismo payload. Antes se comparaba la identidad del objeto del
+  intérprete: `var P b = a; a == b` daba `false`. Un puntero se compara por
+  su dirección. `__eq__` sigue mandando cuando existe.
+- **`__eq__`, `__cmp__` y `__hash__` sobre un enum sin datos son `SEM006`**:
+  se aceptaban y no se llamaban nunca (ese enum es un entero en los motores).
+- **El playground escucha solo en la máquina local por defecto**
+  (`127.0.0.1`; antes `0.0.0.0`). Publicarlo en la red pasa a ser una
+  decisión: `HOST=0.0.0.0`, que ya traen el `Procfile` y el `Dockerfile`.
+  **Un despliegue que arranque con `python playground/server.py` a secas deja
+  de ser alcanzable** hasta que defina `HOST`.
+- **La API del playground rechaza lo que antes dejaba pasar**: un cuerpo que
+  no sea `application/json` es un 415 (una página ajena no puede poner a
+  compilar a un servidor local con un formulario), un `source` que no sea
+  texto es un 400 y el método equivocado un 405. Un fallo del compilador ya
+  no es un 500 con un solo campo: es un 200 con la forma de siempre y
+  `status: error_interno`. Una variable de configuración que no sea un número
+  impide arrancar en vez de usar el valor por defecto.
 - **La gramática (`docs/gramar/grammar.ebnf`) se reescribió desde el
   parser**: había quedado atrás (sin `with`, excepciones, genéricos, bits,
   asignación compuesta...). Ahora es la del parser real, con comentarios solo
@@ -373,6 +756,235 @@ excepciones, y empieza el bootstrap.
 
 ### Corregido
 
+- **Documentación al día con la 0.4.1**: la versión ya no se escribe a mano
+  en `c_errorstfix.md`, el ROADMAP ni el CHANGELOG (el badge sale de
+  `version.py`). El ejemplo de `.suriaX_config.yaml` de `usage.rst` usaba
+  claves de LLVM que hoy son `CFG004`, y los ejemplos de `docs/syntax.md` no
+  compilaban. Se corrigió lo que se daba por pendiente y ya existe (`&` de
+  un campo escalar en la VM, `#extern cpp` en la VM, las posiciones de un
+  f-string, la E/S de archivos, las funciones como valores) y lo que se daba
+  por hecho y hoy está roto (el punto fijo de la V1).
+- **En un genérico, `return v` con `v` ligado por un `case` sobre un
+  puntero vaciaba al dueño**: el payload salía del sujeto y lo dejaba en
+  `null` (`4 Ok(null)`), aun con `T = int`. Lo prestado se devuelve copiado.
+- **Segunda caza de fallos** (17 programas grandes que usan juntas las
+  novedades de la 0.4.1; `audit/caza2/`). Daban una salida incorrecta o un
+  fallo interno sin aviso:
+  - `v["a"]` sobre un `Vector<int>` era un fallo interno; el índice se
+    compara con el de `__index__`/`__index_set__`, y en `s[i]` con `int`
+    (`AST006`);
+  - `print("total:", n)` descartaba `n`; `len("ab", "xyz")` y `hash(1, 2)`
+    compilaban (`SEM008`);
+  - un dueño `R?` que valía `null` llamaba a `__free__` al cerrar su ámbito;
+  - un f-string dentro de un genérico escribía distinto que fuera
+    (`P{x=3, s='hi'}`, `Ok(0)`);
+  - en un enum con datos, las variantes sin datos ignoraban `__eq__`,
+    `__hash__` y `__cmp__`, y `Vector.at` no las prestaba;
+  - un `__eq__` con la firma mal escrita compilaba (`SEM006`).
+
+  Y faltaban o sobraban diagnósticos: un método o campo sobre un primitivo
+  (`s.len()`) solo fallaba al ejecutar (`SEM042`, con la forma de suriaX); un
+  falso `AST006` en una global de una librería importada con alias; `SEM030`
+  sobre un `E ptr`; tapar lo que liga un `case` en su rama (`SEM002`). Los
+  mensajes de `break`/`expect` dentro de una lambda, de ceder lo que liga un
+  patrón y del ternario, `&&`, `||` y `!` dicen ahora qué pasa y qué se
+  escribe en suriaX.
+- **Un parámetro de tipo repetido** (`Par<T, T>`) ligaba en silencio el
+  último argumento; ahora es `SEM002`, en struct, enum, type y fn.
+- **`const` y `T ptr` sin `mutable` no protegían de los métodos ni de los
+  campos anidados**: `k.sube()` sobre un `const`, `v.push(3)` sobre un
+  `Vector<int> ptr`, `c.n = 5`. Ahora son `SEM003`/`SEM015`, como ya lo era
+  `p.n = 7`. `&c.n` sobre un `const` ya no da un `ptr mutable`, y lo que liga
+  un `case` sobre algo que no se puede modificar tampoco se modifica.
+- **Lo que fallaba siempre al ejecutar ahora no compila**:
+  - una global que usa otra declarada después (`SEM045`; antes `RT006`);
+  - `s[i] = c` sobre un `str` (`SEM031`; antes `RT014`);
+  - `&b[i]` de un elemento escalar (`SEM013`; antes `RT011` en los dos
+    motores). Dentro de un genérico se decide en cada instancia: `v.at(i)`
+    sobre un `Vector<int>` es un error en la llamada;
+  - `print(5)` sobre un primitivo (`SEM001`, que dice cómo escribirlo);
+  - `hash` de una función, un `float` o un tipo sin `__hash__` dentro de un
+    genérico (un `Dictionary` con esa clave), con el mismo código que fuera.
+- **`Vector<void>`** (cualquier argumento de tipo `void`) es `SEM025`.
+- **Un aviso dentro de una librería impedía ejecutar el programa**: su
+  `.phir` no se emitía con cualquier diagnóstico, también un aviso. Ahora
+  solo lo que bloquea.
+- **Los diagnósticos escriben los tipos como el lenguaje**: `'C ptr'`,
+  `'C ptr mutable'`, no `'ptr C'`. Y `Vector<int>` ya no sale como `Vector`.
+- **Dos sitios del frontend descartaban la causa de un fallo**
+  (`semantic/hooks.py` y `semantic/extensions.py`): un defecto interno sale
+  ahora como `ICE000` y `EXT030` cita el error del parser.
+- **Una llamada a un método no comprobaba sus argumentos**: ni la aridad
+  ni el tipo. `v.push("hola")` sobre un `Vector<int>` compilaba y era un
+  fallo interno del intérprete. Ahora es `SEM008` o `AST006`, como una
+  llamada a una función.
+- **`Vector` dejaba leer y escribir entre la longitud y la capacidad**:
+  `get(i)` y `v[i]` daban `null`, y `set`/`v[i] = x` guardaban un elemento que
+  `len`, `pop` y `sort` no veían. Fuera de `[0, len)` lanzan
+  `excepciones.IndiceFueraDeRango`.
+- **Los errores de ejecución dentro de una librería dicen su archivo**:
+  `RT020: throw 7 (lib/falla.libsrx:2:5)`. Antes salía solo `(2:5)`, una
+  línea que no es del programa. Los del programa principal siguen como
+  `(3:5)`, igual que los diagnósticos de compilación.
+- **`frontend OK` ya no aparece encima de los errores** del frontend.
+- **Un programa que se llama como una librería que importa ya no se importa
+  a sí mismo** (`falla.srcx` con `#import falla`): la búsqueda salta el
+  propio archivo y, si no hay otra librería, el error dice por qué.
+- **Un hook o un `__cast__` de una librería en la misma línea que uno del
+  programa ejecutaba el cuerpo del programa.**
+- **Un préstamo de `Vector.at`/`at_mut` que sobrevive a su elemento** (tras
+  `set` o `take`) es `RT003`, como en la VM; antes leía el elemento nuevo.
+  El puntero que queda colgando cuando un contenedor crece dice que el
+  contenedor reubicó su almacenamiento, no "después de 'free'".
+- **`--emit-stages` ya no culpa a protobuf** de cualquier fallo al cargar el
+  emisor del HIR: dice la causa real.
+- **Las expresiones de una interpolación tienen su posición real**: antes
+  todas llevaban la de la interpolación (un error en `doble(mas_uno(3))`
+  apuntaba al mismo sitio para las dos llamadas) y una f-string partida en dos
+  líneas mezclaba la línea de una con la columna de la otra.
+- **Sin errores en cascada** tras la recuperación del parser: el `PAR012`
+  falso sobre el `};` de `var int xs[3];`, el `SEM001` sobre el nombre de un
+  struct roto, el `PAR012` "token inesperado: ERROR" tras cualquier error
+  léxico y el `LEX003` tras un escape inválido. Un error léxico dentro de una
+  interpolación se informa como tal y en su sitio.
+- **Cuatro fallos silenciosos alrededor de genéricos y funciones**, que
+  salieron al estudiar qué falta para escribir librerías funcionales:
+  - el nombre de una función valía por su retorno (`var int g = doble;`
+    compilaba) y llamar a algo que no es una función (`n(3)`, un método que
+    no existe) no daba error hasta ejecutar. Ahora es `AST006` o `SEM042`;
+  - un genérico podía pedirle a su `T` un método, un campo o `[]` sin que
+    nada lo prometiera: fallaba con `RT011` al ejecutar o, peor, hacía otra
+    cosa (`map<str>(&v, "hola")` metía los caracteres en un `Vector<int>`).
+    Ahora es `SEM043`; el comportamiento se le pasa como función;
+  - un `match` sobre un `E ptr` reservado con `mem` no entraba en ninguna
+    rama: el árbol de ejemplo de `type_system.rst` calculaba `0` en vez de
+    `20`. Un bloque vale lo mismo que su elemento 0.
+- **Un método de `@impl` pisaba a una `fn` homónima**: con `fn distancia`
+  y `@impl Punto { fn distancia }`, `distancia(5)` ejecutaba el método en el
+  intérprete; en la VM dependía del orden (con el método primero, error de
+  ejecución). Corregido en los dos y en el índice del target web.
+- **`hir.proto` no era un `.proto` válido**: el tipo función se había
+  llamado `TypeKind.FUNCTION`, que choca con `SymbolKind.FUNCTION` (en
+  protobuf los valores de un enum comparten el ámbito del paquete). `protoc`
+  lo rechazaba y la VM no compilaba desde el repositorio. Ahora es
+  `FUNCTION_TYPE`, con el mismo número 13: el cable no cambia. El lector
+  propio del esquema rechaza ese choque, así que la suite lo ve aunque
+  `protoc` no esté instalado.
+- **`-x` sobre una función, `str`, `char`, `bool` o un puntero** era un
+  fallo interno del intérprete; ahora es `AST006` al compilar.
+- **Dos personas compilando a la vez en el playground podían recibir errores
+  falsos.** El compilador guarda estado global y el servidor atiende con
+  hilos: un programa válido salía con `SEM010` porque otra compilación le
+  cambiaba la caché del enlazador a media resolución. Medido: 10 de 90
+  compilaciones en paralelo daban un resultado distinto al de la serie. Ahora
+  se compila de uno en uno.
+- **El playground culpaba al programa de un fallo del target web**: sin
+  artefacto y sin diagnósticos decía "el target web todavía no compila
+  construcciones del programa", y tiraba lo que node había escrito al fallar.
+  Ahora es un `error_interno` y conserva esa salida.
+- **El `__eq__` de un enum se aceptaba y `==` no lo llamaba nunca**, mientras
+  `hash` sí despachaba a su `__hash__`: un `Dictionary` con un enum de clave
+  guardaba la misma clave dos veces y no encontraba ninguna.
+- **`cast<char>` de un entero que no es un carácter** era un fallo interno
+  (fuera de 0..0x10FFFF), o un sustituto UTF-16 que reventaba al imprimirse.
+  Ahora es `ConversionInvalida` (`EXC004`), que se puede atrapar.
+- **Una reserva imposible** (`mem.reserve<int>` de un tamaño que no cabe)
+  creaba las celdas una a una durante minutos y acababa en un fallo interno;
+  ahora falla en el acto con `RT023`.
+- **Dos compilaciones a la vez en la misma carpeta se pisaban** los `.phir`
+  de las librerías en `dumps/`: una podía leer el archivo vacío o cortado
+  (`schema_version 0`, fallo interno). Medido con seis programas a la vez,
+  10 de 24 compilaciones fallaban. Ahora se escribe en un temporal y se
+  cambia de nombre de una vez: ninguna.
+- **`#from paquete #import submodulo` destapaba los `private` del
+  submódulo**: `formas.escalar(2)` compilaba desde otro paquete, aunque por
+  `#import geo.formas` era `SEM011`. Era el ejemplo de la documentación de
+  librerías, que además prometía otro código.
+- **Un fallo al construir el índice del editor escapaba del canal**:
+  `emit_index` lo construía fuera de la guarda que convierte cualquier fallo
+  en `ICE000`. Ahora sale como diagnóstico, con el índice vacío.
+- **Un `var` de nivel superior en una librería podía tumbar al intérprete.**
+  Las sentencias de nivel de módulo de una librería corrían con la unidad
+  principal puesta, y el tipo de cada expresión es un índice en el pool de
+  SU unidad: `public var str t = f"{mitad:.2f}";` resolvía el tipo de `mitad`
+  en el pool del programa. Si el índice no existía allí, fallo interno
+  (`IndexError`); si existía, otro tipo, en silencio. Dentro de una función
+  ya salía bien.
+- **Una expresión larga acababa en un fallo interno del compilador.** Nada
+  acotaba cuánto anida el árbol: `a + b + c + …` no anida al escribirse pero
+  sí al analizarse (un nivel por operador), así que pasaba el parser y
+  tumbaba al emisor del HIR con un `RecursionError` — con 3000 términos en la
+  terminal y con 300 desde el playground, que usaba el límite de recursión
+  por defecto de Python. Ahora el límite es **del lenguaje**: una declaración
+  anida hasta 500 niveles y lo que se pasa es `PAR025`, con su posición, en
+  cualquier forma (operadores, llamadas, accesos a miembro, `else if`,
+  bloques). Quien usa el compilador como librería tiene el mismo margen de
+  recursión que la CLI. **Cambia lo que se acepta**: una suma de 2000
+  términos, que el frontend compilaba (y el emisor del HIR no), ya no pasa.
+- **El target web rechazaba programas válidos por anidar "demasiado"**: su
+  lector admitía 200 mensajes anidados "porque el frontend no produce árboles
+  tan profundos", y una suma de cien términos ya los producía. El tope pasa a
+  1024 y se calcula desde el límite del lenguaje; una prueba compara los dos.
+- **Un programa con `test` salía en el target web como ".phir corrupto"**
+  (`WEB901`): su lector no conocía `expect` ni las cláusulas `errfinally` y
+  `finally`. Ahora las lee, la contención las revisa como al resto del código
+  y el target hace con ellas lo que ya hacía con una prueba: las quita y baja
+  el programa. Sigue sin ejecutarlas.
+- **Una librería denegada por el target web se reportaba dos veces** (una
+  sin línea y otra en su `#import`) **y además se revisaba por dentro**. Ahora
+  sale una vez, con su posición, y la unidad denegada no se recorre.
+- **Los mensajes del playground publicaban rutas del servidor**: `SEM009`
+  enumera las carpetas donde buscó la librería. En la CLI ayudan; en una
+  página pública cuentan cómo está montada la máquina. Salen como `<repo>`.
+- **Un fuente demasiado grande a veces no recibía su 413**: el servidor
+  respondía sin leer el cuerpo y el cliente, que aún enviaba, veía una
+  conexión abortada.
+- **Un valor con destructor declarado dentro de un `test` no se destruía
+  nunca**: las pruebas no anotaban lo que muere al cerrar su cuerpo.
+- **Un proceso largo (el playground, un LSP en proceso) mostraba resultados
+  viejos de las librerías**: la caché del linker vivía el proceso entero. La
+  segunda compilación de un programa con una librería rota ya no mostraba sus
+  errores, y una librería editada seguía usándose en su versión anterior.
+  Ahora la caché es de cada compilación.
+
+- **Un `free` dentro de un `else` no contaba para el aviso `NOTE002`** ("tu
+  `__free__` no suelta el campo X"): la búsqueda miraba un campo que no
+  existe, así que un destructor que soltaba el campo en el `else` (o al final
+  de una cadena de `else if`) recibía un aviso falso.
+
+- **Un enum a través de un puntero** (sus valores son enteros): `&e` daba el
+  valor en la VM y `p[0]` fallaba solo ahí; el receptor `T ptr self` de un
+  método sobre un enum llegaba como el valor en los dos motores (`self[0]`
+  fallaba); y un `match` sobre un puntero a un escalar comparaba el puntero
+  y no entraba en ninguna rama, en silencio. Ahora un enum sin payload se
+  lee y se escribe a través de un puntero como un `int`, el receptor recibe
+  el préstamo, y el sujeto de un `match` se desreferencia también con un
+  patrón de valor. Prueba diferencial con la salida esperada.
+- **La V1 perdía los `__cast__` de una librería**: al importarlos los
+  comparaba por (dueño, clase), y todas las conversiones que salen de un
+  primitivo (`int -> int8`, `int -> int16`...) tienen el mismo dueño vacío;
+  solo sobrevivía la primera. Ahora van por su par (origen, destino), como
+  la tabla de conversiones de la V0.
+- **La V1 escribía con su nombre escrito un `type` de librería**
+  (`dt.int8` en vez de `dt_variables.int8`): un literal no encontraba su
+  conversión y el tipo no unificaba con el que declara la librería.
+- **La V1 emitía un `.phir` incompleto sin avisar** cuando el programa usaba
+  algo fuera de su subconjunto (`type`, `@trait`, un decorador, `test`,
+  `sizeof`, `min`/`max`, los tipos `type`/`self`/`error`, un `__cast__`, la
+  conversión implícita de un literal): salía como una sentencia vacía, o sin
+  la conversión que la V0 inserta. Ahora se detiene con `ruta:linea:col: la V1 todavía no
+  compila ...` y no escribe el `.phir` (en el programa y en cada librería).
+- **`noexiste.x` tumbaba el compilador** (ICE000): el error de que el nombre
+  no está declarado estaba en una rama que no corría nunca, y la línea
+  siguiente usaba un valor vacío. Ahora es `SEM001` en la posición del
+  nombre. Lo encontró el lote de diagnósticos de la V1.
+- **Un error de sintaxis arrastraba errores semánticos falsos**: la
+  compilación normal analizaba el árbol que dejó la recuperación del parser
+  y reportaba, por ejemplo, `SEM001: 'suma' no está declarado` sobre una
+  función que sí lo está (la recuperación había descartado su declaración).
+  Ahora, como el canal del editor (`--emit-diagnostics`), la Semántica solo
+  reporta sobre un parseo limpio, y los errores léxicos salen primero: los
+  dos canales dan la misma lista.
 - **Un ejemplo de la documentación tenía la cadena partida** (`f.write("hola`
   y en la línea siguiente `");`, en la sección de `with`): ahora es
   `"hola\n"`. Tres ejemplos que no son programas completos quedan marcados
@@ -552,7 +1164,7 @@ excepciones, y empieza el bootstrap.
 ## [0.3.0]
 
 Publicada como rescate de urgencia (se perdió el equipo de desarrollo), con
-errores y archivos faltantes que repone la 0.3.1.
+errores y archivos faltantes que repone la 0.4.1.
 
 ### Añadido
 

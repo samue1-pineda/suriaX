@@ -4,17 +4,26 @@
      d.put("uno", 1);          // agrega o reemplaza
      d.get("uno");             // 1 (excepciones.NoEncontrado si no está)
      d.contains("dos");        // false
-     d.remove("uno");          // true si estaba
-     d.len();                  // cuántas claves hay
-     d.keys();                 // un vec.Vector<K> con las claves
-     d.values();               // sus valores, en el mismo orden
+     d.remove("uno"); d.len(); // true si estaba; cuántas claves hay
+     d.get_or("dos", 0);       // el valor, o 0 si no está (no lanza)
+     d.keys(); d.values();     // vectores con las claves y sus valores
+     d.items();                // los dos juntos: un vec.Vector<pr.Pair<K, V>>
      d.at("uno");              // PRESTA el valor (un 'V ptr'), sin copiarlo
+     d.at_mut("uno");          // lo presta para MODIFICARLO (un 'V ptr mutable')
      d.take("uno");            // lo SACA: la clave se quita y el valor es tuyo
+
+ 'get' entrega una COPIA del valor: cambiarla no toca el diccionario. Para
+ cambiar un valor en su sitio, 'at_mut' (el puntero deja de valer si el
+ diccionario crece o la clave se quita: usarlo después es RT003).
 
  QUÉ PUEDE SER CLAVE: lo que tiene un hash y una igualdad.
    - 'int', 'bool', 'char', 'str' y un enum sin payload: nativos.
-   - Un struct con los hooks '__hash__' y '__eq__' (dos claves iguales
-     tienen que dar el mismo hash). Sin '__hash__' es RT011 al usarlo.
+   - Un struct con el hook '__hash__'. La igualdad ya la tiene: '==' entre
+     structs compara campo a campo (un campo puntero, por su dirección).
+     '__eq__' solo hace falta si "iguales" NO
+     es "mismos campos" (una clave que ignora mayúsculas, por ejemplo), y
+     entonces '__hash__' tiene que seguir la misma regla: dos claves iguales
+     dan el mismo hash. Sin '__hash__' es RT011 al usarlo.
    - 'float' no: NaN no es igual a sí mismo.
 
  CÓMO ESTÁ HECHO: direccionamiento abierto con sondeo lineal. Tres bloques
@@ -39,15 +48,15 @@
 
  VALORES CON DESTRUCTOR: el diccionario es su dueño y los destruye al
  morir, al reemplazarlos ('put' sobre una clave que ya estaba) y al quitarlos
- ('remove'). Lo que COPIARIA un valor —'get', 'values()'— es SEM038 con un
- valor así: para leerlo, 'at'; para quedárselo, 'take'. Una CLAVE con
- destructor no se admite (buscar copia la clave: SEM038).
+ ('remove'). Lo que COPIARIA un valor —'get', 'get_or', 'values()', 'items()'—
+ es SEM038 con un valor así: para leerlo, 'at'; para quedárselo, 'take'. Una
+ CLAVE con destructor no se admite (buscar copia la clave: SEM038).
 -/
 
 #import mem
 #import array.vector as vec
 #import excepciones as exc
-
+#import collections.pair as pr
 // el estado de cada casilla
 internal const int LIBRE = 0;
 internal const int OCUPADA = 1;
@@ -126,6 +135,23 @@ public fn make<K, V>(int capacity) -> Dictionary<K, V> {
 
     // PRESTA el valor de 'key': un puntero al que está guardado, sin copiarlo.
     fn at(Dictionary<K, V> ptr self, K key) -> V ptr {
+        var int i = self.slot_of(key);
+        if (i < 0) {
+            throw exc.NoEncontrado{ mensaje: "la clave no está en el diccionario" };
+        };
+        return &self.values[i];
+    }
+
+    // PRESTA el valor de 'key' para MODIFICARLO: un 'V ptr mutable' al que
+    // está guardado ('d.at_mut("a").push(1)' con valores 'vec.Vector<int>').
+    // Es la única forma de cambiarlo en su sitio: 'get' entrega una COPIA.
+    // excepciones.NoEncontrado si la clave no está.
+    //
+    // El préstamo deja de valer si el diccionario CRECE (un 'put' de una
+    // clave nueva puede reservar otras casillas y mover todo), si la clave se
+    // quita ('remove', 'take') o si el diccionario muere: usarlo después es
+    // RT003. Pídelo justo antes de usarlo, no lo guardes.
+    fn at_mut(Dictionary<K, V> ptr mutable self, K key) -> V ptr mutable {
         var int i = self.slot_of(key);
         if (i < 0) {
             throw exc.NoEncontrado{ mensaje: "la clave no está en el diccionario" };
@@ -216,6 +242,48 @@ public fn make<K, V>(int capacity) -> Dictionary<K, V> {
         mem.release<K>(claves);
         mem.release<V>(valores);
         mem.release<int>(estados);
+    }
+}
+
+@impl Dictionary<K, V> {
+    // Una COPIA del valor de 'key', o 'default' si la clave no está: como
+    // 'get', pero la ausencia no es un error. No cambia el diccionario (la
+    // clave no se agrega).
+    //
+    //   var int n = counts.get_or(word, 0);
+    //   counts.put(word, n + 1);
+    //
+    // Con un 'V' que tiene destructor es SEM038 en la llamada, igual que
+    // 'get': devolver el valor guardado lo COPIA (serían dos dueños). Y no
+    // hay forma de devolver a veces un préstamo y a veces el 'default', que
+    // es de quien llama (y pasarlo exige 'move', SEM032). Para esos:
+    // 'contains' y luego 'at' (leer) o 'take' (quedárselo).
+    fn get_or(Dictionary<K, V> ptr self, K key, V default) -> V {
+        var int i = self.slot_of(key);
+        if (i < 0) { return default; };
+        return self.values[i];
+    }
+
+    // Las claves CON sus valores: un 'pr.Pair<K, V>' por clave ('key',
+    // 'value'), en el mismo orden que 'keys()' (el de las casillas, no el
+    // de inserción). Son COPIAS, como 'keys()' y 'values()': el vector
+    // nuevo es independiente del diccionario.
+    //
+    //   var vec.Vector<pr.Pair<str, int>> all = d.items();
+    //   all.sort_by(lambda (pr.Pair<str, int> ptr a, pr.Pair<str, int> ptr b) -> int:
+    //       b.value - a.value);
+    //
+    // Con un 'V' que tiene destructor es SEM038 en la llamada, como 'values()'.
+    fn items(Dictionary<K, V> ptr self) -> vec.Vector<pr.Pair<K, V>> {
+        var vec.Vector<pr.Pair<K, V>> out = vec.dynamic<pr.Pair<K, V>>(self.len);
+        var int i = 0;
+        while (i < self.cap) {
+            if (self.states[i] == OCUPADA) {
+                out.push(pr.Pair<K, V>{ key: self.keys[i], value: self.values[i] });
+            };
+            i = i + 1;
+        };
+        return out;
     }
 }
 

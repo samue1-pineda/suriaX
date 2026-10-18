@@ -1,0 +1,13 @@
+// Funciones como valores (tipo 'fn(A) -> R'). Hoy solo las ejecuta el
+// interprete (main devuelve 42): el target web las rechaza con WEB103.
+// Se regenera con: python V0/main.py funciones_valor.srcx --emit-hir funciones_valor.phir
+
+fn doble(int x) -> int { return x * 2; }
+
+fn aplica(fn(int) -> int f, int v) -> int { return f(v); }
+
+fn main() -> int {
+    var fn(int) -> int g = doble;
+    var (fn(int) -> int)? h = null;
+    return aplica(g, 20) + 2;
+}

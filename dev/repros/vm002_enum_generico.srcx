@@ -1,0 +1,6 @@
+#from io #import stdp
+enum Opcion<T> { Algo(T), Nada };
+fn main() -> int {
+    stdp.println("hola");
+    return 0;
+}

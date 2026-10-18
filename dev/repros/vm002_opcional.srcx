@@ -1,0 +1,7 @@
+#from io #import stdp
+fn main() -> int {
+    var int? a = null;
+    var int b = a ?? 7;
+    stdp.println(f"{b}");
+    return 0;
+}

@@ -1,0 +1,25 @@
+#import array.vector as vec
+struct { int v; } R;
+hook fn __free__(R ptr r) -> void { }
+struct { T dentro; } Caja<T>;
+fn copia<T>(T x) -> T { var T y = x; return y; }
+fn pasa<U>(U x) -> U { return copia<U>(x); }
+fn guarda<T>(T x) -> Caja<T> { return Caja<T>{ dentro: x }; }
+// solo por PROPAGACIÓN: 'move x' no copia, pero 'copia' copia su T
+fn reenvia<U>(U x) -> U { return copia<U>(move x); }
+fn main() -> int {
+    var R a = R{ v: 1 };
+    var R b = copia<R>(move a);
+    var int n = copia<int>(3);
+    var R c = R{ v: 2 };
+    var R d = pasa<R>(move c);
+    var vec.Vector<R> v = vec.dynamic<R>(2);
+    var R e = v.get(0);
+    var R f = R{ v: 3 };
+    var Caja<R> g = guarda<R>(move f);
+    var R k = R{ v: 4 };
+    var R m = reenvia<R>(move k);
+    var vec.Vector<int> w = vec.dynamic<int>(2);
+    var int h = w.get(0);
+    return n + h;
+}

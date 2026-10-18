@@ -293,6 +293,18 @@ class Message:
                 return nombre
         return None
 
+    def ClearField(self, nombre: str) -> None:
+        """Deja el campo AUSENTE (el ``ClearField`` del stub de protobuf).
+
+        Lo usa la normalización del esquema 1 (``schema_v1.py``), que
+        reescribe un tipo inline como índice del pool y tiene que quitar el
+        inline: si quedara, el mensaje llevaría el mismo dato dos veces.
+        """
+        if nombre not in self._desc.fields:
+            raise ValueError(f"'{self._nombre}' no tiene el campo '{nombre}'")
+        self._valores.pop(nombre, None)
+        self._presentes.discard(nombre)
+
     def CopyFrom(self, otro: "Message") -> None:
         self._valores = dict(otro._valores)
         self._presentes = set(otro._presentes)

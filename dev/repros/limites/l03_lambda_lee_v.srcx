@@ -1,0 +1,9 @@
+#from io #import stdp
+#import array.vector as vec
+fn main() -> int {
+    var vec.Vector<int> v = vec.dynamic<int>(8);
+    v.push(5); v.push(2); v.push(9); v.push(1); v.push(7);
+    v.sort_by(lambda (int ptr a, int ptr b) -> int: a[0] - b[0] + v.get(0) * 0);
+    stdp.println(f"{v.get(0)} {v.get(4)}");
+    return 0;
+}

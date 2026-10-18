@@ -64,11 +64,11 @@ dentro de una función o de un bloque, y ahí vive.
 
    fn f() -> void {
        const type T;             // sombrea al global DENTRO de f
-       const T x;                // este T es el local
+       const T? x = null;        // este T es el local
    }
 
    fn g() -> void {
-       const T y;                // y este, el global
+       const T? y = null;        // y este, el global
    }
 
 La diferencia con las variables está en el **orden**: un tipo global se puede
@@ -206,7 +206,13 @@ consumidor nunca escribe ``__print__``, escribe ``print(x)``.
      - ``v[i] = x``
    * - ``__eq__``
      - ``fn __eq__(T ptr a, T ptr b) -> bool``
-     - ``a == b``
+     - ``a == b`` · ``a != b``
+   * - ``__cmp__``
+     - ``fn __cmp__(T ptr a, T ptr b) -> int``
+     - ``a < b`` · ``<=`` · ``>`` · ``>=``
+   * - ``__hash__``
+     - ``fn __hash__(T ptr x) -> int``
+     - ``hash(x)``
    * - ``__min__`` / ``__max__``
      - ``fn __min__(T ptr x) -> int``
      - ``min(T)`` · ``min(valor)`` · un literal donde se espera ``T``
@@ -289,6 +295,36 @@ su firma no encaja, es ``SEM021``. ``self`` en un prototipo de trait es el
 tipo que hará la implementación, y se sustituye **tal cual**: un
 ``self ptr`` del contrato exige un ``Contador ptr`` en la implementación,
 no un ``Contador``.
+
+Un trait también puede pedir **métodos de nombre llano**, los de un bloque
+``@impl Tipo { ... }``. La forma del nombre dice con qué se cumple: un
+``__x__`` con un ``dunder fn``, un nombre llano con un método de ``@impl``
+(antes un método de trait tenía que ser dunder). Los parámetros de un
+prototipo pueden llevar nombre, que no cuenta para el contrato
+(``self ptr`` y ``self ptr s`` piden lo mismo):
+
+.. code-block:: srcx
+
+   @trait struct {
+       fn area(self ptr s) -> int;
+   } Forma;
+
+   @impl(Forma) struct { int r; } Circulo;
+
+   @impl Circulo {
+       fn area(Circulo ptr self) -> int { return self.r * self.r * 3; }
+   }
+
+   fn main() -> int {
+       var Circulo c = Circulo{ r: 1 };
+       return c.area() - 3;
+   }
+
+La conformidad sigue siendo **explícita**: un tipo cumple un trait solo si
+declara ``@impl(Forma)``, aunque tenga los métodos. Es lo que mira una
+:ref:`cota <cotas>` ``<T: Forma>``: dentro del genérico, ``x.area()`` sobre
+un ``T`` se comprueba con la firma del trait, y cada instancia tiene que
+declarar el trait (``SEM021`` en la llamada si no).
 
 .. _llamadas:
 

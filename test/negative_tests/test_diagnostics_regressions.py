@@ -225,3 +225,91 @@ def test_hash_de_float_y_de_un_tipo_sin_hash():
     assert_ok("struct { int a; } P;\n"
               "hook fn __hash__(P ptr p) -> int { return hash(p.a); };\n"
               "fn f(P ptr p) -> int { return hash(p); };")
+
+
+# --------------------------------------------------------------------------- #
+# los dos canales dan la misma lista (H6)
+# --------------------------------------------------------------------------- #
+
+def _codigos_del_cli(fuente: str) -> list:
+    """Los códigos que reporta la compilación normal, en orden (``[critical]
+    CODE: ...``)."""
+    import re
+    from helpers import run_source
+    _code, out, err = run_source(fuente)
+    return re.findall(r"\[\w+\] ([A-Z]{3}\d{3}):", out + err)
+
+
+def _codigos_del_editor(fuente: str) -> list:
+    """Los del canal del editor (``--emit-diagnostics``), en orden."""
+    import json
+    from helpers import run_source
+    _code, out, _err = run_source(fuente, args=["--emit-diagnostics"])
+    return [d["code"] for d in json.loads(out)["diagnostics"]]
+
+
+def test_un_error_de_sintaxis_no_arrastra_semanticos_falsos():
+    """Regresión: la compilación normal corría la Semántica sobre el árbol
+    que dejó la recuperación del parser y reportaba 'suma' no está declarado
+    (SEM001) sobre una función que sí lo está: la recuperación había
+    descartado su declaración. El canal del editor no lo hacía."""
+    fuente = ("fn suma(int a, int b) -> int { return a + ; }\n"
+              "fn main() -> int { return suma(1, 2); }\n")
+    assert _codigos_del_cli(fuente) == ["PAR012"]
+
+
+def test_la_compilacion_y_el_editor_dan_la_misma_lista():
+    """Errores léxicos primero, después los de sintaxis; la Semántica solo
+    sobre un parseo limpio. Los dos canales, idénticos."""
+    for fuente in ("fn main() -> int { var int x = 1 $ 2; return y; }\n",
+                   "fn f() -> int { return ; }\nfn main() -> int { return g(; }\n",
+                   "fn main() -> int { var int x = \"a\"; return y; }\n"):
+        assert _codigos_del_cli(fuente) == _codigos_del_editor(fuente), fuente
+
+
+def _diagnosticos_en_proceso(principal: str) -> list:
+    """Analiza ``principal`` EN ESTE PROCESO (como el playground o un LSP)."""
+    import contextlib
+    import io
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), "V0"))
+    from driver.inspect import emit_diagnostics
+    with contextlib.redirect_stdout(io.StringIO()):
+        datos = emit_diagnostics(principal)
+    return [(os.path.basename(d.get("file") or ""), d["code"]) for d in datos["diagnostics"]]
+
+
+def test_dos_analisis_en_un_proceso_dan_los_mismos_errores():
+    """Regresión (H10): la caché del linker vivía el proceso entero, y la
+    segunda vez que se analizaba un programa con una librería rota sus
+    errores ya no salían ("ya se dijeron"). Medido: de 7 diagnósticos a 2."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "lib"))
+        with open(os.path.join(tmp, "lib", "rota.libsrx"), "w", encoding="utf-8") as fh:
+            fh.write("public fn f( -> int { return 1; }\n#export as rota\n")
+        principal = os.path.join(tmp, "main.srcx")
+        with open(principal, "w", encoding="utf-8") as fh:
+            fh.write("#import rota\nfn main() -> int { return 0; }\n")
+        primera = _diagnosticos_en_proceso(principal)
+        assert ("rota.libsrx", "PAR023") in primera, primera
+        assert _diagnosticos_en_proceso(principal) == primera
+
+
+def test_una_libreria_editada_se_relee():
+    """Regresión (H10): la caché positiva iba por ruta y no miraba el archivo:
+    una librería editada entre dos análisis del mismo proceso seguía vieja."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "lib"))
+        libreria = os.path.join(tmp, "lib", "calc.libsrx")
+        with open(libreria, "w", encoding="utf-8") as fh:
+            fh.write("public fn f() -> int { return 1; }\n#export as calc\n")
+        principal = os.path.join(tmp, "main.srcx")
+        with open(principal, "w", encoding="utf-8") as fh:
+            fh.write("#import calc\nfn main() -> int { return calc.g(); }\n")
+        assert ("main.srcx", "SEM011") in _diagnosticos_en_proceso(principal)
+        with open(libreria, "w", encoding="utf-8") as fh:
+            fh.write("public fn f() -> int { return 1; }\n"
+                     "public fn g() -> int { return 2; }\n#export as calc\n")
+        assert _diagnosticos_en_proceso(principal) == []

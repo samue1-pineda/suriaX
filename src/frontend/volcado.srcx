@@ -9,6 +9,7 @@
 #from io #import stdp
 #import frontend.tokens as tk
 #import frontend.lexer as lx
+#import frontend.diagnosticos as dg
 #import array.vector as vec
 
 fn fuente() -> str {
@@ -26,7 +27,7 @@ fn fuente() -> str {
 }
 
 fn main() -> int {
-    var vec.Vector<str> errores = vec.dynamic<str>(4);
+    var vec.Vector<dg.Diagnostico> errores = vec.dynamic<dg.Diagnostico>(4);
     var vec.Vector<tk.Token> toks = lx.tokenizar(fuente(), &errores);
     var int i = 0;
     while (i < toks.len()) {
@@ -36,7 +37,7 @@ fn main() -> int {
     }
     var int e = 0;
     while (e < errores.len()) {
-        stdp.println(f"error {errores.get(e)}");
+        stdp.println("error " + dg.texto(errores.get(e)));
         e = e + 1;
     }
     return 0;

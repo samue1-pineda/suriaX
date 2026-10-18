@@ -1,0 +1,8 @@
+#from io #import stdp
+fn aplica(int x, fn(int) -> int f) -> int { return f(x); }
+var int r = aplica(1, lambda (int n) -> int: n + 1);
+var int n = 5;
+fn main() -> int {
+    stdp.println(f"{r} {n}");
+    return 0;
+}

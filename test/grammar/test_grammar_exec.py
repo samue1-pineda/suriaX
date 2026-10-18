@@ -177,6 +177,6 @@ def test_enum_con_valor_explicito_continua_numerando():
 
 def test_bloques_test_los_ejecuta_el_runner():
     src = W + 'fn main() -> int { return 0; };\n' \
-              'test "suma" { __write__("dentro del test\\n"); };\n'
+              'test "suma" { __write__("dentro del test\\n"); expect (true); };\n'
     code, out, _err = run_program(src, args=["--emit-hir"])
     assert code == 0, "el programa con bloques test debe compilar"

@@ -1,0 +1,10 @@
+// Lambdas (una funcion sin nombre que lee su entorno). Hoy solo las ejecuta
+// el interprete (main devuelve 42): el target web las rechaza con WEB104.
+// Se regenera con: python V0/main.py lambdas.srcx --emit-hir lambdas.phir
+
+fn apply(fn(int) -> int f, int v) -> int { return f(v); }
+
+fn main() -> int {
+    var int k = 2;
+    return apply(lambda (int x) -> int: x * k, 21);
+}

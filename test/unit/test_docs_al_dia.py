@@ -365,7 +365,7 @@ def test_la_gramatica_nombra_las_palabras_reservadas_del_lexer():
     reglas = _gramatica()
     escritas: set[str] = set()
     for categoria in ("type_kw", "decl_kw", "control_kw", "memory_kw", "error_kw",
-                      "word_op", "word_lit"):
+                      "test_kw", "word_op", "word_lit"):
         escritas |= set(re.findall(r'"([^"]+)"', reglas[categoria]))
     assert escritas == set(KEYWORDS), (
         f"faltan en la EBNF: {sorted(set(KEYWORDS) - escritas)}; "

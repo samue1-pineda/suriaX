@@ -4,6 +4,8 @@
 
     base_type   = "int" | "float" | "bool" | "char" | "str" | "void"
                 | "type"
+                | "fn" "(" [ type { "," type } ] ")" [ "->" type ]
+                | "(" type ")"
                 | qualified_name
     qualified_name = NAME { "." NAME }        (* NAME = IDENTIFIER | DUNDER *)
     type_suffix = "?" | "ptr" [ "mutable" ]
@@ -102,6 +104,19 @@ def _parse_base_type(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
         cursor.advance()
         return ast.MetaTypeExpr(ln=tok.ln, col=tok.col)
 
+    if tok.type is TokenType.FUNCTION:
+        return _parse_function_type(cursor, ctx)
+
+    if tok.type is TokenType.L_PAREN:
+        # tipo ENTRE PARENTESIS: existe por el tipo funcion. Lo que sigue a
+        # su flecha es del retorno ('fn(int) -> int?' devuelve 'int?'), asi
+        # que una funcion que puede faltar solo se puede escribir agrupando:
+        # '(fn(int) -> int)?'. Los sufijos de fuera los aplica 'parse_type'.
+        cursor.advance()
+        inner = parse_type(cursor, ctx)
+        cursor.expect(TokenType.R_PAREN)
+        return inner
+
     if tok.type is TokenType.IDENTIFIER and tok.lexeme == "self":
         # 'self' en posicion de tipo es el placeholder del tipo que hara
         # '@impl' (solo valido dentro de un prototipo de trait; la Semantica
@@ -137,10 +152,64 @@ def _parse_base_type(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
     )
 
 
+def _parse_function_type(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
+    """``"fn" "(" [ type { "," type } ] ")" [ "->" type ]`` -- un TIPO funcion.
+
+    En posicion de tipo, ``fn`` va seguido de ``(``; en una declaracion, de
+    un nombre. Con eso basta para distinguirlas sin mirar mas lejos.
+
+    Sin flecha, el retorno es ``void``, igual que al declarar una funcion: la
+    misma ausencia significa lo mismo en los dos sitios. Lo que se escribe
+    tras la flecha es un ``type`` COMPLETO, con sus sufijos: por eso
+    ``fn(int) -> int?`` devuelve ``int?`` y para una funcion que puede faltar
+    hacen falta parentesis (``(fn(int) -> int)?``).
+    """
+    tok = cursor.advance()  # 'fn'
+    if not cursor.check(TokenType.L_PAREN):
+        nxt = cursor.peek()
+        raise ParseError.MissingTypeAnnotationError(
+            "un tipo funcion se escribe 'fn(<parametros>) -> <retorno>' "
+            f"(p. ej. 'fn(int, str) -> bool'); tras 'fn' se encontro "
+            f"{nxt.type.name}",
+            line=nxt.ln, column=nxt.col,
+        )
+    cursor.advance()  # '('
+    params = []
+    if not cursor.check(TokenType.R_PAREN):
+        params.append(_param_type(cursor, ctx))
+        while cursor.match(TokenType.COMMA):
+            params.append(_param_type(cursor, ctx))
+    cursor.expect(TokenType.R_PAREN)
+    if cursor.match(TokenType.ARROW):
+        ret = parse_type(cursor, ctx)
+    else:
+        ret = ast.PrimitiveTypeExpr(ln=tok.ln, col=tok.col, name="void")
+    return ast.FunctionTypeExpr(ln=tok.ln, col=tok.col, params=params, ret=ret)
+
+
+def _param_type(cursor: Cursor, ctx: ParserContext) -> ast.TypeExpr:
+    """Un parametro de un tipo funcion: solo su TIPO.
+
+    Si tras el tipo viene un nombre, lo escrito es una DECLARACION a la que le
+    falta el suyo (``fn (int x) -> int { ... }``): se dice eso, que es lo que
+    falta, en vez de un "se esperaba ')'" que apunta al sintoma."""
+    t = parse_type(cursor, ctx)
+    nxt = cursor.peek()
+    if nxt.type is TokenType.IDENTIFIER:
+        raise ParseError.ExpectedTokenError(
+            "a la declaracion de la funcion le falta el NOMBRE "
+            "('fn nombre(int x) -> ...'); 'fn(' sin nombre es un TIPO "
+            "funcion, y sus parametros solo llevan tipos ('fn(int) -> int')",
+            line=nxt.ln, column=nxt.col,
+        )
+    return t
+
+
 # tokens que pueden ARRANCAR un tipo base (para decidir el inner de 'error').
 _TYPE_STARTERS = frozenset({
     *_PRIMITIVE_TOKENS, TokenType.TYPE, TokenType.ERRORTYPE,
     TokenType.IDENTIFIER, TokenType.DUNDER,
+    TokenType.FUNCTION, TokenType.L_PAREN,
 })
 
 
@@ -157,10 +226,18 @@ def _parse_error_inner(cursor: Cursor, ctx: ParserContext):
     return None
 
 
-def parse_type_params(cursor: Cursor, ctx: ParserContext) -> list[str]:
-    """``type_params = [ "<" IDENTIFIER { "," IDENTIFIER } ">" ]`` -- los
+def parse_type_params(cursor: Cursor, ctx: ParserContext):
+    """``type_params = [ "<" type_param { "," type_param } ">" ]`` -- los
     PARAMETROS de un tipo generico, pegados a su nombre
-    (``struct { ... } Vector<T>;``).
+    (``struct { ... } Vector<T>;``), cada uno con sus COTAS opcionales::
+
+        type_param = IDENTIFIER [ ":" bound { "+" bound } ]
+        bound      = NAME { "." NAME }
+
+    Devuelve ``(nombres, cotas)``: la lista de nombres de siempre (lo que
+    viaja al HIR) y ``{nombre: [TypeBound, ...]}`` solo con los que llevan
+    alguna. Las cotas no cambian ningun nombre: ``<T: Ord>`` declara el mismo
+    ``T`` que ``<T>``, y lo que añade lo comprueba la Semantica.
 
     Espeja a :func:`parse_type_args` pero admite solo NOMBRES: un parametro
     es un nombre que se va a ligar, no un tipo ya escrito. Escribir
@@ -168,13 +245,41 @@ def parse_type_params(cursor: Cursor, ctx: ParserContext) -> list[str]:
     'int', que no significa nada; se rechaza con un mensaje que lo dice.
     """
     if not cursor.check(TokenType.LESS):
-        return []
+        return [], {}
     cursor.advance()
-    params: list[str] = [_parametro(cursor)]
-    while cursor.match(TokenType.COMMA):
-        params.append(_parametro(cursor))
+    params: list[str] = []
+    bounds: dict = {}
+    while True:
+        name = _parametro(cursor)
+        params.append(name)
+        if cursor.match(TokenType.COLON):
+            written = [_bound(cursor)]
+            while cursor.match(TokenType.PLUS):
+                written.append(_bound(cursor))
+            # 'T: Ord + Ord' no es un error de sintaxis; lo dice la Semantica
+            bounds[name] = written
+        if not cursor.match(TokenType.COMMA):
+            break
     cursor.expect(TokenType.GREATER)
-    return params
+    return params, bounds
+
+
+def _bound(cursor: Cursor) -> ast.TypeBound:
+    """``NAME { "." NAME }`` -- una cota: un trait o un concepto nativo.
+
+    Solo un nombre: una cota no es un tipo (``T: int`` no promete nada que se
+    pueda comprobar), y ``T: Caja<int>`` no es una forma del lenguaje."""
+    tok = cursor.peek()
+    if tok.type is not TokenType.IDENTIFIER:
+        raise ParseError.MissingTypeAnnotationError(
+            f"una cota es el NOMBRE de un trait o de un concepto ('Eq', 'Ord', "
+            f"'Hash', 'Print'), como en '<T: Ord + Hash>'; se encontro "
+            f"'{tok.lexeme or tok.type.name}'",
+            line=tok.ln, column=tok.col,
+        )
+    cursor.advance()
+    return ast.TypeBound(ln=tok.ln, col=tok.col,
+                         name=_qualified_name(cursor, tok.lexeme))
 
 
 def _parametro(cursor: Cursor) -> str:

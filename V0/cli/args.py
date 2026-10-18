@@ -50,6 +50,7 @@ DUENO = {
     "--emit-hir": "compilador",
     "--hir-pretty": "compilador",
     "--hir-text": "compilador",
+    "--hir-schema": "compilador",   # el formato del artefacto que se emite
     "--emit-ast-json": "compilador",
     "--emit-tokens": "compilador",
     "--emit-stage": "compilador",
@@ -58,8 +59,10 @@ DUENO = {
     "--emit-index": "compilador",
     "--emit-lang-info": "compilador",     # la especificación del lenguaje
     "--emit-extensions": "compilador",    # el vocabulario que el proyecto añade
+    "--test": "compilador",               # corre los 'test' del programa
     "--trace-exec": "compilador",         # traza del intérprete: es su ejecución
     "--trace-memory": "compilador",
+    "--dap": "compilador",                # depurar es ejecutar, mirando
 
     # --- de SURINIX: alrededor de compilar ---
     "--version": "surinix",
@@ -67,6 +70,10 @@ DUENO = {
     "--init-config": "surinix",     # preparar el proyecto
     "--time": "surinix",            # medir
     "--debug": "surinix",           # contar lo que pasó, en un informe
+    # el servidor de lenguaje (tooling/lsp): una comodidad del EDITOR sobre
+    # los canales del compilador (--emit-diagnostics, --emit-index), que son
+    # los que hacen el trabajo. Sin él el compilador hace exactamente lo mismo.
+    "--lsp": "surinix",
 }
 
 
@@ -151,12 +158,41 @@ def build_parser() -> argparse.ArgumentParser:
              "al interprete. Implicito con --debug",
     )
     parser.add_argument(
+        "--hir-schema", type=int, choices=(1, 2), default=2, dest="hir_schema",
+        metavar="{1,2}",
+        help="esquema del .phir que se emite: 2 (por defecto) lleva el pool "
+             "de tipos; 1 es el ROLLBACK al esquema inicial, con cada tipo "
+             "inline y sin pool. Los tres lectores (interprete, VM y web) "
+             "aceptan los dos. Ver documentation/source/hir.rst",
+    )
+    parser.add_argument(
+        "--test", action="store_true", dest="pruebas",
+        help="compila y corre los bloques 'test' del programa (no su 'main'): "
+             "una linea PASS/FAIL por prueba y codigo 1 si alguna falla. Corren "
+             "en el interprete",
+    )
+    parser.add_argument(
         "--trace-exec", action="store_true", dest="trace_exec",
         help="traza la ejecucion (llamadas/retornos anidados) al correr",
     )
     parser.add_argument(
         "--trace-memory", action="store_true", dest="trace_memory",
         help="traza las instrucciones de memoria (&, move, free) al correr",
+    )
+    parser.add_argument(
+        "--dap", action="store_true", dest="dap",
+        help="arranca el DEPURADOR hablando DAP (Debug Adapter Protocol) por "
+             "stdin/stdout: es lo que lanza un editor. El programa a depurar "
+             "llega en la peticion 'launch'; corre en el interprete. No "
+             "necesita un archivo fuente.",
+    )
+    parser.add_argument(
+        "--lsp", action="store_true", dest="lsp",
+        help="arranca el SERVIDOR DE LENGUAJE hablando LSP (Language Server "
+             "Protocol) por stdin/stdout: es lo que lanza un editor. Da los "
+             "diagnosticos del buffer sin guardar, hover, ir a la definicion, "
+             "los simbolos del documento y completar, con los mismos datos que "
+             "--emit-index. No necesita un archivo fuente.",
     )
     parser.add_argument(
         "--emit-lang-info", action="store_true", dest="emit_lang_info",

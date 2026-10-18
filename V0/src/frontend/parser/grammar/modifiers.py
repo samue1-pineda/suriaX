@@ -67,7 +67,10 @@ def parse_top_level_item(cursor: Cursor, ctx: ParserContext) -> ast.ASTNode:
                                    specifier=specifier)
 
     tok = cursor.peek()
-    if tok.type is TokenType.FUNCTION:
+    # 'fn (' es un TIPO funcion arrancando un binding global
+    # ('fn(int) -> int g = doble;'): una declaracion lleva el nombre ahi.
+    if tok.type is TokenType.FUNCTION \
+            and cursor.peek(1).type is not TokenType.L_PAREN:
         return parse_function_decl(cursor, ctx, visibility=visibility)
     if tok.type is TokenType.STRUCT:
         return parse_struct_decl(cursor, ctx, visibility=visibility)
@@ -80,16 +83,9 @@ def parse_top_level_item(cursor: Cursor, ctx: ParserContext) -> ast.ASTNode:
 
 
 def _parse_test_decl(cursor: Cursor, ctx: ParserContext) -> ast.TestDecl:
-    """``test STRING_LIT block`` -- bloque de prueba nombrado (estilo Zig).
-
-    Declaracion de primer nivel: el runner ejecuta su cuerpo, la compilacion
-    normal solo lo valida (ver ``ast_nodes.TestDecl``)."""
-    tok = cursor.expect(TokenType.TEST)
-    name_tok = cursor.expect(TokenType.STRING_LIT)
-    name = name_tok.value.flat() if hasattr(name_tok.value, "flat") else str(name_tok.value)
-    body = parse_block(cursor, ctx)
-    cursor.match(TokenType.SEMICOLON)  # ';' opcional tras el bloque
-    return ast.TestDecl(ln=tok.ln, col=tok.col, name=name, body=body)
+    """Una prueba con nombre: ver ``grammar/testing.py``."""
+    from .testing import parse_test_decl  # diferido: testing -> block -> statements
+    return parse_test_decl(cursor, ctx)
 
 
 __all__ = ["parse_top_level_item"]

@@ -1,0 +1,6 @@
+struct { void v; int n; } Caja;
+fn f(void x) -> void { }
+fn main() -> int {
+    var void nada = f(1);
+    return 0;
+}

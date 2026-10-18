@@ -61,14 +61,19 @@ import {
   type SymbolTable,
   type TestDecl,
   type Type,
+  typeKey,
 } from "./schema.ts";
 
 /**
  * Versiones de esquema que este lector sabe interpretar. Misma lista y
  * misma política que `runtime/interpreter/loader.SUPPORTED_SCHEMA_VERSIONS`:
  * un HIR de una versión futura se RECHAZA en vez de malinterpretarse.
+ *
+ * El 1 (tipos INLINE, sin pool) es el rollback del esquema versionado (ver la
+ * cabecera de `hir.proto`): se decodifica a las MISMAS formas que el 2, así
+ * que nada después del decodificador sabe cuál llegó.
  */
-export const SUPPORTED_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([2]);
+export const SUPPORTED_SCHEMA_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
 
 /** El `.phir` no pudo cargarse: bytes corruptos o esquema no soportado. */
 export class HIRLoadError extends Error {
@@ -300,27 +305,75 @@ function decodeInterpPart(r: Reader): InterpPart {
 let TYPE_POOL: readonly (Type | null)[] = [];
 
 /**
- * Primera pasada: recoge SOLO el pool (campo 6 del `Module`).
+ * ESQUEMA 1: el pool que se va formando con los tipos inline, o `null` si el
+ * módulo en curso es del 2. Mismo patrón que `TYPE_POOL` (lo instala y
+ * restaura `decodeModule`).
+ *
+ * El modelo no expone el pool —`restype` & co. ya son `Type`—, pero
+ * `EnumItem.payloadTypeIds` sí son índices. Para que un v1 se decodifique al
+ * MISMO módulo que su v2, los tipos inline entran al pool en el orden del
+ * emisor (`emmit_IR._type_id`): el de cada nodo antes que el de sus hijos y,
+ * en una lambda, parámetros, retorno y cuerpo (ver `prescanLambdaV1`). Es la
+ * misma regla que `V0/src/HIR/schema_v1.py` y `backend/src/schema_v1.cpp`.
+ */
+let V1_POOL: { readonly ids: Map<string, number> } | null = null;
+
+/**
+ * Primera pasada: la versión del esquema (campo 1) y el pool (campo 6).
  *
  * Hace falta porque los `items` (campo 4) van antes que el pool en el wire, y
- * un nodo no se puede resolver sin él. Saltar el resto es barato: de un campo
- * delimitado solo se lee la longitud y se avanza.
+ * un nodo no se puede resolver sin él; y porque un nodo del esquema 1 se lee
+ * distinto (tipo inline). Saltar el resto es barato: de un campo delimitado
+ * solo se lee la longitud y se avanza.
  */
-function scanTypePool(bytes: Uint8Array): (Type | null)[] {
+function scanHeader(bytes: Uint8Array): { version: number; pool: (Type | null)[] } {
   const pool: (Type | null)[] = [];
+  let version = 0;
   const r = new Reader(bytes);
   while (!r.eof) {
     const tag = r.readUint32();
     if (tag === 50) pool.push(r.readMessage(decodeType));
+    else if (tag === 8) version = r.readUint32();
     else r.skip(tag);
   }
-  return pool;
+  return { version, pool };
 }
 
 /** Índice del pool -> tipo. 0 (o fuera de rango) = sin tipo anotado. */
 function pooledType(id: number): Type | null {
+  if (V1_POOL !== null) throw mixedSchemas("un índice de tipo");
   if (id <= 0 || id >= TYPE_POOL.length) return null;
   return TYPE_POOL[id];
+}
+
+/**
+ * ESQUEMA 1: un tipo INLINE. Lo registra en el pool del v1 (para numerar los
+ * payloads como el emisor) y lo devuelve; el tipo vacío es "sin tipo", igual
+ * que `type_id = 0` en el 2.
+ */
+function inlineType(type: Type): Type | null {
+  return v1TypeId(type) === 0 ? null : type;
+}
+
+/** ESQUEMA 1: el índice que el tipo tendría en el pool del 2. */
+function v1TypeId(type: Type): number {
+  const pool = V1_POOL!;
+  const key = typeKey(type);
+  if (key === "") return 0;
+  let id = pool.ids.get(key);
+  if (id === undefined) {
+    id = pool.ids.size + 1; // 0 queda para el tipo vacío
+    pool.ids.set(key, id);
+  }
+  return id;
+}
+
+/** Un `.phir` que mezcla los dos esquemas: mal formado, nunca "casi un v2". */
+function mixedSchemas(what: string): HIRLoadError {
+  return new HIRLoadError(
+    `es del esquema 1 pero trae ${what} (propio del esquema 2): el archivo ` +
+      "mezcla los dos esquemas",
+  );
 }
 
 function decodeExpr(r: Reader): Expr {
@@ -334,6 +387,11 @@ function decodeExpr(r: Reader): Expr {
       case 8: ln = r.readUint32(); break;
       case 16: col = r.readUint32(); break;
       case 32: restype = pooledType(r.readUint32()); break;
+      // esquema 1: 'restype' inline (tag 3); en el 2 no se lee
+      case 26:
+        if (V1_POOL !== null) restype = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
 
       case 82: node = { case: "literal", literal: r.readMessage(decodeLiteral) }; break;
       case 90: node = r.readMessage(decodeInterpolated); break;
@@ -348,6 +406,12 @@ function decodeExpr(r: Reader): Expr {
       case 186: node = r.readMessage(decodeAddrOf); break;
       case 194: node = r.readMessage(decodeCast); break;
       case 202: node = r.readMessage(decodeStructLiteral); break;
+      case 218:
+        // esquema 1: el retorno va DESPUÉS del cuerpo en el wire, pero el
+        // emisor lo registra antes; se mira primero para numerar igual
+        if (V1_POOL !== null) prescanLambdaV1(r.peekBytes());
+        node = r.readMessage(decodeLambda);
+        break;
       case 210: node = {
         case: "moveExpr",
         operand: r.readMessage((sub) => {
@@ -538,6 +602,46 @@ function decodeStructLiteral(r: Reader): ExprNode {
   return { case: "structLiteral", typeName, fieldNames, values };
 }
 
+/** `message LambdaExpr` (campo 27 del `oneof` de `Expr`). */
+function decodeLambda(r: Reader): ExprNode {
+  const params: Parameter[] = [];
+  let returnType: Type | null = null;
+  let body: Block | null = null;
+  const captures: string[] = [];
+  while (!r.eof) {
+    const tag = r.readUint32();
+    switch (tag) {
+      case 10: params.push(r.readMessage(decodeParameter)); break;
+      case 16: returnType = pooledType(r.readUint32()); break;
+      case 26: body = r.readMessage(decodeBlock); break;
+      case 34: captures.push(r.readString()); break;
+      // esquema 1: el retorno inline (tag 5, nuevo); en el 2 no se lee
+      case 42:
+        if (V1_POOL !== null) returnType = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
+      default: r.skip(tag);
+    }
+  }
+  return { case: "lambdaExpr", params, returnType, body, captures };
+}
+
+/**
+ * ESQUEMA 1: registra los tipos de los parámetros y el retorno de una lambda
+ * ANTES de su cuerpo, que es el orden del emisor. Solo mira esos campos (el
+ * cuerpo se salta sin bajar), así que no anida; registrar dos veces el mismo
+ * tipo no cambia nada.
+ */
+function prescanLambdaV1(bytes: Uint8Array): void {
+  const r = new Reader(bytes);
+  while (!r.eof) {
+    const tag = r.readUint32();
+    if (tag === 10) r.readMessage(decodeParameter);
+    else if (tag === 42) inlineType(r.readMessage(decodeType));
+    else r.skip(tag);
+  }
+}
+
 // --------------------------------------------------------------------------- //
 // sentencias
 // --------------------------------------------------------------------------- //
@@ -577,6 +681,7 @@ function decodeStmt(r: Reader): Stmt {
       case 186: node = r.readMessage(decodeTypeDecl); break;
       case 194: node = r.readMessage(decodeThrow); break;
       case 202: node = r.readMessage(decodeTry); break;
+      case 210: node = r.readMessage(decodeExpect); break;
       default: r.skip(tag);
     }
   }
@@ -600,6 +705,11 @@ function decodeVarDecl(r: Reader): StmtNode {
       case 26: name = r.readString(); break;
       case 34: value = r.readMessage(decodeExpr); break;
       case 40: type = pooledType(r.readUint32()); break;
+      // esquema 1: 'type' inline (tag 2); en el 2 no se lee
+      case 18:
+        if (V1_POOL !== null) type = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
       default: r.skip(tag);
     }
   }
@@ -739,6 +849,22 @@ function decodeThrow(r: Reader): StmtNode {
   return { case: "throw", value: value ?? MISSING_EXPR };
 }
 
+function decodeExpect(r: Reader): StmtNode {
+  let condition: Expr | null = null;
+  let body: Block | null = null;
+  let text = "";
+  while (!r.eof) {
+    const tag = r.readUint32();
+    switch (tag) {
+      case 10: condition = r.readMessage(decodeExpr); break;
+      case 18: body = r.readMessage(decodeBlock); break;
+      case 26: text = r.readString(); break;
+      default: r.skip(tag);
+    }
+  }
+  return { case: "expect", condition: condition ?? MISSING_EXPR, body, text };
+}
+
 function decodeTry(r: Reader): StmtNode {
   let tryBlock: Block | null = null;
   let finallyBlock: Block | null = null;
@@ -804,6 +930,11 @@ function decodeParameter(r: Reader): Parameter {
     switch (tag) {
       case 18: name = r.readString(); break;
       case 24: type = pooledType(r.readUint32()); break;
+      // esquema 1: 'type' inline (tag 1); en el 2 no se lee
+      case 10:
+        if (V1_POOL !== null) type = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
       default: r.skip(tag);
     }
   }
@@ -823,6 +954,11 @@ function decodeFunction(r: Reader): FunctionDecl {
       case 10: name = r.readString(); break;
       case 18: params.push(r.readMessage(decodeParameter)); break;
       case 56: returnType = pooledType(r.readUint32()); break;
+      // esquema 1: 'return_type' inline (tag 3); en el 2 no se lee
+      case 26:
+        if (V1_POOL !== null) returnType = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
       case 34: body = r.readMessage(decodeBlock); break;
       case 42: dunder = r.readString(); break;
       case 50: decorator = r.readString(); break;
@@ -840,6 +976,11 @@ function decodeField(r: Reader): Field {
     switch (tag) {
       case 18: name = r.readString(); break;
       case 24: type = pooledType(r.readUint32()); break;
+      // esquema 1: 'type' inline (tag 1); en el 2 no se lee
+      case 10:
+        if (V1_POOL !== null) type = inlineType(r.readMessage(decodeType));
+        else r.skip(tag);
+        break;
       default: r.skip(tag);
     }
   }
@@ -872,13 +1013,23 @@ function decodeEnumItem(r: Reader): EnumItem {
       // 'repeated uint32' viaja EMPAQUETADO en proto3 (tag 26), pero un
       // escritor puede emitirlo campo a campo (tag 24): los dos son válidos y
       // los dos se leen, que es lo que exige aceptar cualquier .phir legal.
-      case 24: payloadTypeIds.push(r.readUint32()); break;
+      case 24:
+        if (V1_POOL !== null) throw mixedSchemas("'payload_type_ids'");
+        payloadTypeIds.push(r.readUint32());
+        break;
       case 26: {
+        if (V1_POOL !== null) throw mixedSchemas("'payload_type_ids'");
         const packed = r.readBytes();
         const inner = new Reader(packed);
         while (!inner.eof) payloadTypeIds.push(inner.readUint32());
         break;
       }
+      // esquema 1: los tipos del payload inline (tag 4, nuevo), como el índice
+      // que tendrían en el pool del 2; en el 2 no se leen
+      case 34:
+        if (V1_POOL !== null) payloadTypeIds.push(v1TypeId(r.readMessage(decodeType)));
+        else r.skip(tag);
+        break;
       default: r.skip(tag);
     }
   }
@@ -902,15 +1053,19 @@ function decodeEnum(r: Reader): EnumDecl {
 function decodeTest(r: Reader): TestDecl {
   let name = "";
   let body: Block | null = null;
+  let errfinally: Block | null = null;
+  let finallyBlock: Block | null = null;
   while (!r.eof) {
     const tag = r.readUint32();
     switch (tag) {
       case 10: name = r.readString(); break;
       case 18: body = r.readMessage(decodeBlock); break;
+      case 26: errfinally = r.readMessage(decodeBlock); break;
+      case 34: finallyBlock = r.readMessage(decodeBlock); break;
       default: r.skip(tag);
     }
   }
-  return { name, body };
+  return { name, body, errfinally, finallyBlock };
 }
 
 function decodeExternBlock(r: Reader): ExternBlock {
@@ -1055,8 +1210,17 @@ function decodeModuleBody(r: Reader): Module {
  */
 export function decodeModule(bytes: Uint8Array): Module {
   const anterior = TYPE_POOL;
+  const anteriorV1 = V1_POOL;
   try {
-    TYPE_POOL = scanTypePool(bytes);
+    const { version, pool } = scanHeader(bytes);
+    TYPE_POOL = pool;
+    V1_POOL = null;
+    if (version === 1) {
+      // esquema 1: los tipos van inline. Un pool aquí es un archivo que
+      // mezcla los dos esquemas, no un v2 con otra etiqueta.
+      if (pool.length !== 0) throw mixedSchemas("pool de tipos ('Module.types')");
+      V1_POOL = { ids: new Map() };
+    }
     return decodeModuleBody(new Reader(bytes));
   } catch (exc) {
     if (exc instanceof WireError) {
@@ -1065,6 +1229,7 @@ export function decodeModule(bytes: Uint8Array): Module {
     throw exc;
   } finally {
     TYPE_POOL = anterior;
+    V1_POOL = anteriorV1;
   }
 }
 

@@ -295,6 +295,17 @@ private:
             if (found >= 0) {
                 site.index = found;
                 site.target = CallTarget::Method;
+                // el receptor NOMBRADO se presta si el metodo lo toma por
+                // 'ptr': si es un escalar (un enum sin payload), vive en una
+                // celda, como el operando de un '&'
+                const pb::Expr& objeto = node.callee().member().obj();
+                if (objeto.node_case() == pb::Expr::kIdentifier) {
+                    const std::string& n = objeto.identifier().name();
+                    if (std::find(fn_.direcciones.begin(), fn_.direcciones.end(), n) ==
+                        fn_.direcciones.end()) {
+                        fn_.direcciones.push_back(n);
+                    }
+                }
                 record(std::move(site));
                 return;
             }
@@ -496,8 +507,17 @@ void declare(const Unit& unit, bool is_main, Program& program) {
         entry.result_type = fn.return_type_id();
         entry.prototype = !fn.has_body();
         collect_slots(fn, entry.slots);
-        program.index.emplace(Program::key(entry.unit, entry.name),
-                              program.functions.size());
+        // Un METODO de '@impl' de nombre llano ('dunder' igual al nombre) NO
+        // entra en el indice por nombre: se llama como 'p.distancia()' y se
+        // resuelve por 'methods'. Si entrara, pisaria a una 'fn' homonima del
+        // modulo —'emplace' se queda con la primera declarada— y
+        // 'distancia(5)' ejecutaria el metodo con 5 como receptor. Es la
+        // misma regla que 'runtime/interpreter/loader.py' (Unit.functions).
+        const bool plain_method = !fn.dunder().empty() && fn.dunder() == fn.name();
+        if (!plain_method) {
+            program.index.emplace(Program::key(entry.unit, entry.name),
+                                  program.functions.size());
+        }
         // un 'dunder' de nombre llano es un METODO: su dueno es el nominal de
         // su receptor, igual que lo decide el frontend. Se indexa por el
         // nombre ESCRITO ('__doble__', 'push'), que es como lo nombra la

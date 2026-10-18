@@ -234,11 +234,19 @@ class InvalidExternBlockError(ParseError):
 
 
 class ExpressionTooDeepError(ParseError):
-    """La construcción anidada excede la profundidad de recursión soportada.
+    """La construcción anida más de lo que el lenguaje admite.
 
-    El parser usa llamadas recursivas para leer paréntesis, prefijos unarios y
-    otras estructuras anidadas. Cuando el anidamiento es extremo, se convierte
-    el fallo en un diagnóstico controlado en vez de dejar un traceback.
+    Una declaración puede anidar hasta 500 niveles en su árbol: bloques
+    dentro de bloques, llamadas dentro de llamadas y también las cadenas de
+    operadores, que no anidan al escribirse pero sí al analizarse (``a + b +
+    c`` es ``(a + b) + c``: un nivel por operador). El límite existe porque
+    el árbol lo recorren pasadas recursivas y el HIR lo guarda anidado; sin
+    él, una expresión muy larga acababa en un fallo interno más adelante.
+
+    Qué hacer: reparte la expresión en variables intermedias o saca los
+    bloques interiores a funciones. Los paréntesis no cuentan como niveles,
+    pero miles de ellos anidados agotan al propio parser y dan este mismo
+    diagnóstico.
     """
 
     def __init__(self, message: Any = "expresión demasiado anidada", **kwargs: Any):
@@ -283,6 +291,19 @@ class WithReceiverError(ParseError):
 
     def __init__(self, message: Any = "'.campo' fuera de un 'with'", **kwargs: Any):
         super().__init__(message, code="PAR028", **kwargs)
+
+
+class TestWithoutExpectError(ParseError):
+    """Un ``test`` cuyo cuerpo no tiene ningun ``expect``.
+
+    Una prueba sin comprobaciones pasa siempre: solo dice que su cuerpo no
+    lanzo. Casi nunca es lo que se queria escribir, y una suite llena de
+    pruebas asi da una confianza que no tiene con que respaldar. Se cuenta
+    un ``expect`` en cualquier bloque del cuerpo (un ``if``, un ``while``).
+    """
+
+    def __init__(self, message: Any = "prueba sin 'expect'", **kwargs: Any):
+        super().__init__(message, code="PAR029", **kwargs)
 
 
 # Alias de compatibilidad.

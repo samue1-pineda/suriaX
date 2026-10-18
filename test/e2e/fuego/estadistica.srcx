@@ -69,13 +69,13 @@ test "la media de 2 y 4 es 3" {
     var vec.Vector<float> v = vec.dynamic<float>(2);
     v.push(2.0);
     v.push(4.0);
-    if (media(&v) != 3.0) { throw "media incorrecta"; };
+    expect (media(&v) == 3.0);
 }
 
 test "dividir por cero lanza" {
     var bool lanzo = false;
     try { dividir(1, 0); } catch (str e) { lanzo = true; };
-    if (not lanzo) { throw "no lanzo"; };
+    expect (lanzo);
 }
 
 fn main() -> int {

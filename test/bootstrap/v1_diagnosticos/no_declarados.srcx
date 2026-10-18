@@ -1,0 +1,18 @@
+struct { int x; } Punto;
+enum Color { ROJO };
+fn usa(Fantasma f, int n) -> Nada { return n; }
+fn main() -> int {
+    var int a = b + 1;
+    c = 2;
+    var int d = desconocida(3);
+    var Punto p = Punto{ x: 1 };
+    var int e = p.z;
+    var Color k = Color.MORADO;
+    var Inexistente i = 0;
+    var Inexistente j = 0;
+    var Punto ptr q = &p;
+    var Otro o = Otro{ v: 1 };
+    var int m = cast<Raro>(1);
+    var mod.Tipo t = 0;
+    return a + e;
+}

@@ -42,12 +42,15 @@ class PyCell:
     está compilado para el intérprete actual (ver ``Cell`` al final del módulo
     y ``memory/native.py``). Ambos comparten esta interfaz exacta."""
 
-    __slots__ = ("value", "state", "name")
+    __slots__ = ("value", "state", "name", "released")
 
     def __init__(self, value: Any = None, *, name: str = "?") -> None:
         self.value = value
         self.state = CellState.LIVE
         self.name = name
+        #: la liberó '__release__' al soltar SU BLOQUE (no un 'free' del
+        #: programa): cambia el mensaje, ver 'freed_message'
+        self.released = False
 
     # ------------------------------------------------------------------ #
     # accesos con verificación de estado (la instrucción, no el azúcar)
@@ -60,14 +63,14 @@ class PyCell:
             )
         if self.state is CellState.FREED:
             raise UseAfterFreeError(
-                f"'{self.name}' se usa después de 'free'", ln=ln, col=col,
+                freed_message(self, "se usa"), ln=ln, col=col,
             )
         return self.value
 
     def write(self, value: Any, *, ln: int = 0, col: int = 0) -> None:
         if self.state is CellState.FREED:
             raise UseAfterFreeError(
-                f"'{self.name}' se escribe después de 'free'", ln=ln, col=col,
+                freed_message(self, "se escribe"), ln=ln, col=col,
             )
         # escribir REVIVE una celda movida: un valor nuevo no está movido
         # (misma regla que memory_check aplica estáticamente al reasignar).
@@ -108,18 +111,55 @@ class Pointer:
     impidió escrituras ilegales, el runtime no las re-verifica.
     """
 
-    __slots__ = ("cell", "mut")
+    __slots__ = ("cell", "mut", "target")
 
-    def __init__(self, cell: Cell, *, mut: bool) -> None:
+    def __init__(self, cell: Cell, *, mut: bool, target: Any = None) -> None:
         self.cell = cell
         self.mut = mut
+        #: el OBJETO prestado, en el préstamo de un elemento de un bloque
+        #: (``&b[i]``, lo que devuelven ``Vector.at``/``at_mut``); ``None`` en
+        #: el de una variable o un campo. Ver :meth:`deref`.
+        self.target = target
 
     def deref(self, *, ln: int = 0, col: int = 0) -> Any:
-        return self.cell.read(ln=ln, col=col)
+        """El valor apuntado, comprobando que el préstamo siga vivo.
+
+        El préstamo de un ELEMENTO presta ese elemento, no la celda: si el
+        contenedor lo reemplaza (``set``, ``v[i] = x``) o lo saca y corre los
+        demás (``take``), la celda tiene OTRO objeto, y leerlo por el
+        préstamo viejo era leer un elemento que el programa nunca prestó.
+        La VM lo dice (RT003: el objeto prestado murió) y aquí también. El de
+        una variable sí sigue a la celda: ``p = &x; x = 5`` lee 5, como en C.
+        """
+        value = self.cell.read(ln=ln, col=col)
+        if self.target is not None and value is not self.target:
+            raise UseAfterFreeError(
+                f"el elemento prestado ('{self.cell.name}') ya no existe: el "
+                "contenedor lo reemplazó o lo sacó (por ejemplo con 'set', "
+                "'take' o 'pop'), y el préstamo murió con él. Pide el "
+                "préstamo justo antes de usarlo",
+                ln=ln, col=col)
+        return value
 
     def __repr__(self) -> str:  # para f-strings / trazas
         flag = " mutable" if self.mut else ""
         return f"<ptr{flag} -> {self.cell.name} ({self.cell.state.name.lower()})>"
+
+
+def freed_message(cell: Any, action: str) -> str:
+    """El mensaje de un acceso a una celda LIBERADA.
+
+    Si la liberó ``__release__`` al soltar su BLOQUE, la causa no es un
+    ``free`` del programa: el contenedor dueño del bloque REUBICÓ su
+    almacenamiento (un vector que creció reserva otro bloque, mueve los
+    elementos y suelta el viejo) o murió. Decir "después de 'free'" mandaba
+    a buscar un ``free`` que no existe."""
+    if getattr(cell, "released", False):
+        return (f"'{cell.name}' {action} después de que su contenedor "
+                "reubicara su almacenamiento (creció y movió los elementos a "
+                "otro bloque) o muriera: un préstamo de un elemento ('at', "
+                "'at_mut', 'data') no sobrevive a eso")
+    return f"'{cell.name}' {action} después de 'free'"
 
 
 def _select_cell():
@@ -144,4 +184,4 @@ def _select_cell():
 Cell = _select_cell()
 
 
-__all__ = ["Cell", "PyCell", "CellState", "Pointer"]
+__all__ = ["Cell", "PyCell", "CellState", "Pointer", "freed_message"]

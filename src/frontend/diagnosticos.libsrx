@@ -1,0 +1,53 @@
+/- frontend.diagnosticos — un diagnóstico: lo que el compilador le dice al
+   programador sobre su programa.
+
+ Lo producen el lexer, el parser y la Semántica, y es lo que la V1 compara
+ con la V0 (`--emit-diagnostics`): el CÓDIGO, la LÍNEA y la COLUMNA, en el
+ mismo orden. El mensaje es de la V1 y puede decirlo con otras palabras.
+
+ Una sola forma para las tres fases, en vez del texto suelto de antes (cada
+ una con su propio formato): quien los muestra, los compara o los cuenta no
+ tiene que leer texto.
+-/
+
+struct {
+    str codigo;     // "LEX007", "PAR012", "SEM001", "AST006"...
+    int linea;
+    int col;
+    str mensaje;
+    str archivo;    // dónde está: "" = el archivo que se compila (una librería, el suyo)
+} Diagnostico;
+
+public fn nuevo(str codigo, int linea, int col, str mensaje) -> Diagnostico {
+    return Diagnostico{ codigo: codigo, linea: linea, col: col, mensaje: mensaje, archivo: "" };
+}
+
+/- `d` en el archivo `archivo`, si todavía no tenía uno (el error de una
+   librería lleva el suyo). -/
+public fn en(Diagnostico d, str archivo) -> Diagnostico {
+    if (d.archivo != "") { return d; }
+    return Diagnostico{ codigo: d.codigo, linea: d.linea, col: d.col, mensaje: d.mensaje,
+                        archivo: archivo };
+}
+
+/- `d` llevado a `linea:col` del archivo que se compila (`reubicar`). -/
+public fn reubicado(Diagnostico d, int linea, int col) -> Diagnostico {
+    return Diagnostico{ codigo: d.codigo, linea: linea, col: col, mensaje: d.mensaje, archivo: "" };
+}
+
+/- `CODIGO linea:col mensaje`: la forma de una línea de volcado. -/
+public fn texto(Diagnostico d) -> str {
+    return f"{d.codigo} {d.linea}:{d.col} {d.mensaje}";
+}
+
+/- ¿Detiene la compilación? Todos, salvo los AVISOS (`SEM030`: un `match`
+   que no cubre todas las variantes) y las NOTAS (`NOTE...`): la misma escala
+   que la V0 (`Severity`). -/
+public fn bloquea(Diagnostico d) -> bool {
+    if (d.codigo == "SEM030") { return false; }
+    var str c = d.codigo;
+    if (len(c) > 4 and c[0] == 'N' and c[1] == 'O' and c[2] == 'T' and c[3] == 'E') { return false; }
+    return true;
+}
+
+#export as diagnosticos

@@ -29,6 +29,34 @@
 
  El indexado 'v[i]' funciona en las dos formas (hooks __index__/__index_set__).
 
+ COPIA O PRÉSTAMO. 'v.get(i)' y 'v[i]' entregan una COPIA del elemento, igual
+ que ligarlo a una variable: modificarla no toca el vector. Para cambiar un
+ elemento en su sitio se pide PRESTADO y mutable:
+
+   v[0] = Punto{ x: 1, y: 2 };    // reemplaza el elemento entero
+   v.at_mut(0).x = 7;             // cambia un campo del que está guardado
+   vv.at_mut(0).push(8);          // 'vv' es un Vector<Vector<int>>
+   v[0].x = 7;                    // SEM041: cambiaría una copia
+
+ El puntero de 'at'/'at_mut' deja de valer si el vector crece (un 'push'
+ sobre uno lleno lo mueve a otro bloque): usarlo después es RT003.
+
+ ORDEN E IGUALDAD:
+
+   v.sort();       // de menor a mayor con '<', ESTABLE (mezcla). Sirve para
+                   // todo 'T' que se ordene: int/float/char/str/byte, enums sin
+                   // datos y tipos con '__cmp__'; con otro 'T' es SEM039
+   v.sort_by(cmp); // con una FUNCIÓN 'fn(T ptr, T ptr) -> int' (negativo,
+                   // 0 o positivo, como '__cmp__'); también estable
+   a == b          // mismo 'len' y elementos iguales uno a uno ('__eq__')
+
+ CON UN 'fn(T ptr) -> bool': 'v.filter(keep)' (COPIAS de los que cumplen) y
+ 'any', 'all', 'count_if', 'find' (al final). 'map' y 'fold' están en 'func'.
+
+ ÍNDICES: 'get', 'set', 'v[i]' y 'v[i] = x' trabajan sobre los ELEMENTOS:
+ fuera de [0, len) lanzan 'excepciones.IndiceFueraDeRango', aunque el
+ bloque tenga espacio ('cap'). Un espacio reservado no es un elemento.
+
  ELEMENTOS CON DESTRUCTOR ('Vector<R>' con 'R' que declara '__free__'): el
  vector es su dueño y los destruye al morir. Todo lo que COPIARIA un
  elemento —'get', 'v[i]', 'v[i] = x'— es SEM038 con un 'R' (la copia y el
@@ -36,12 +64,14 @@
 
    v.push(move r);        // el vector se lo queda
    v.at(i)                // PRESTA el elemento: un 'R ptr', sin copiarlo
+   v.at_mut(i)            // lo presta para MODIFICARLO: un 'R ptr mutable'
    v.take(i)              // lo SACA (los siguientes se corren) y es tuyo
    v.pop()                // saca el ultimo
    v.set(i, move r);      // reemplaza: el viejo se destruye
 -/
 
 #import mem
+#import excepciones as exc
 
 struct {
     T ptr mutable datos;     // bloque contiguo reservado con mem.reserve<T>
@@ -123,11 +153,32 @@ fn adopt<T>(T ptr mutable bloque, int len, int cap) -> Vector<T> {
         return mem.take<T>(self.datos, self.len);
     }
 
-    // una COPIA del elemento en 'i' (mem verifica límites: EXC002 si i está
-    // fuera de rango). Con un elemento que tiene destructor es SEM038: usa
-    // 'at' (préstamo) o 'take'.
+    // una COPIA del elemento en 'i'. Con un elemento que tiene destructor es
+    // SEM038: usa 'at' (préstamo) o 'take'.
+    //
+    // Fuera de [0, len) lanza 'excepciones.IndiceFueraDeRango'. El rango es
+    // el de los ELEMENTOS, no el del bloque: antes solo se comprobaba el
+    // bloque (lo hacía 'mem', con la capacidad), y un 'i' entre 'len' y
+    // 'cap' leía una celda vacía y devolvía 'null' en silencio.
     fn get(Vector<T> ptr self, int i) -> T {
+        self.check_index(i);
         return self.datos[i];
+    }
+
+    // lanza 'excepciones.IndiceFueraDeRango' si 'i' no está en [0, len),
+    // con el mismo mensaje que el acceso a un bloque de 'mem' (que comprueba
+    // [0, cap)). Lo usan 'get', 'set' y 'v[i]' (leer y escribir).
+    //
+    // La posición (linea, columna) va en 0: la librería no conoce la de
+    // quien llama, y la de esta línea no le diría nada. El intérprete la
+    // rellena con la de la llamada del programa ('v.get(9)'); la VM todavía
+    // la deja en 0 (c_errorstfix.md §1).
+    fn check_index(Vector<T> ptr self, int i) -> void {
+        if (i < 0 or i >= self.len) {
+            throw exc.IndiceFueraDeRango{
+                mensaje: f"índice {i} fuera de rango [0, {self.len})",
+                linea: 0, columna: 0 };
+        }
     }
 
     // PRESTA el elemento en 'i': un puntero al que está en el vector, sin
@@ -135,6 +186,20 @@ fn adopt<T>(T ptr mutable bloque, int len, int cap) -> Vector<T> {
     // deja de valer si el elemento sale del vector o el vector muere.
     fn at(Vector<T> ptr self, int i) -> T ptr {
         if (i < 0 or i >= self.len) { throw "at fuera de rango"; }
+        return &self.datos[i];
+    }
+
+    // PRESTA el elemento en 'i' para MODIFICARLO: un 'T ptr mutable' al que
+    // está en el vector. Es la única forma de cambiar un elemento en su sitio
+    // ('v.at_mut(i).n = 5', 'vv.at_mut(0).push(8)'): 'get' y 'v[i]' entregan
+    // una COPIA, y escribir en ella es SEM041. Comprueba el rango como 'at'.
+    //
+    // El préstamo deja de valer si el vector CRECE (un 'push' sobre uno
+    // lleno reserva otro bloque y mueve los elementos), si el elemento sale
+    // ('take', 'pop', 'set') o si el vector muere: usarlo después es RT003.
+    // Pídelo justo antes de usarlo, no lo guardes.
+    fn at_mut(Vector<T> ptr mutable self, int i) -> T ptr mutable {
+        if (i < 0 or i >= self.len) { throw "at_mut fuera de rango"; }
         return &self.datos[i];
     }
 
@@ -155,20 +220,31 @@ fn adopt<T>(T ptr mutable bloque, int len, int cap) -> Vector<T> {
 
 // indexado 'v[i]' (lectura): el hook __index__ se dispara con la sintaxis '[]'
 // sobre un Vector. Es un hook del set fijo, va fuera del bloque @impl.
+//
+// Comprueba [0, len) como 'get' (antes, entre 'len' y 'cap' daba 'null').
 hook fn __index__(Vector<T> ptr self, int i) -> T {
+    self.check_index(i);
     return self.datos[i];
 }
 
-// escritura por indice 'v[i] = x' (dentro del rango ya reservado; mem verifica
-// limites con EXC002). Complementa __index__ para un indexado completo.
+// escritura por indice 'v[i] = x': REEMPLAZA un elemento que ya está.
+// Complementa __index__ para un indexado completo.
+//
+// Fuera de [0, len) lanza 'excepciones.IndiceFueraDeRango', como 'get'.
+// Antes bastaba con no pasar de la capacidad: 'v[i] = x' con 'i' entre 'len'
+// y 'cap' guardaba un elemento que 'len', 'pop', 'sort', '==' y 'filter' no
+// veían. Para agregar está 'push'.
 hook fn __index_set__(Vector<T> ptr mutable self, int i, T x) -> void {
+    self.check_index(i);
     self.datos[i] = x;
 }
 
 @impl Vector<T> {
 
     // reemplaza el elemento en 'i' por 'x' (el que había se destruye).
+    // Fuera de [0, len) lanza 'excepciones.IndiceFueraDeRango', como 'v[i] = x'.
     fn set(Vector<T> ptr mutable self, int i, T x) -> void {
+        self.check_index(i);
         self.datos[i] = move x;
     }
 
@@ -194,6 +270,267 @@ hook fn __index_set__(Vector<T> ptr mutable self, int i, T x) -> void {
     // si un 'push' suyo puede lanzar.
     fn fixed(Vector<T> ptr self) -> bool {
         return self.fija;
+    }
+}
+@impl Vector<T: Ord> {
+
+    // ORDENA los elementos de menor a mayor con '<': el orden nativo de
+    // int/float/char/str/byte y de los enums sin datos, o el '__cmp__' del
+    // tipo. Vive en su propio '@impl' porque PIDE algo de 'T': con la cota
+    // 'T: Ord' el '<' se comprueba aqui, y 'v.sort()' sobre un vector de un
+    // tipo que no se ordena es SEM039 en la llamada.
+    //
+    // Es ESTABLE (ante un empate gana el de la izquierda: se puede ordenar
+    // por una clave y luego por otra). Es MEZCLA y no quicksort: O(n log n)
+    // siempre, con un bloque auxiliar de 'len' espacios mientras dura. De
+    // abajo hacia arriba (tramos de 1, 2, 4...) y no recursiva: la
+    // profundidad de llamadas no crece con el vector.
+    //
+    // MUEVE los elementos ('mem.take'), no los copia: vale igual para un
+    // 'Vector<R>' con 'R' que tiene destructor (cada uno sigue teniendo UN
+    // dueño). Si el '__cmp__' lanza a mitad, los elementos ya movidos al
+    // bloque auxiliar no vuelven: el vector queda en un estado no
+    // especificado.
+    fn sort(Vector<T> ptr mutable self) -> void {
+        var int n = self.len;
+        if (n < 2) { return; }
+        var T ptr mutable aux = mem.reserve<T>(n);
+        var T ptr mutable origen = self.datos;
+        var T ptr mutable destino = aux;
+        var bool en_aux = false;     // ¿la ultima pasada dejo todo en 'aux'?
+        var int ancho = 1;
+        while (ancho < n) {
+            var int ini = 0;
+            while (ini < n) {
+                var int mitad = ini + ancho;
+                if (mitad > n) { mitad = n; }
+                var int fin = mitad + ancho;
+                if (fin > n) { fin = n; }
+                var int i = ini;
+                var int j = mitad;
+                var int k = ini;
+                while (k < fin) {
+                    // de la DERECHA solo si es estrictamente menor: ante un
+                    // empate gana la izquierda, y eso es la estabilidad
+                    if (j < fin and (i >= mitad or origen[j] < origen[i])) {
+                        destino[k] = mem.take<T>(origen, j);
+                        j = j + 1;
+                    } else {
+                        destino[k] = mem.take<T>(origen, i);
+                        i = i + 1;
+                    }
+                    k = k + 1;
+                }
+                ini = fin;
+            }
+            var T ptr mutable cambio = origen;
+            origen = destino;
+            destino = cambio;
+            en_aux = not en_aux;
+            ancho = ancho * 2;
+        }
+        if (en_aux) {
+            mem.transfer<T>(self.datos, aux, n);
+        }
+        mem.release<T>(aux);         // vacio: todo se movio fuera
+    }
+}
+@impl Vector<T> {
+    // ORDENA con la comparación 'cmp': negativo si el primero va antes, 0 si
+    // empatan, positivo si va después (el mismo contrato que '__cmp__'). Es
+    // para lo que 'sort' no puede: ordenar por una clave ('por edad'), al
+    // revés, o un 'T' que no se ordena por sí mismo (sin '__cmp__').
+    //
+    //   fn by_len(str ptr a, str ptr b) -> int { return a.len() - b.len(); }
+    //   v.sort_by(by_len);
+    //   v.sort_by(Persona.compare_age);     // un método también es un valor
+    //
+    // Recibe PUNTEROS ('T ptr'): comparar no copia, así que sirve igual para
+    // un 'T' con destructor. El algoritmo es el de 'sort' —mezcla de abajo
+    // hacia arriba, ESTABLE (ante un empate gana el de la izquierda), O(n log
+    // n), MUEVE sin copiar— y solo cambia la pregunta '¿va antes?'. Está
+    // repetido y no compartido: 'sort' no puede pasarse '<' como función (una
+    // función genérica no es un valor, SEM044). Los punteros que recibe
+    // 'cmp' son préstamos que valen SOLO durante esa llamada.
+    //
+    // Si 'cmp' lanza a mitad, el vector queda en un estado no especificado,
+    // como en 'sort'.
+    fn sort_by(Vector<T> ptr mutable self, fn(T ptr, T ptr) -> int cmp) -> void {
+        var int n = self.len;
+        if (n < 2) { return; }
+        var T ptr mutable aux = mem.reserve<T>(n);
+        var T ptr mutable origen = self.datos;
+        var T ptr mutable destino = aux;
+        var bool en_aux = false;
+        var int ancho = 1;
+        while (ancho < n) {
+            var int ini = 0;
+            while (ini < n) {
+                var int mitad = ini + ancho;
+                if (mitad > n) { mitad = n; }
+                var int fin = mitad + ancho;
+                if (fin > n) { fin = n; }
+                var int i = ini;
+                var int j = mitad;
+                var int k = ini;
+                while (k < fin) {
+                    if (j >= fin) {
+                        destino[k] = mem.take<T>(origen, i);
+                        i = i + 1;
+                    } else if (i >= mitad) {
+                        destino[k] = mem.take<T>(origen, j);
+                        j = j + 1;
+                    } else {
+                        // las dos cabezas salen a locales para compararlas:
+                        // '&origen[j]' no vale para un escalar ('&' sobre
+                        // un elemento de un bloque solo presta objetos, RT011)
+                        // y '&' sobre un local sí vale para todo 'T'. Gana la
+                        // DERECHA solo si va estrictamente antes (< 0): ante
+                        // un empate gana la izquierda (estabilidad). La que
+                        // pierde vuelve a su celda.
+                        var T right = mem.take<T>(origen, j);
+                        var T left = mem.take<T>(origen, i);
+                        if (cmp(&right, &left) < 0) {
+                            destino[k] = move right;
+                            origen[i] = move left;
+                            j = j + 1;
+                        } else {
+                            destino[k] = move left;
+                            origen[j] = move right;
+                            i = i + 1;
+                        }
+                    }
+                    k = k + 1;
+                }
+                ini = fin;
+            }
+            var T ptr mutable cambio = origen;
+            origen = destino;
+            destino = cambio;
+            en_aux = not en_aux;
+            ancho = ancho * 2;
+        }
+        if (en_aux) {
+            mem.transfer<T>(self.datos, aux, n);
+        }
+        mem.release<T>(aux);
+    }
+
+    // un vector NUEVO con COPIAS de los elementos para los que 'keep' dice
+    // 'true', en el mismo orden. El original no cambia.
+    //
+    //   fn is_even(int ptr x) -> bool { return x % 2 == 0; }
+    //   var vec.Vector<int> evens = v.filter(is_even);
+    //
+    // El nuevo es DINÁMICO (crece) aunque el original sea de capacidad fija:
+    // su tamaño no lo eligió nadie. Empieza con la capacidad del original.
+    //
+    // COPIA, así que con un 'T' que tiene destructor es SEM038 en la
+    // llamada, como 'get': la copia y el original serían dos dueños. Para
+    // esos, recorrer con 'at' (préstamo) o sacar con 'take'.
+    fn filter(Vector<T> ptr self, fn(T ptr) -> bool keep) -> Vector<T> {
+        var Vector<T> kept = dynamic<T>(self.cap);
+        var int i = 0;
+        while (i < self.len) {
+            // la copia se hace ANTES de preguntar y 'keep' recibe la copia:
+            // '&self.datos[i]' no vale para un escalar (RT011), y la copia
+            // hace falta de todos modos para los que se quedan
+            var T copy = self.datos[i];
+            if (keep(&copy)) {
+                kept.push(move copy);
+            }
+            i = i + 1;
+        }
+        return kept;
+    }
+}
+
+// 'a == b' entre dos vectores: mismo 'len' y elementos iguales uno a uno (con
+// el '==' de 'T'). La capacidad y si es fija NO cuentan: son como se guarda,
+// no que se guarda.
+//
+// Sin este hook '==' compararia campo a campo, y el campo 'datos' es un
+// puntero: se compararia la DIRECCION del bloque, asi que una copia ('var c =
+// a', que copia el bloque) nunca seria igual a su original.
+hook fn __eq__(Vector<T> ptr a, Vector<T> ptr b) -> bool {
+    if (a.len != b.len) { return false; }
+    var int i = 0;
+    while (i < a.len) {
+        if (a.datos[i] != b.datos[i]) { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+// PREGUNTAS sobre los elementos, con un PREDICADO 'pred: fn(T ptr) -> bool'
+// (una función con nombre o una lambda):
+//
+//   v.any(is_even)                                 // ¿alguno cumple?
+//   v.all(lambda (int ptr x) -> bool: x[0] > 0)    // ¿todos cumplen?
+//   v.count_if(is_even)                            // cuántos cumplen
+//   v.find(is_even) ?? -1                          // el índice del primero, o null
+//
+// Recorren de izquierda a derecha y 'any', 'all' y 'find' se detienen en
+// cuanto saben la respuesta: 'pred' no se llama sobre el resto. Con 'v'
+// vacío: 'any' es false, 'all' es true (nadie incumple), 'count_if' es 0 y
+// 'find' es null. Ninguna cambia el vector.
+//
+// No hay 'for_each': la captura de una lambda es de solo lectura, así que
+// un 'for_each' solo serviría para escribir, y para ACUMULAR está
+// 'func.fold'.
+//
+// 'pred' recibe un puntero a una COPIA del elemento, como en 'filter':
+// '&self.datos[i]' no vale para un escalar ('&' sobre un elemento de un
+// bloque solo presta objetos, RT011). Por eso, con un 'T' que tiene
+// destructor, las cuatro son SEM038 en la llamada (la copia y el elemento
+// serían dos dueños); para esos, recorrer con 'at'. El día que el préstamo
+// de un escalar exista, la copia sobra y la firma no cambia.
+@impl Vector<T> {
+    // ¿ALGUNO cumple 'pred'? Se detiene en el primero que cumple.
+    fn any(Vector<T> ptr self, fn(T ptr) -> bool pred) -> bool {
+        var int i = 0;
+        while (i < self.len) {
+            var T copy = self.datos[i];
+            if (pred(&copy)) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    // ¿TODOS cumplen 'pred'? Se detiene en el primero que no cumple.
+    fn all(Vector<T> ptr self, fn(T ptr) -> bool pred) -> bool {
+        var int i = 0;
+        while (i < self.len) {
+            var T copy = self.datos[i];
+            if (not pred(&copy)) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    // CUÁNTOS cumplen 'pred' (los recorre todos).
+    fn count_if(Vector<T> ptr self, fn(T ptr) -> bool pred) -> int {
+        var int count = 0;
+        var int i = 0;
+        while (i < self.len) {
+            var T copy = self.datos[i];
+            if (pred(&copy)) { count = count + 1; }
+            i = i + 1;
+        }
+        return count;
+    }
+
+    // El ÍNDICE del primero que cumple 'pred', o 'null' si ninguno. Un
+    // 'int?' y no un -1: "no está" es un estado que el tipo dice, y quien
+    // llama lo desenvuelve con 'match' o con '??' ('v.find(p) ?? -1').
+    fn find(Vector<T> ptr self, fn(T ptr) -> bool pred) -> int? {
+        var int i = 0;
+        while (i < self.len) {
+            var T copy = self.datos[i];
+            if (pred(&copy)) { return i; }
+            i = i + 1;
+        }
+        return null;
     }
 }
 

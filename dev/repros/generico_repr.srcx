@@ -1,0 +1,8 @@
+#from io #import stdp
+fn ver<T>(T x) -> void { stdp.println(f"{x!r}"); }
+fn main() -> int {
+    ver<str>("a");
+    ver<char>('a');
+    stdp.println(f"{"a"!r} {'a'!r}");
+    return 0;
+}

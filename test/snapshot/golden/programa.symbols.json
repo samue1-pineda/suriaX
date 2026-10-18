@@ -56,7 +56,14 @@
             "ocultos": null,
             "members": null,
             "scope_id": 0,
-            "copias": []
+            "copias": [],
+            "ordenes": [],
+            "elem_borrows": [],
+            "hashes": [],
+            "sizes": [],
+            "prototype": false,
+            "type_bounds": [],
+            "traits": []
           },
           "sig": {
             "__node__": "Symbol",
@@ -100,11 +107,25 @@
             "ocultos": null,
             "members": null,
             "scope_id": 0,
-            "copias": []
+            "copias": [],
+            "ordenes": [],
+            "elem_borrows": [],
+            "hashes": [],
+            "sizes": [],
+            "prototype": false,
+            "type_bounds": [],
+            "traits": []
           }
         },
         "scope_id": 0,
-        "copias": []
+        "copias": [],
+        "ordenes": [],
+        "elem_borrows": [],
+        "hashes": [],
+        "sizes": [],
+        "prototype": false,
+        "type_bounds": [],
+        "traits": []
       }
     },
     "values": {
@@ -174,7 +195,14 @@
         "ocultos": null,
         "members": null,
         "scope_id": 0,
-        "copias": []
+        "copias": [],
+        "ordenes": [],
+        "elem_borrows": [],
+        "hashes": [],
+        "sizes": [],
+        "prototype": false,
+        "type_bounds": [],
+        "traits": []
       },
       "suma": {
         "__node__": "Symbol",
@@ -234,7 +262,14 @@
         "ocultos": null,
         "members": null,
         "scope_id": 0,
-        "copias": []
+        "copias": [],
+        "ordenes": [],
+        "elem_borrows": [],
+        "hashes": [],
+        "sizes": [],
+        "prototype": false,
+        "type_bounds": [],
+        "traits": []
       },
       "main": {
         "__node__": "Symbol",
@@ -264,7 +299,14 @@
         "ocultos": null,
         "members": null,
         "scope_id": 0,
-        "copias": []
+        "copias": [],
+        "ordenes": [],
+        "elem_borrows": [],
+        "hashes": [],
+        "sizes": [],
+        "prototype": false,
+        "type_bounds": [],
+        "traits": []
       }
     }
   },

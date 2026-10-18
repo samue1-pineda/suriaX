@@ -133,21 +133,23 @@ directiva** es un mecanismo de **intrínsecos** (funciones del host):
    - **no está** → error de runtime *"prototipo sin implementación en el
      host"*.
 
-Así `lib/io/print.libsrx` no usa `#extern`: toda su impresión pasa por
+Así `lib/io/stdp.libsrx` no usa `#extern`: toda su impresión pasa por
 `__write__`, y `print`/`println`/`__print__` son suriaX normal encima de esa
 única primitiva. Ver el archivo y su comentario de cabecera.
 
 **El HIR es lo que hace esto un desacople y no un parche.** La MISMA primitiva
 `__write__` la resuelve cada consumidor del HIR a su manera:
 
-- el **intérprete** la liga a un builtin Python (hoy);
-- el **backend nativo** la ligará a un símbolo del runtime C++ o a un `#extern
-  cpp{}` (futuro),
+- el **intérprete** la liga a un builtin Python (`intrinsics.py`);
+- la **VM** del backend nativo la liga a su propia implementación en C++
+  (`llamada_al_sistema`, en `backend/src/vm.cpp`);
 
 sin que la librería ni el HIR cambien. Es la *"host interface pequeña que ambos
 backends implementan"* de la propuesta (costos #1). La superficie nativa se
-mantiene **mínima**: un puñado de intrínsecos (`__write__`, y a futuro lectura,
-reloj, salida con código), y todo lo demás es suriaX sobre ellos.
+mantiene **mínima**: `__write__` y las llamadas al host de `lib/sistema`
+(archivos, entrada estándar, procesos, tiempo, salida con código), y todo lo
+demás es suriaX sobre ellas. La lista completa y qué motor tiene cada una
+está en [`lib/LLAMADAS_AL_HOST.md`](../../lib/LLAMADAS_AL_HOST.md).
 
 > Regla de diseño: **una `.libsrx` no debería incrustar `#extern cpp{}` para
 > algo que pueda expresarse como prototipo + intrínseco.** `#extern` queda para
@@ -216,6 +218,7 @@ resuelto, así que construir el valor correcto es directo.
 | `STRUCT` (`NOMINAL`) | `StructValue`: nombre + dict campo→`Cell` | campos como celdas para permitir `&s.campo` |
 | `ENUM` item | el nombre del item (o su valor asignado) | modelo C: items pelados |
 | `POINTER` | `Pointer` → la `Cell` apuntada (secc. 8) | la forma no cambia la representación |
+| `FUNCTION` | `FunctionValue`: la `FunctionDecl` y su unidad | sin capturas; `==` compara la declaración (identidad), un f-string escribe `<fn nombre>` |
 
 `UNIT`, `NULL` son singletons (comparaciones por identidad). Los valores son
 Python planos siempre que se pueda: el intérprete es educativo, no un runtime

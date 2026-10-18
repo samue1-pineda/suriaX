@@ -1,6 +1,7 @@
 """Traits: contratos definidos por el usuario, verificados por el compilador.
 
-Un ``@trait`` registra un conjunto de firmas de método dunder (``TraitSig``);
+Un ``@trait`` registra un conjunto de firmas de método (``TraitSig``): dunders
+(``__x__``) o métodos de nombre llano de un bloque ``@impl Tipo { ... }``;
 un ``@impl(trait)`` sobre un tipo se VERIFICA aquí: el tipo debe proveer cada
 método requerido con la firma exacta, sustituyendo el placeholder ``self`` por
 el tipo que implementa. Los métodos reales son ``dunder fn`` indexados por
@@ -67,12 +68,18 @@ def check_impl(trait_names: List[str], impl_type: str, ctx, ln: int, col: int) -
             ))
             continue
         for sig in sigs:
-            dunder = ctx.table.lookup_dunder(impl_type, sig.name)
+            # un tipo de una libreria registra sus metodos bajo su nombre
+            # CANONICO ('geom.Caja'); en el programa principal es el mismo
+            dunder = (ctx.table.lookup_dunder(impl_type, sig.name)
+                      or ctx.table.lookup_dunder(ctx.qualify(impl_type), sig.name))
             if dunder is None:
+                como = (f"'dunder fn {sig.name}({impl_type} ptr self ...)'"
+                        if sig.name.startswith("__") else
+                        f"un metodo 'fn {sig.name}({impl_type} ptr self ...)' "
+                        f"en un bloque '@impl {impl_type} {{ ... }}'")
                 ctx.error(SemanticError.TraitNotSatisfiedError(
                     f"'{impl_type}' no implementa '{sig.name}', requerido por "
-                    f"el trait '{trait_name}' (declara 'dunder fn {sig.name}"
-                    f"({impl_type} ptr self ...)')",
+                    f"el trait '{trait_name}' (declara {como})",
                     line=ln, column=col,
                 ))
                 continue

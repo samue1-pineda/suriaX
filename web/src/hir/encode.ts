@@ -79,7 +79,12 @@ export function encodeModule(module: Module): Uint8Array {
 
 function encodeModuleBody(module: Module): Uint8Array {
   const w = new Writer(4096);
-  w.uint32(1, module.schemaVersion);
+  // Este escritor produce SIEMPRE el formato del esquema 2 (con pool, campo
+  // 6). Un módulo leído de un .phir del esquema 1 ya está normalizado en
+  // memoria (decode.ts), así que se re-escribe como lo que es ahora: un 2.
+  // Escribir su '1' junto a un pool daría un archivo que mezcla los dos
+  // esquemas, y los lectores lo rechazan.
+  w.uint32(1, module.schemaVersion === 1 ? 2 : module.schemaVersion);
   w.string(2, module.sourceFile);
   if (hasSymbols(module.symbols)) {
     w.message(3, (t) => encodeSymbolTable(module.symbols, t));
@@ -294,6 +299,19 @@ function encodeExpr(expr: Expr, w: Writer): void {
         for (const value of node.values) s.message(3, (e) => encodeExpr(value, e));
       });
       return;
+    case "lambdaExpr":
+      w.message(27, (l) => {
+        for (const param of node.params) {
+          l.message(1, (p) => {
+            p.string(2, param.name);
+            if (param.type !== null) p.uint32(3, typeId(param.type));
+          });
+        }
+        if (node.returnType !== null) l.uint32(2, typeId(node.returnType));
+        if (node.body !== null) l.message(3, (b) => encodeBlock(node.body!, b));
+        for (const name of node.captures) l.rawString(4, name);
+      });
+      return;
     case "none":
       // sin variante: se escriben solo posición y restype (lo que había).
       return;
@@ -419,6 +437,13 @@ function encodeStmt(stmt: Stmt, w: Writer): void {
         }
       });
       return;
+    case "expect":
+      w.message(26, (x) => {
+        x.message(1, (e) => encodeExpr(node.condition, e));
+        if (node.body !== null) x.message(2, (b) => encodeBlock(node.body!, b));
+        x.string(3, node.text);
+      });
+      return;
     case "none":
       return;
   }
@@ -468,6 +493,12 @@ function encodeEnum(decl: EnumDecl, w: Writer): void {
 function encodeTest(test: TestDecl, w: Writer): void {
   w.string(1, test.name);
   if (test.body !== null) w.message(2, (b) => encodeBlock(test.body!, b));
+  if (test.errfinally !== null) {
+    w.message(3, (b) => encodeBlock(test.errfinally!, b));
+  }
+  if (test.finallyBlock !== null) {
+    w.message(4, (b) => encodeBlock(test.finallyBlock!, b));
+  }
 }
 
 function encodeDecl(decl: Decl, w: Writer): void {

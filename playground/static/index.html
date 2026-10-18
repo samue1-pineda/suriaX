@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>suriaX — playground</title>
 <meta name="description" content="Cada fase del compilador de suriaX, sobre tu propio código.">
+<!-- sin icono propio: decirlo evita que cada visita pida un /favicon.ico
+     que no existe. -->
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -57,7 +60,7 @@
         </div>
       </div>
     </div>
-    <div class="estado" id="estado">
+    <div class="estado" id="estado" role="status" aria-live="polite">
       <!-- El compilador no es instantáneo con un programa largo: mientras
            trabaja, esto lo dice. Un botón que no responde parece roto. -->
       <span class="girando" id="girando" hidden aria-hidden="true"></span>
@@ -68,15 +71,16 @@
   <section class="panel salida">
     <div class="cabecera">
       <h2>Fases</h2>
-      <div class="pestanas" id="pestanas" role="tablist"></div>
+      <div class="pestanas" id="pestanas" role="tablist"
+           aria-label="Fases del compilador"></div>
     </div>
-    <div class="contenido" id="contenido">
+    <div class="contenido" id="contenido" role="tabpanel" tabindex="0">
       <p class="vacio">Escribe un programa y pulsa <b>Compilar</b>.</p>
     </div>
     <!-- Controles del grafo: solo aparecen en las fases que lo usan. -->
     <div class="controles" id="controles" hidden>
-      <button type="button" data-zoom="-1" title="Alejar">−</button>
-      <button type="button" data-zoom="1" title="Acercar">+</button>
+      <button type="button" data-zoom="-1" title="Alejar" aria-label="Alejar">−</button>
+      <button type="button" data-zoom="1" title="Acercar" aria-label="Acercar">+</button>
       <button type="button" data-ajustar title="Ajustar a la vista">Ajustar</button>
       <button type="button" data-plegar title="Plegar todo menos la raíz">Plegar</button>
       <button type="button" data-desplegar title="Desplegar todo">Desplegar</button>
@@ -86,8 +90,8 @@
 
 </main>
 
-<section class="diagnosticos" id="diagnosticos" hidden>
-  <h2>Diagnósticos</h2>
+<section class="diagnosticos" id="diagnosticos" aria-labelledby="titulo-diagnosticos" hidden>
+  <h2 id="titulo-diagnosticos">Diagnósticos</h2>
   <ul id="lista-diagnosticos"></ul>
 </section>
 

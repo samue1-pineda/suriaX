@@ -20,14 +20,14 @@ try:
     from include.ast_walk import walk
     from include.types_ast import (
         LITERAL_TYPES, META_TYPE, PRIMITIVE_TYPES, SELF_TYPE, Type, error_of,
-        nominal, nullable_of, pointer_of,
+        function_of, nominal, nullable_of, pointer_of,
     )
 except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
     from include.ast_walk import walk  # type: ignore
     from types_ast import (  # type: ignore
         LITERAL_TYPES, META_TYPE, PRIMITIVE_TYPES, SELF_TYPE, Type, error_of,
-        nominal, nullable_of, pointer_of,
+        function_of, nominal, nullable_of, pointer_of,
     )
 
 
@@ -58,6 +58,11 @@ def resolve_type_expr(type_expr: ast.TypeExpr) -> Type:
         return META_TYPE
     if isinstance(type_expr, ast.SelfTypeExpr):
         return SELF_TYPE
+    if isinstance(type_expr, ast.FunctionTypeExpr):
+        # 'fn(int, str) -> bool': parametros en 'args', retorno en 'inner'
+        # (ver include/types_ast.Type)
+        return function_of(tuple(resolve_type_expr(p) for p in type_expr.params),
+                           resolve_type_expr(type_expr.ret))
     raise TypeError(f"TypeExpr desconocido: {type(type_expr).__name__}")  # inalcanzable
 
 
@@ -92,6 +97,12 @@ def _resolve_type_decl(node: ast.TypeDecl) -> None:
 
 
 def _resolve_function(node: ast.FunctionDecl) -> None:
+    node.return_restype = resolve_type_expr(node.return_type)
+
+
+def _resolve_lambda(node: ast.Lambda) -> None:
+    # el retorno ESCRITO de la lambda; sus parametros son 'Parameter' y los
+    # resuelve su propio handler, como los de una 'fn'
     node.return_restype = resolve_type_expr(node.return_type)
 
 
@@ -153,6 +164,7 @@ _RESOLVERS = {
     ast.Field: _resolve_var_like,
     ast.TypeDecl: _resolve_type_decl,
     ast.FunctionDecl: _resolve_function,
+    ast.Lambda: _resolve_lambda,
     ast.TraitMethod: _resolve_trait_method,
     ast.Literal: _resolve_literal,
     ast.InterpolatedString: _resolve_interp,

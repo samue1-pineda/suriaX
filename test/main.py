@@ -275,7 +275,7 @@ def _run_module(path: str, category: str, omitida_cls: type,
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)  # type: ignore[union-attr]
-    except Exception as exc:  # noqa: BLE001 - se reporta como fallo, no se oculta
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - se reporta como fallo, no se oculta
         print(f"    ✗ <importación de {name}>")
         failures.append(_describir_fallo(exc, category, path,
                                          "<importación del módulo>"))
@@ -293,7 +293,10 @@ def _run_module(path: str, category: str, omitida_cls: type,
             fn()
         except omitida_cls as exc:
             resultado, detalle = "omitida", str(exc)
-        except Exception as exc:  # noqa: BLE001 - un fallo no detiene los demás
+        # SystemExit también: una prueba que llama a algo que termina el
+        # proceso (un 'main' de una herramienta) no puede matar la corrida
+        # entera y dejarla sin resumen. KeyboardInterrupt sí la corta.
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - un fallo no detiene los demás
             resultado, detalle = "fallida", _describir_fallo(
                 exc, category, path, attr)
 

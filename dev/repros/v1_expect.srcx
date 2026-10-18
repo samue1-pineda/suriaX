@@ -1,0 +1,2 @@
+test "uno" { expect (1 + 1 == 2); }
+fn main() -> int { return 0; }

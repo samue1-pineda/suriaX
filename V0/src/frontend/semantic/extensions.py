@@ -30,9 +30,11 @@ from typing import Dict, List, Optional, Tuple
 try:
     from include import ast_nodes as ast
     from include.types_ast import Type
+    from error_handler.error import CompilerError
 except ImportError:  # pragma: no cover - ejecucion directa
     from include import ast_nodes as ast  # type: ignore
     from include.types_ast import Type  # type: ignore
+    from error import CompilerError  # type: ignore
 
 from .hooks import HookKind, HookSpec
 
@@ -61,31 +63,37 @@ class DeclaredSignature:
         return f"fn {self.name}({params}) -> {format_type(self.returns)}"
 
 
-def format_type(t: Type) -> str:
+def format_type(t: Optional[Type]) -> str:
     """``Type`` -> notación POSTFIJA del lenguaje (``Body ptr mutable``).
 
-    ``Type.__repr__`` es prefija (``ptr mutable Body``) por historia del
-    frontend; un diagnóstico dirigido al usuario tiene que hablar como se
-    escribe el lenguaje.
+    Delega en ``Type.__repr__``, que es el ÚNICO formateador: hubo dos (este,
+    postfijo, y el ``repr``, prefijo) y los diagnósticos salían en una u otra
+    notación según quién los escribiera. Este además perdía los argumentos de
+    tipo (``Vector<int>`` salía ``Vector``). Se conserva el nombre porque es
+    la forma explícita de pedirlo, y acepta ``None`` (``'?'``).
     """
-    from include.types_ast import TypeKind
-
-    if t.kind is TypeKind.POINTER:
-        return format_type(t.inner) + (" ptr mutable" if t.mut else " ptr")
-    if t.kind is TypeKind.NULLABLE:
-        return format_type(t.inner) + "?"
-    if t.kind is TypeKind.NOMINAL:
-        return t.name
-    if t.kind is TypeKind.ERROR:
-        return f"error {format_type(t.inner)}" if t.inner is not None else "error"
-    return t.kind.name.lower()
+    return "?" if t is None else repr(t)
 
 
 def parse_declared_type(texto: str) -> Optional[Type]:
     """``"Body ptr mutable"`` -> ``Type``, o ``None`` si no es un tipo válido.
 
     Usa el lexer y la gramática de tipos REALES: lo que aquí se acepta es
-    exactamente lo que se aceptaría escrito en un ``.srcx``.
+    exactamente lo que se aceptaría escrito en un ``.srcx``. Para saber POR
+    QUÉ no lo es, :func:`parse_declared_type_reason`.
+    """
+    return parse_declared_type_reason(texto)[0]
+
+
+def parse_declared_type_reason(texto: str) -> Tuple[Optional[Type], Optional[str]]:
+    """Como :func:`parse_declared_type`, con el MOTIVO cuando no es un tipo.
+
+    Solo se atrapa lo que esperamos que pase con un texto que no es un tipo:
+    los diagnósticos del lexer y del parser (``CompilerError``). Antes era un
+    ``except Exception`` que devolvía ``None`` sin más: un fallo interno del
+    compilador salía como "la firma usa tipos que no existen", y un error de
+    sintaxis de la firma, sin decir cuál. Cualquier otra excepción es un
+    defecto del compilador y sube (``ICE000``, con su traza).
     """
     from ..lexer.lexer import Lexer
     from ..parser.context import ParserContext
@@ -95,23 +103,33 @@ def parse_declared_type(texto: str) -> Optional[Type]:
 
     texto = (texto or "").strip()
     if not texto:
-        return None
+        return None, "está vacío"
     try:
         lexer = Lexer(texto, file="<extends.srcx>")
         tokens = lexer.tokenize()
         if lexer.errors:
-            return None
+            return None, _motivo(lexer.errors[0])
         ctx = ParserContext()
         cursor = Cursor(tokens)
         type_expr = parse_type(cursor, ctx)
-        if ctx.errors or type_expr is None:
-            return None
+        if ctx.errors:
+            return None, _motivo(ctx.errors[0])
+        if type_expr is None:
+            return None, "no es un tipo"
         # sobra texto = la cadena no era UN tipo ('int foo' no es un tipo)
         if not cursor.at_end():
-            return None
-        return resolve_type_expr(type_expr)
-    except Exception:  # una firma rara no puede tumbar la compilación
-        return None
+            return None, "sobra texto después del tipo"
+        return resolve_type_expr(type_expr), None
+    except CompilerError as exc:  # el texto no es un tipo: se dice por qué
+        return None, _motivo(exc)
+
+
+def _motivo(diagnostico) -> str:
+    """El mensaje de un diagnóstico del lexer/parser, sin su posición (que
+    sería la de la cadena suelta, no la del ``.py`` que la declaró)."""
+    mensaje = getattr(diagnostico, "message", None) or str(diagnostico)
+    codigo = getattr(diagnostico, "code", None)
+    return f"{codigo}: {mensaje}" if codigo else mensaje
 
 
 def _spec_for(firma: DeclaredSignature) -> HookSpec:
@@ -150,19 +168,19 @@ def build_vocabulary(extensions) -> Tuple[Dict[str, HookSpec], List[dict]]:
         params: List[Type] = []
         malos: List[str] = []
         for texto in decl.params:
-            resuelto = parse_declared_type(texto)
+            resuelto, motivo = parse_declared_type_reason(texto)
             if resuelto is None:
-                malos.append(texto)
+                malos.append(f"{texto!r} ({motivo})")
             else:
                 params.append(resuelto)
-        retorno = parse_declared_type(decl.returns)
+        retorno, motivo = parse_declared_type_reason(decl.returns)
         if retorno is None:
-            malos.append(decl.returns)
+            malos.append(f"{decl.returns!r} ({motivo})")
         if malos:
             problemas.append({
                 "code": EXT030,
                 "message": (f"la firma declarada de '{decl.name}' usa tipos que "
-                            f"no existen en el lenguaje: {', '.join(repr(m) for m in malos)}"),
+                            f"no existen en el lenguaje: {', '.join(malos)}"),
                 "file": decl.file, "line": decl.line, "column": decl.column,
             })
             continue
@@ -186,4 +204,4 @@ def build_vocabulary(extensions) -> Tuple[Dict[str, HookSpec], List[dict]]:
 
 
 __all__ = ["EXT030", "EXT031", "DeclaredSignature", "build_vocabulary",
-           "format_type", "parse_declared_type"]
+           "format_type", "parse_declared_type", "parse_declared_type_reason"]

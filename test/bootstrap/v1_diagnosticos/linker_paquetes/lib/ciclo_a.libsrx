@@ -1,0 +1,3 @@
+#import ciclo_b
+public fn a() -> int { return 1; }
+#export as ciclo_a

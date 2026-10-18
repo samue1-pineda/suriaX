@@ -1,0 +1,11 @@
+#from io #import stdp
+#import array.vector as vec
+struct { int id; } R;
+hook fn __free__(R ptr r) -> void { }
+fn main() -> int {
+    var vec.Vector<R> v = vec.dynamic<R>(2);
+    v.push(R{ id: 1 });
+    var bool b = v.any(lambda (R ptr r) -> bool: r.id == 1);
+    stdp.println(f"{b}");
+    return 0;
+}

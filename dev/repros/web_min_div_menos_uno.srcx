@@ -1,0 +1,7 @@
+#from io #import stdp
+fn main() -> int {
+    var int min = 0 - 9223372036854775807 - 1;
+    var int d = -1;
+    stdp.println(f"{min / d}");
+    return 0;
+}

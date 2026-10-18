@@ -38,8 +38,10 @@ _COMPILADOR = (
     "htims",
 )
 
-#: Lo que es TOOLING (suriniX): todo lo que rodea a compilar.
-_TOOLING = ("config", "cli", "suri", "playground")
+#: Lo que es TOOLING (suriniX): todo lo que rodea a compilar. ``tooling``
+#: son las integraciones con editores (el servidor de lenguaje de
+#: ``tooling/lsp``): importan los canales del driver, nunca al revés.
+_TOOLING = ("config", "cli", "suri", "playground", "tooling")
 
 #: Cruces que ya existían cuando se declaró la frontera, con lo que hace
 #: falta para cerrarlos. Es una lista que solo puede ENCOGER: es a la vez la

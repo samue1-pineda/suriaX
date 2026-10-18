@@ -1,0 +1,16 @@
+#from io #import stdp
+
+struct { int id; } R;
+hook fn __free__(R ptr r) -> void { stdp.println(f"free {r.id}"); }
+
+fn consume(R r) -> void { stdp.println(f"consume {r.id}"); }
+
+fn main() -> int {
+    var R r = R{ id: 1 };
+    var int i = 0;
+    while (i < 3) {
+        consume(move r);     // segunda vuelta: r ya esta movida
+        i++;
+    }
+    return 0;
+}

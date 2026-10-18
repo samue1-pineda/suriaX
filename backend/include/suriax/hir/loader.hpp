@@ -47,9 +47,24 @@ namespace pb = ::suriax::hir::v0;
 //
 // Tiene que moverse a la vez que 'runtime/interpreter/loader.py' y
 // 'web/src/hir/decode.ts' — son los tres lectores vivos del contrato.
-inline constexpr std::uint32_t kSupportedSchemaVersions[] = {2};
+//
+// El 1 (tipos inline, sin pool) es el ROLLBACK del esquema versionado: se
+// acepta y 'load_module' lo NORMALIZA a la forma del 2 antes de devolverlo
+// (ver 'normalize_schema_v1'), asi que nada de lo que viene despues lo ve.
+inline constexpr std::uint32_t kSupportedSchemaVersions[] = {1, 2};
 
 bool schema_supported(std::uint32_t version);
+
+// Lleva EN SITIO un Module del esquema 1 a la forma de hoy: construye el pool
+// ('Module.types', entrada 0 = sin tipo) desde los tipos inline y pone cada
+// indice en su sitio ('type_id' y hermanos), quitando los inline. Mismo
+// resultado y mismo orden de pool que 'V0/src/HIR/schema_v1.normalize_v1'.
+// 'schema_version' se conserva en 1 (dice que se leyo).
+//
+// Devuelve false, con el porque en 'error', si el archivo mezcla los dos
+// esquemas (un v1 con pool o con algun indice): eso es un .phir mal formado,
+// no "casi un v2". Implementado en backend/src/schema_v1.cpp.
+bool normalize_schema_v1(pb::Module& module, std::string& error);
 
 // Resultado de una carga. 'ok' falso trae el porque en 'error', ya redactado
 // para un humano: que fallo, donde y que hacer.
@@ -185,5 +200,42 @@ LoadStatus load_module(const std::string& path, std::unique_ptr<pb::Module>& out
 // resuelve RELATIVO al directorio del archivo que lo referencia — misma
 // regla que 'loader.load_image', porque las unidades viajan juntas.
 LoadStatus load_image(const std::string& main_path, Image& out);
+
+// -------------------------------------------------------------------------- //
+// funciones como valores ('fn(A) -> R'): solo las ejecuta el interprete
+// -------------------------------------------------------------------------- //
+
+// El 'TypeKind' de un tipo funcion: 'args' son los parametros e 'inner' el
+// retorno (ver hir.proto).
+//
+// Se nombra por su NUMERO a proposito: en hir.proto se llama
+// 'FUNCTION_TYPE' (no 'FUNCTION', que ya es de 'SymbolKind' en el ambito del
+// paquete), y el numero es el contrato que viaja por el cable; el nombre,
+// no.
+inline constexpr int kFunctionTypeKind = 13;
+
+// El codigo con el que la VM rechaza un programa que usa funciones como
+// valores. Estable: lo buscan las pruebas y la documentacion de errores.
+inline constexpr char kFunctionValuesCode[] = "VM001";
+
+// ¿'type' es un tipo funcion?
+inline bool is_function_type(const pb::Type& type) {
+    return static_cast<int>(type.kind()) == kFunctionTypeKind;
+}
+
+// El primer tipo funcion dentro de 'type' (el mismo, su 'inner' o sus
+// 'args', a cualquier profundidad: '(fn(int) -> int)?', 'Caja<fn() -> int>'),
+// o nullptr si no hay ninguno.
+const pb::Type* find_function_type(const pb::Type& type);
+
+// El mensaje de 'VM001' (sin la posicion, que pone quien lo reporta): que
+// fuente usa un valor funcion, de que tipo, y como ejecutarlo.
+//
+// Lo emite el lowering a MIR al bajar una funcion que lo usa —no la carga:
+// las VISTAS ('--summary', '--pretty', '--verify') tienen que seguir
+// leyendo el '.phir', byte-identicas a las de Python, y un programa que
+// importa una libreria con una funcion asi pero no la usa tiene que seguir
+// corriendo—.
+std::string function_values_message(const std::string& source, const pb::Type& found);
 
 }  // namespace suriax::hir

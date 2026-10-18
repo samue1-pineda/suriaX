@@ -120,6 +120,9 @@ def _suriax_release(block: Any) -> None:
             f"(recibió {block!r})")
     for cell in block.cells:
         cell.free()
+        # quien la lea despues por un prestamo viejo sabra que fue el BLOQUE
+        # el que se solto (el contenedor crecio o murio), no un 'free' suyo
+        cell.released = True
 
 
 # --------------------------------------------------------------------------- #
@@ -387,6 +390,97 @@ def _utf8_de_bytes(datos: Any, n: int) -> str:
         raise ConversionError("los bytes no son UTF-8 valido") from None
 
 
+# --- lib/text: mayúsculas y clases de caracteres (Unicode) ------------------ #
+# Los métodos de 'str' de Python, que siguen la base de datos de Unicode SIN
+# idioma (nada de configuración regional: el mismo resultado en cualquier
+# máquina). Las clases reciben un 'char', que aquí es un 'str' de largo 1.
+#
+# 'is_digit' es 'isdecimal' (categoría Nd) y no 'isdigit': este último
+# acepta '²' o '①', que no forman un número en base diez. 'is_alnum' es
+# 'is_alpha or is_digit' con ESAS definiciones, y no 'isalnum', que además
+# acepta '½' o '²' (isnumeric): así las tres clases cuadran entre sí.
+
+def _es_alfanumerico(c: str) -> bool:
+    return c.isalpha() or c.isdecimal()
+
+
+# --- lib/text: partir, recortar, contar ------------------------------------- #
+# Lo que escrito en suriaX daría una vuelta del intérprete por carácter o por
+# parte (ver la cabecera de lib/text/main.libsrx). Lo que devuelve VARIAS
+# partes se pide en dos tiempos, como 'to_bytes': '__cuenta_*__' dice
+# cuántas son y la otra las escribe en un bloque de ese tamaño, que la
+# librería entrega como 'Vector' (el host no fabrica structs de la
+# librería). Las dos calculan lo mismo, así que siempre coinciden.
+#
+# El separador vacío lo rechaza la librería ('ValorInvalido') antes de
+# llegar aquí; si llegara, se responde sin cortar en vez de dejar escapar el
+# 'ValueError' de Python, que sería un fallo del intérprete.
+
+def _partes(s: str, separador: str) -> List[str]:
+    return s.split(separador) if separador else [s]
+
+
+def _palabras_de(s: str) -> List[str]:
+    """``str.split()`` sin argumentos: los trozos entre espacios en blanco
+    (``str.isspace``, el mismo criterio que ``is_space`` y ``trim``)."""
+    return s.split()
+
+
+def _lineas_de(s: str) -> List[str]:
+    """Corta en ``"\\n"`` y quita UN ``"\\r"`` de delante (``"\\r\\n"``),
+    como ``_leer_linea``. Un ``"\\r"`` suelto no corta, y lo que sigue al
+    último ``"\\n"`` es una línea solo si no está vacío.
+
+    No es ``str.splitlines``: ese también corta en ``\\f``, ``\\v``,
+    ``\\x1c``-``\\x1e``, ``\\x85``, U+2028 y U+2029, que un editor no cuenta
+    como otra línea, y el número de línea saldría distinto del que ve el
+    usuario."""
+    partes = s.split("\n")
+    ultima = partes.pop()
+    lineas = [p[:-1] if p.endswith("\r") else p for p in partes]
+    if ultima:
+        lineas.append(ultima)
+    return lineas
+
+
+def _escribe_partes(partes: List[str], destino: Any, n: Any) -> None:
+    if not isinstance(destino, Block) or len(partes) != n or n > len(destino):
+        raise IndexOutOfRangeError(f"{n} partes no caben en el bloque")
+    for i, parte in enumerate(partes):
+        destino.cells[i].write(parte)
+
+
+def _apariciones(s: str, parte: str) -> int:
+    # 'str.count' cuenta sin solaparse, de izquierda a derecha; con una parte
+    # vacía respondería len(s) + 1 (la librería no la deja llegar).
+    return s.count(parte) if parte else 0
+
+
+TEXTO: Dict[str, Callable[..., Any]] = {
+    "__cuenta_partes__": lambda s, sep: len(_partes(s, sep)),
+    "__partir__": lambda s, sep, destino, n: _escribe_partes(_partes(s, sep), destino, n),
+    "__cuenta_palabras__": lambda s: len(_palabras_de(s)),
+    "__palabras__": lambda s, destino, n: _escribe_partes(_palabras_de(s), destino, n),
+    "__cuenta_lineas__": lambda s: len(_lineas_de(s)),
+    "__lineas__": lambda s, destino, n: _escribe_partes(_lineas_de(s), destino, n),
+    # 'strip' sin argumentos quita lo que 'isspace' da por espacio
+    "__recorta__": lambda s: s.strip(),
+    "__recorta_inicio__": lambda s: s.lstrip(),
+    "__recorta_final__": lambda s: s.rstrip(),
+    "__apariciones__": _apariciones,
+    "__buscar_ultimo__": lambda s, parte: s.rfind(parte),
+    "__minusculas__": lambda s: s.lower(),
+    "__mayusculas__": lambda s: s.upper(),
+    "__es_digito__": lambda c: c.isdecimal(),
+    "__es_letra__": lambda c: c.isalpha(),
+    "__es_alfanumerico__": _es_alfanumerico,
+    # el mismo criterio que 'str.strip()' y 'str.split()' sin argumentos
+    "__es_espacio__": lambda c: c.isspace(),
+    "__es_mayuscula__": lambda c: c.isupper(),
+    "__es_minuscula__": lambda c: c.islower(),
+}
+
+
 def _escribir_archivo(ruta: Any, texto: Any) -> None:
     ruta = str(ruta)
     try:
@@ -398,6 +492,19 @@ def _escribir_archivo(ruta: Any, texto: Any) -> None:
 
 def _existe(ruta: Any) -> bool:
     return os.path.exists(str(ruta))
+
+
+def _crear_carpeta(ruta: Any) -> None:
+    """``mkdir -p``: crea la carpeta y las que le falten; si ya existe, nada.
+    Un archivo con ese nombre, o una ruta que no se puede crear, es
+    ``ErrorDeArchivo`` (el mismo mensaje que la VM)."""
+    ruta = str(ruta)
+    try:
+        os.makedirs(ruta, exist_ok=True)
+    except OSError:
+        raise FileAccessError(f"no se pudo crear la carpeta '{ruta}'") from None
+    if not os.path.isdir(ruta):
+        raise FileAccessError(f"no se pudo crear la carpeta '{ruta}'")
 
 
 def _listado(ruta: str) -> List[str]:
@@ -442,8 +549,9 @@ def _argumento(i: Any) -> str:
 
 def _salir(codigo: Any) -> None:
     """Termina el programa AHORA, sin desenrollar: no corren los '__free__'
-    pendientes (como 'std::exit' en C++ u 'os._exit' en Python). Lo que ya se
-    escribió se vuelca antes de salir."""
+    pendientes, ni los de los locales ni los de las globales (como
+    'std::_Exit' en C++ u 'os._exit' en Python; 'std::exit' sí destruiría
+    los estáticos). Lo que ya se escribió se vuelca antes de salir."""
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(int(codigo))
@@ -451,6 +559,185 @@ def _salir(codigo: Any) -> None:
 
 def _escribir_error(texto: Any) -> None:
     sys.stderr.write(str(texto))
+
+
+# --- lib/sistema/archivos: borrar, renombrar, fecha de modificación -------- #
+
+def _borrar(ruta: Any) -> None:
+    """Un archivo, o una carpeta VACÍA. Una carpeta con cosas dentro no se
+    borra: vaciarla es una decisión del programa, no un efecto secundario.
+    Lo que no existe tampoco: borrar algo que no estaba suele ser un error
+    de ruta, y decirlo cuesta menos que buscarlo después."""
+    ruta = str(ruta)
+    if not os.path.lexists(ruta):
+        raise FileAccessError(f"no existe '{ruta}'")
+    try:
+        if os.path.isdir(ruta) and not os.path.islink(ruta):
+            os.rmdir(ruta)
+        else:
+            os.remove(ruta)
+    except OSError:
+        motivo = ("la carpeta no está vacía"
+                  if os.path.isdir(ruta) and os.listdir(ruta) else "no se pudo")
+        raise FileAccessError(f"no se pudo borrar '{ruta}': {motivo}") from None
+
+
+def _renombrar(origen: Any, destino: Any) -> None:
+    """Mueve ``origen`` a ``destino`` de UNA vez: quien mire ve el archivo
+    viejo o el nuevo, nunca uno a medias. Si ``destino`` existe (y es un
+    archivo) se reemplaza. Es la forma de escribir un archivo sin que un
+    fallo a medio camino lo deje roto: escribir un temporal y renombrarlo."""
+    origen, destino = str(origen), str(destino)
+    if not os.path.lexists(origen):
+        raise FileAccessError(f"no existe '{origen}'")
+    try:
+        os.replace(origen, destino)
+    except OSError:
+        raise FileAccessError(
+            f"no se pudo renombrar '{origen}' a '{destino}'") from None
+
+
+def _modificado(ruta: Any) -> int:
+    """Cuándo cambió por última vez, en MILISEGUNDOS desde 1970 (UTC): la
+    misma unidad que ``tiempo.ahora()``, para poder compararlos."""
+    ruta = str(ruta)
+    try:
+        return os.stat(ruta).st_mtime_ns // 1_000_000
+    except FileNotFoundError:
+        raise FileAccessError(f"no existe '{ruta}'") from None
+    except OSError:
+        raise FileAccessError(f"no se pudo leer la fecha de '{ruta}'") from None
+
+
+# --- lib/sistema/entrada: la entrada estándar ------------------------------- #
+# Se lee como BYTES y se decodifica como UTF-8 aquí, no con la codificación
+# de la consola: la misma regla que un archivo, en cualquier máquina. Un fin
+# de línea '\r\n' o '\n' no forma parte de la línea.
+#
+# El flujo se puede CAMBIAR (``fijar_entrada``): bajo el depurador la entrada
+# estándar del proceso es el canal del protocolo, y si el programa la leyera
+# se comería los mensajes del editor.
+
+_ENTRADA: Dict[str, Any] = {"flujo": None, "pendiente": None, "fin": False}
+
+
+def fijar_entrada(flujo: Any) -> None:
+    """Lo que el programa leerá como entrada estándar: un flujo binario
+    (``io.BytesIO(b"")`` = una entrada vacía). ``None`` = la del proceso."""
+    _ENTRADA.update(flujo=flujo, pendiente=None, fin=False)
+
+
+def _flujo_de_entrada() -> Any:
+    flujo = _ENTRADA["flujo"]
+    return flujo if flujo is not None else sys.stdin.buffer
+
+
+def _decodifica(datos: bytes) -> str:
+    try:
+        return datos.decode("utf-8")
+    except UnicodeDecodeError:
+        raise FileAccessError("la entrada estándar no es texto UTF-8") from None
+
+
+def _asoma_linea() -> None:
+    """Deja la siguiente línea en ``pendiente`` (o marca el fin): saber si
+    queda algo exige intentar leerlo."""
+    if _ENTRADA["pendiente"] is not None or _ENTRADA["fin"]:
+        return
+    crudo = _flujo_de_entrada().readline()
+    if not crudo:
+        _ENTRADA["fin"] = True
+        return
+    _ENTRADA["pendiente"] = crudo
+
+
+def _entrada_terminada() -> bool:
+    _asoma_linea()
+    return _ENTRADA["pendiente"] is None
+
+
+def _leer_linea() -> str:
+    _asoma_linea()
+    crudo = _ENTRADA["pendiente"]
+    if crudo is None:
+        raise FileAccessError(
+            "la entrada estándar se terminó: pregunta antes con 'terminada()'")
+    _ENTRADA["pendiente"] = None
+    if crudo.endswith(b"\n"):
+        crudo = crudo[:-1]
+        if crudo.endswith(b"\r"):
+            crudo = crudo[:-1]
+    return _decodifica(crudo)
+
+
+def _leer_entrada() -> str:
+    """Todo lo que queda, tal cual (los fines de línea incluidos)."""
+    previo = _ENTRADA["pendiente"] or b""
+    _ENTRADA["pendiente"] = None
+    resto = b"" if _ENTRADA["fin"] else _flujo_de_entrada().read()
+    _ENTRADA["fin"] = True
+    return _decodifica(previo + resto)
+
+
+# --- lib/sistema/comandos: lanzar otro programa ----------------------------- #
+# Sin intérprete de órdenes de por medio: el primer argumento es el programa
+# y los demás le llegan tal cual, sin comillas ni expansiones. Así un nombre
+# de archivo con espacios o con ';' no se convierte en otra orden.
+
+_EJECUCION: Dict[str, str] = {"salida": "", "errores": ""}
+
+
+def _ejecutar(argumentos: Any, n: Any, entrada: Any) -> int:
+    import subprocess
+
+    if not isinstance(argumentos, Block) or not 0 < n <= len(argumentos):
+        raise FileAccessError("no hay programa que ejecutar")
+    orden = [str(c.value) for c in argumentos.cells[:n]]
+    try:
+        hecho = subprocess.run(orden, input=str(entrada).encode("utf-8"),
+                               capture_output=True)
+    except FileNotFoundError:
+        raise FileAccessError(f"no existe el programa '{orden[0]}'") from None
+    except OSError:
+        raise FileAccessError(f"no se pudo ejecutar '{orden[0]}'") from None
+    # lo que escribió el otro programa no tiene por qué ser UTF-8: lo que no
+    # lo sea llega como U+FFFD en vez de impedir leer el resto.
+    _EJECUCION["salida"] = hecho.stdout.decode("utf-8", errors="replace")
+    _EJECUCION["errores"] = hecho.stderr.decode("utf-8", errors="replace")
+    return hecho.returncode
+
+
+# --- lib/sistema/tiempo ----------------------------------------------------- #
+
+def _dormir_ms(ms: Any) -> None:
+    import time
+    time.sleep(max(int(ms), 0) / 1000)
+
+
+def _ahora_ms() -> int:
+    import time
+    return time.time_ns() // 1_000_000
+
+
+def _reloj_ns() -> int:
+    import time
+    return time.monotonic_ns()
+
+
+SISTEMA: Dict[str, Callable[..., Any]] = {
+    "__borrar__": _borrar,
+    "__renombrar__": _renombrar,
+    "__modificado__": _modificado,
+    "__entrada_terminada__": _entrada_terminada,
+    "__leer_linea__": _leer_linea,
+    "__leer_entrada__": _leer_entrada,
+    "__ejecutar__": _ejecutar,
+    "__salida_ejecutada__": lambda: _EJECUCION["salida"],
+    "__errores_ejecutados__": lambda: _EJECUCION["errores"],
+    "__ahora_ms__": _ahora_ms,
+    "__reloj_ns__": _reloj_ns,
+    "__dormir_ms__": _dormir_ms,
+}
 
 
 # --- lib/sistema/rutas: 'os.path' tal cual --------------------------------- #
@@ -495,6 +782,7 @@ REGISTRY: Dict[str, Callable[..., Any]] = {
     "__leer_archivo__": _leer_archivo,
     "__escribir_archivo__": _escribir_archivo,
     "__existe__": _existe,
+    "__crear_carpeta__": _crear_carpeta,
     "__entradas__": _entradas,
     "__entrada__": _entrada,
     "__argumentos__": _argumentos,
@@ -517,8 +805,12 @@ REGISTRY: Dict[str, Callable[..., Any]] = {
     "__utf8_de_bytes__": _utf8_de_bytes,
     "__leer_bytes__": _leer_bytes,
     "__escribir_bytes__": _escribir_bytes,
+    # lib/text: mayúsculas y clases de caracteres
+    **TEXTO,
     # lib/sistema/rutas
     **RUTAS,
+    # lib/sistema: entrada, archivos (borrar, renombrar, fecha), comandos, tiempo
+    **SISTEMA,
 }
 
 
@@ -532,4 +824,4 @@ def lookup(name: str) -> Callable[..., Any] | None:
 
 
 __all__ = ["REGISTRY", "CASTS", "ANCHOS", "register", "lookup", "lookup_cast",
-           "fijar_argumentos"]
+           "fijar_argumentos", "fijar_entrada"]

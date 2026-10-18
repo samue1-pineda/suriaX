@@ -1,0 +1,8 @@
+# Artefactos del diferencial (dev/diff): se regeneran con run_diff.py
+work/
+dumps/
+log/
+*.phir
+*.phir.*
+__pycache__/
+# los resultados (RESULTS.md, results.json) SÍ se versionan

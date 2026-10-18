@@ -1,0 +1,17 @@
+#from io #import stdp
+
+fn main() -> int {
+    stdp.println("hola");
+    return 0;
+}
+
+test "con punteros donde el target no los admite" {
+    var int y = 2;
+    expect (1 == 1) {
+        var int ptr q = &y;
+    };
+} finally {
+    var int x = 1;
+    var int ptr p = &x;
+    stdp.println("fin");
+}

@@ -106,6 +106,38 @@ class Symbol:
     # lo destruiria dos veces. Lo calcula scope_resolver al cerrar el modulo
     # y viaja con el Symbol a quien importe la libreria.
     copias: Tuple[Tuple[Type, str], ...] = ()
+    # FUNCION GENERICA: los tipos (que nombran sus parametros) que su cuerpo
+    # ORDENA ('a < b'), con donde. Instanciarla con un tipo que no se ordena
+    # (ni primitivo ordenable ni '__cmp__') es SEM039, en la llamada.
+    ordenes: Tuple[Tuple[Type, str], ...] = ()
+    # FUNCION GENERICA: los tipos de elemento (un parametro de tipo) cuyo
+    # elemento PRESTA su cuerpo con '&b[i]' ('Vector.at'). Un escalar no se
+    # presta (ningun motor tiene punteros al interior de un bloque): con un
+    # tipo concreto escalar es SEM013, en la llamada.
+    elem_borrows: Tuple[Tuple[Type, str], ...] = ()
+    # FUNCION GENERICA: los tipos (un parametro de tipo) a los que su cuerpo
+    # pide 'hash(x)'. Con un tipo sin hash (una funcion, un 'float', un
+    # struct sin '__hash__') es el mismo error que fuera de un generico.
+    hashes: Tuple[Tuple[Type, str], ...] = ()
+    # FUNCION GENERICA: los tipos (un parametro de tipo) cuyo tamano pide su
+    # cuerpo con 'sizeof'. Con un tipo sin '__sizeof__' (un primitivo, una
+    # funcion) es el mismo error que fuera de un generico.
+    sizes: Tuple[Tuple[Type, str], ...] = ()
+    # FUNCTION: se declaro SIN cuerpo (un prototipo: el cuerpo lo pone el
+    # host o un '#extern'). No es un valor: no hay una funcion del programa
+    # que entregar, y cada motor la implementa a su manera (un intrinseco,
+    # una llamada a C++). Viaja con el Symbol a quien importe la libreria.
+    prototype: bool = False
+    # GENERICO (funcion, metodo, struct, enum, type): las COTAS ya resueltas
+    # de sus parametros de tipo, '<T: Ord>' -> (('T', (BoundRef Ord,)),). En un
+    # metodo van juntas las de su '@impl Tipo<T: ...>' y las propias. Cada
+    # instancia tiene que cumplirlas (se comprueba en la llamada o en la
+    # anotacion), y viajan con el Symbol a quien importe la libreria.
+    type_bounds: Tuple[Tuple[str, Tuple["object", ...]], ...] = ()
+    # STRUCT: los traits que declara cumplir con '@impl(Contrato)' (su
+    # BoundRef). La conformidad es EXPLICITA: es lo unico que hace que el
+    # tipo cumpla una cota de trait.
+    traits: Tuple["object", ...] = ()
 
 
 @dataclass(slots=True)

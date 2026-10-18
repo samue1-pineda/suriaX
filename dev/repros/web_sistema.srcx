@@ -1,0 +1,6 @@
+#from io #import stdp
+#import sistema
+fn main() -> int {
+    stdp.println(f"{sistema.proceso.argumentos()}");
+    return 0;
+}

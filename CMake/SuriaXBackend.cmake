@@ -48,6 +48,7 @@ function(suriax_add_backend)
 
     add_library(suriax_hir STATIC
         "${ARG_ROOT}/src/loader.cpp"
+        "${ARG_ROOT}/src/schema_v1.cpp"
         "${ARG_ROOT}/src/view.cpp"
         "${ARG_ROOT}/src/resolve.cpp"
         "${ARG_ROOT}/src/mir.cpp"

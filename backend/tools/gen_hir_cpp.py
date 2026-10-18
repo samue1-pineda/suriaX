@@ -262,6 +262,16 @@ def generar() -> str:
                 if es_mensaje(f.type):
                     w(f"    {t}* add_{fname}();")
                     d(f"inline {t}* {c}::add_{fname}() {{ return &{m}.emplace_back(); }}")
+                    # acceso MUTABLE a un elemento ('mutable_x(i)' de protoc):
+                    # lo necesita quien reescribe el arbol en sitio (la
+                    # normalizacion del esquema 1, backend/src/schema_v1.cpp)
+                    w(f"    {t}* mutable_{a}(int i);")
+                    d(f"inline {t}* {c}::mutable_{a}(int i) {{ return &{m}.at(static_cast<std::size_t>(i)); }}")
+                else:
+                    w(f"    void add_{fname}({t} valor);")
+                    d(f"inline void {c}::add_{fname}({t} valor) {{ {m}.push_back(std::move(valor)); }}")
+                w(f"    void clear_{fname}();")
+                d(f"inline void {c}::clear_{fname}() {{ {m}.clear(); }}")
                 miembros.append(f"    std::vector<{t}> {m};")
                 casos_de_lectura.append((f.number, _leer_repetido(f, t, m, es_mensaje(f.type),
                                                                   es_enum(f.type))))
@@ -282,6 +292,8 @@ def generar() -> str:
                     d(f"inline bool {c}::has_{a}() const {{ return {m}.hay(); }}")
                     d(f"inline const {t}& {c}::{a}() const {{ return {m}.hay() ? {m}.valor() : {t}::default_instance(); }}")
                     d(f"inline {t}* {c}::mutable_{a}() {{ return &{m}.crea(); }}")
+                    w(f"    void clear_{a}();")
+                    d(f"inline void {c}::clear_{a}() {{ {m}.borra(); }}")
                 miembros.append(f"    detalle::Caja<{t}> {m};")
                 marca = f"            {caso}_caso_ = k{_camel(fname)};\n" if caso else ""
                 casos_de_lectura.append((f.number, f"""        case {f.number}: {{
@@ -531,6 +543,7 @@ class Caja {
         if (!p_) p_ = std::make_unique<T>();
         return *p_;
     }
+    void borra() { p_.reset(); }
 
  private:
     std::unique_ptr<T> p_;

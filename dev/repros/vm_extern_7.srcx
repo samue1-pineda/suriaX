@@ -1,0 +1,11 @@
+#extern cpp{
+extern "C" long long suma7(long long a, long long b, long long c, long long d, long long e, long long f, long long g) {
+    return a + b + c + d + e + f + g;
+}
+}
+#from io #import stdp
+fn suma7(int a, int b, int c, int d, int e, int f, int g) -> int;
+fn main() -> int {
+    stdp.println(f"{suma7(1, 2, 3, 4, 5, 6, 7)}");
+    return 0;
+}

@@ -1,0 +1,12 @@
+#from d_types #import dt_variables as dt
+struct { int v; } P;
+fn main() -> int {
+    var int a = min(dt.int8);
+    var int b = max(P);
+    var int c = min(1, 2);
+    var int d = min(nada);
+    var dt.int8 e = 300;
+    var dt.int8 f = 5;
+    var str s = sizeof(P);
+    return a;
+}

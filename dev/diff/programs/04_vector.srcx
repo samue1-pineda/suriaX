@@ -1,0 +1,22 @@
+// 04 — Vector: llenar, recorrer y sumar (librería 'array.vector').
+#from io #import stdp
+#import array.vector as vec
+
+fn main() -> int {
+    var vec.Vector<int> v = vec.dynamic<int>(4);
+    var int i = 1;
+    while (i <= 10) {
+        v.push(i * i);
+        i = i + 1;
+    }
+    var int suma = 0;
+    var int j = 0;
+    while (j < v.len()) {
+        suma = suma + v.get(j);
+        j = j + 1;
+    }
+    stdp.println(f"len = {v.len()}");
+    stdp.println(f"primero = {v.get(0)}, ultimo = {v.get(v.len() - 1)}");
+    stdp.println(f"suma de cuadrados 1..10 = {suma}");
+    return 0;
+}

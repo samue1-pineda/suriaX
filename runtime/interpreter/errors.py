@@ -35,17 +35,42 @@ class SuriaXRuntimeError(Exception):
     severity = "critical"
 
     def __init__(self, message: str, *, ln: int = 0, col: int = 0,
-                 fn: Optional[str] = None):
+                 fn: Optional[str] = None, file: Optional[str] = None):
         self.message = message
         self.ln = ln
         self.col = col
         self.fn = fn
+        #: archivo de la posición cuando NO es el programa principal (una
+        #: librería). Lo pone el evaluador con :meth:`set_file`.
+        self.file = file
+        #: la unidad donde ocurrió (``loader.Unit``), una vez situado; ``None``
+        #: mientras no se sepa. Lo usa el evaluador para no situarlo dos veces.
+        self.unit = None
         super().__init__(self._texto())
 
     def _texto(self) -> str:
-        where = f" ({self.fn}:" if self.fn else " ("
+        # Con archivo, la posición sale como en los diagnósticos de una
+        # librería al compilar: '(ruta:linea:col)'. Sin él (el programa
+        # principal) sigue siendo '(linea:col)': el usuario sabe qué archivo
+        # ejecutó, y lo que confundía era una línea de OTRO archivo.
+        if self.fn:
+            where = f" ({self.fn}:"
+        elif self.file:
+            where = f" ({self.file}:"
+        else:
+            where = " ("
         loc = f"{where}{self.ln}:{self.col})" if self.ln else ""
         return f"{self.code}: {self.message}{loc}"
+
+    def set_file(self, unit, file: Optional[str]) -> "SuriaXRuntimeError":
+        """Dice en qué unidad (y, si no es el programa, en qué archivo) está la
+        posición del error, y rehace el texto. Solo la primera vez: quien
+        sitúa primero es la sentencia más interna, la que falló."""
+        if self.unit is None:
+            self.unit = unit
+            self.file = file
+            self.args = (self._texto(),)
+        return self
 
     def ubicar(self, ln: int, col: int) -> "SuriaXRuntimeError":
         """Pone la posición si el error no traía una y devuelve el mismo error.
@@ -118,11 +143,11 @@ class StepLimitError(SuriaXRuntimeError):
 
 
 class MemoryLimitError(SuriaXRuntimeError):
-    """El programa pasó la memoria máxima de la VM (``suriax-hir
-    --memoria-max``). Lo emite SOLO la VM, que contabiliza en bytes lo que el
-    programa crea; el intérprete no lleva esa cuenta (sus valores son objetos
-    de Python, cuyo tamaño no dice nada del programa). Vive aquí porque este
-    es el catálogo de los códigos RT."""
+    """El programa pasó la memoria máxima. En la VM, la de ``suriax-hir
+    --memoria-max``, que contabiliza en bytes lo que el programa crea. El
+    intérprete no lleva esa cuenta (sus valores son objetos de Python, cuyo
+    tamaño no dice nada del programa): lo emite solo cuando una reserva no
+    cabe en la memoria de la máquina."""
     code = "RT023"
 
 

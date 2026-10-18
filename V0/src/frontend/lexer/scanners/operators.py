@@ -96,10 +96,13 @@ def scan(lx) -> Token:
         lx.jump_to(pos + 1)
         return Token(single, ch, ch, lx.ln, start_col)
 
-    # '!' sin '=' no es un operador valido por si solo
+    # '!' sin '=' no es un operador valido por si solo: es la negacion de
+    # otros lenguajes, y el error dice como se escribe aqui (H06)
     lx.jump_to(pos + 1)
+    hint = ("; la negacion logica en suriaX es 'not' ('not b'), y '!=' "
+            "compara (distinto)" if ch == "!" else "")
     raise lex_error.UnexpectedCharacterError(
-        f"caracter no reconocido: {ch!r}",
+        f"caracter no reconocido: {ch!r}{hint}",
         line=lx.ln,
         column=start_col,
         file=lx.file,

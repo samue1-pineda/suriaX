@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..errors import IndexOutOfRangeError
+from ..errors import IndexOutOfRangeError, MemoryLimitError
 from .pointer import Cell
 
 
@@ -28,8 +28,18 @@ class Block:
     __slots__ = ("cells",)
 
     def __init__(self, size: int) -> None:
+        # Primero la lista vacía de ese tamaño: es UNA petición de memoria, y
+        # si no cabe falla en el acto. Sin ella, una reserva imposible creaba
+        # las celdas una a una durante minutos antes de quedarse sin memoria.
+        try:
+            celdas = [None] * size
+        except (MemoryError, OverflowError):
+            raise MemoryLimitError(
+                f"no hay memoria para reservar {size} celdas") from None
         # una Cell por elemento: el índice hace de nombre para trazas/errores.
-        self.cells = [Cell(None, name=f"[{i}]") for i in range(size)]
+        for i in range(size):
+            celdas[i] = Cell(None, name=f"[{i}]")
+        self.cells = celdas
 
     def __len__(self) -> int:
         return len(self.cells)

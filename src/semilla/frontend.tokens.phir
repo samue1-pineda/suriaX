@@ -1,0 +1,1800 @@
+lib/frontend/tokens.libsrxƒn
+ï#
+TTypeã#
+TType *	tokens.TTypeR,
+ADDRESS!
+ADDRESSD *	tokens.TTypeR3
+
+AMP_ASSIGN%
+
+AMP_ASSIGNÑ *	tokens.TTypeR$
+AND
+AND_ *	tokens.TTypeR(
+ARROW
+ARROW[ *	tokens.TTypeR*
+ASSIGN 
+ASSIGNP *	tokens.TTypeR&
+BOOL
+BOOL *	tokens.TTypeR(
+BREAK
+BREAK< *	tokens.TTypeR'
+BYTE
+BYTEâ *	tokens.TTypeR)
+CARET 
+CARETÄ *	tokens.TTypeR7
+CARET_ASSIGN'
+CARET_ASSIGNÜ *	tokens.TTypeR&
+CASE
+CASE; *	tokens.TTypeR&
+CAST
+CASTF *	tokens.TTypeR(
+CATCH
+CATCHK *	tokens.TTypeR&
+CHAR
+CHAR! *	tokens.TTypeR.
+CHAR_LIT"
+CHAR_LIT *	tokens.TTypeR(
+COLON
+COLONr *	tokens.TTypeR(
+COMMA
+COMMAp *	tokens.TTypeR(
+CONST
+CONST% *	tokens.TTypeR.
+CONTINUE"
+CONTINUE= *	tokens.TTypeR0
+	DECORATOR#
+	DECORATORu *	tokens.TTypeR0
+	DECREMENT#
+	DECREMENTf *	tokens.TTypeR0
+	DIRECTIVE#
+	DIRECTIVEv *	tokens.TTypeR*
+DIVIDE 
+DIVIDET *	tokens.TTypeR$
+DOT
+DOTo *	tokens.TTypeR*
+DUNDER 
+DUNDER+ *	tokens.TTypeR0
+	DUNDER_KW#
+	DUNDER_KW3 *	tokens.TTypeR&
+ELSE
+ELSE7 *	tokens.TTypeR&
+ENUM
+ENUM) *	tokens.TTypeR$
+EOF
+EOFy *	tokens.TTypeR(
+EQUAL
+EQUALU *	tokens.TTypeR(
+ERROR
+ERRORx *	tokens.TTypeR0
+	ERRORTYPE#
+	ERRORTYPEI *	tokens.TTypeR(
+FALSE
+FALSE *	tokens.TTypeR,
+FINALLY!
+FINALLYM *	tokens.TTypeR(
+FLOAT
+FLOAT  *	tokens.TTypeR0
+	FLOAT_LIT#
+	FLOAT_LIT *	tokens.TTypeR&
+FREE
+FREEB *	tokens.TTypeR.
+FUNCTION"
+FUNCTION' *	tokens.TTypeR,
+GREATER!
+GREATERY *	tokens.TTypeR8
+GREATER_EQUAL'
+GREATER_EQUALZ *	tokens.TTypeR&
+HOOK
+HOOK2 *	tokens.TTypeR2
+
+IDENTIFIER$
+
+IDENTIFIER *	tokens.TTypeR"
+IF
+IF6 *	tokens.TTypeR0
+	INCREMENT#
+	INCREMENTe *	tokens.TTypeR$
+INT
+INT *	tokens.TTypeR.
+INTERNAL"
+INTERNAL1 *	tokens.TTypeR,
+INT_LIT!
+INT_LIT *	tokens.TTypeR&
+LESS
+LESSW *	tokens.TTypeR2
+
+LESS_EQUAL$
+
+LESS_EQUALX *	tokens.TTypeR,
+L_BRACE!
+L_BRACEk *	tokens.TTypeR0
+	L_BRACKET#
+	L_BRACKETm *	tokens.TTypeR,
+L_PAREN!
+L_PARENi *	tokens.TTypeR(
+MATCH
+MATCH: *	tokens.TTypeR(
+MINUS
+MINUSR *	tokens.TTypeR6
+MINUS_ASSIGN&
+MINUS_ASSIGN^ *	tokens.TTypeR*
+MODULO 
+MODULO\ *	tokens.TTypeR&
+MOVE
+MOVEA *	tokens.TTypeR.
+MULTIPLY"
+MULTIPLYS *	tokens.TTypeR,
+MUTABLE!
+MUTABLE& *	tokens.TTypeR$
+NOT
+NOTa *	tokens.TTypeR0
+	NOT_EQUAL#
+	NOT_EQUALV *	tokens.TTypeR&
+NULL
+NULL *	tokens.TTypeR.
+NULLABLE"
+NULLABLEE *	tokens.TTypeR"
+OR
+OR` *	tokens.TTypeR:
+PERCENT_ASSIGN(
+PERCENT_ASSIGNd *	tokens.TTypeR&
+PIPE
+PIPE *	tokens.TTypeR5
+PIPE_ASSIGN&
+PIPE_ASSIGNÖ *	tokens.TTypeR&
+PLUS
+PLUSQ *	tokens.TTypeR4
+PLUS_ASSIGN%
+PLUS_ASSIGN] *	tokens.TTypeR,
+POINTER!
+POINTERC *	tokens.TTypeR,
+PRIVATE!
+PRIVATE0 *	tokens.TTypeR*
+PUBLIC 
+PUBLIC/ *	tokens.TTypeR0
+	RAW_BLOCK#
+	RAW_BLOCKw *	tokens.TTypeR*
+RETURN 
+RETURN9 *	tokens.TTypeR,
+R_BRACE!
+R_BRACEl *	tokens.TTypeR0
+	R_BRACKET#
+	R_BRACKETn *	tokens.TTypeR,
+R_PAREN!
+R_PARENj *	tokens.TTypeR0
+	SEMICOLON#
+	SEMICOLONq *	tokens.TTypeR3
+
+SHIFT_LEFT%
+
+SHIFT_LEFTÇ *	tokens.TTypeRA
+SHIFT_LEFT_ASSIGN,
+SHIFT_LEFT_ASSIGNá *	tokens.TTypeR5
+SHIFT_RIGHT&
+SHIFT_RIGHTÉ *	tokens.TTypeRC
+SHIFT_RIGHT_ASSIGN-
+SHIFT_RIGHT_ASSIGNà *	tokens.TTypeR*
+SIZEOF 
+SIZEOF* *	tokens.TTypeR6
+SLASH_ASSIGN&
+SLASH_ASSIGNc *	tokens.TTypeR4
+STAR_ASSIGN%
+STAR_ASSIGNb *	tokens.TTypeR$
+STR
+STR" *	tokens.TTypeR2
+
+STRING_LIT$
+
+STRING_LIT *	tokens.TTypeR*
+STRUCT 
+STRUCT( *	tokens.TTypeR&
+TEST
+TEST> *	tokens.TTypeR(
+THROW
+THROWL *	tokens.TTypeR)
+TILDE 
+TILDEÅ *	tokens.TTypeR&
+TRUE
+TRUE *	tokens.TTypeR$
+TRY
+TRYJ *	tokens.TTypeR&
+TYPE
+TYPE *	tokens.TTypeR$
+VAR
+VAR, *	tokens.TTypeR&
+VOID
+VOID *	tokens.TTypeR(
+WHILE
+WHILE8 *	tokens.TTypeR&
+WITH
+WITH| *	tokens.TType
+”
+Token…
+Tokenô *	tokens.TokenR
+col
+colù *0R!
+inicios
+iniciosû *0R
+lexema
+lexemaõ *0R
+linea
+lineaú *0R)
+tipo!
+tipoö *	tokens.TType0
+ú#
+tokens.TTypeã#
+TType *	tokens.TTypeR,
+ADDRESS!
+ADDRESSD *	tokens.TTypeR3
+
+AMP_ASSIGN%
+
+AMP_ASSIGNÑ *	tokens.TTypeR$
+AND
+AND_ *	tokens.TTypeR(
+ARROW
+ARROW[ *	tokens.TTypeR*
+ASSIGN 
+ASSIGNP *	tokens.TTypeR&
+BOOL
+BOOL *	tokens.TTypeR(
+BREAK
+BREAK< *	tokens.TTypeR'
+BYTE
+BYTEâ *	tokens.TTypeR)
+CARET 
+CARETÄ *	tokens.TTypeR7
+CARET_ASSIGN'
+CARET_ASSIGNÜ *	tokens.TTypeR&
+CASE
+CASE; *	tokens.TTypeR&
+CAST
+CASTF *	tokens.TTypeR(
+CATCH
+CATCHK *	tokens.TTypeR&
+CHAR
+CHAR! *	tokens.TTypeR.
+CHAR_LIT"
+CHAR_LIT *	tokens.TTypeR(
+COLON
+COLONr *	tokens.TTypeR(
+COMMA
+COMMAp *	tokens.TTypeR(
+CONST
+CONST% *	tokens.TTypeR.
+CONTINUE"
+CONTINUE= *	tokens.TTypeR0
+	DECORATOR#
+	DECORATORu *	tokens.TTypeR0
+	DECREMENT#
+	DECREMENTf *	tokens.TTypeR0
+	DIRECTIVE#
+	DIRECTIVEv *	tokens.TTypeR*
+DIVIDE 
+DIVIDET *	tokens.TTypeR$
+DOT
+DOTo *	tokens.TTypeR*
+DUNDER 
+DUNDER+ *	tokens.TTypeR0
+	DUNDER_KW#
+	DUNDER_KW3 *	tokens.TTypeR&
+ELSE
+ELSE7 *	tokens.TTypeR&
+ENUM
+ENUM) *	tokens.TTypeR$
+EOF
+EOFy *	tokens.TTypeR(
+EQUAL
+EQUALU *	tokens.TTypeR(
+ERROR
+ERRORx *	tokens.TTypeR0
+	ERRORTYPE#
+	ERRORTYPEI *	tokens.TTypeR(
+FALSE
+FALSE *	tokens.TTypeR,
+FINALLY!
+FINALLYM *	tokens.TTypeR(
+FLOAT
+FLOAT  *	tokens.TTypeR0
+	FLOAT_LIT#
+	FLOAT_LIT *	tokens.TTypeR&
+FREE
+FREEB *	tokens.TTypeR.
+FUNCTION"
+FUNCTION' *	tokens.TTypeR,
+GREATER!
+GREATERY *	tokens.TTypeR8
+GREATER_EQUAL'
+GREATER_EQUALZ *	tokens.TTypeR&
+HOOK
+HOOK2 *	tokens.TTypeR2
+
+IDENTIFIER$
+
+IDENTIFIER *	tokens.TTypeR"
+IF
+IF6 *	tokens.TTypeR0
+	INCREMENT#
+	INCREMENTe *	tokens.TTypeR$
+INT
+INT *	tokens.TTypeR.
+INTERNAL"
+INTERNAL1 *	tokens.TTypeR,
+INT_LIT!
+INT_LIT *	tokens.TTypeR&
+LESS
+LESSW *	tokens.TTypeR2
+
+LESS_EQUAL$
+
+LESS_EQUALX *	tokens.TTypeR,
+L_BRACE!
+L_BRACEk *	tokens.TTypeR0
+	L_BRACKET#
+	L_BRACKETm *	tokens.TTypeR,
+L_PAREN!
+L_PARENi *	tokens.TTypeR(
+MATCH
+MATCH: *	tokens.TTypeR(
+MINUS
+MINUSR *	tokens.TTypeR6
+MINUS_ASSIGN&
+MINUS_ASSIGN^ *	tokens.TTypeR*
+MODULO 
+MODULO\ *	tokens.TTypeR&
+MOVE
+MOVEA *	tokens.TTypeR.
+MULTIPLY"
+MULTIPLYS *	tokens.TTypeR,
+MUTABLE!
+MUTABLE& *	tokens.TTypeR$
+NOT
+NOTa *	tokens.TTypeR0
+	NOT_EQUAL#
+	NOT_EQUALV *	tokens.TTypeR&
+NULL
+NULL *	tokens.TTypeR.
+NULLABLE"
+NULLABLEE *	tokens.TTypeR"
+OR
+OR` *	tokens.TTypeR:
+PERCENT_ASSIGN(
+PERCENT_ASSIGNd *	tokens.TTypeR&
+PIPE
+PIPE *	tokens.TTypeR5
+PIPE_ASSIGN&
+PIPE_ASSIGNÖ *	tokens.TTypeR&
+PLUS
+PLUSQ *	tokens.TTypeR4
+PLUS_ASSIGN%
+PLUS_ASSIGN] *	tokens.TTypeR,
+POINTER!
+POINTERC *	tokens.TTypeR,
+PRIVATE!
+PRIVATE0 *	tokens.TTypeR*
+PUBLIC 
+PUBLIC/ *	tokens.TTypeR0
+	RAW_BLOCK#
+	RAW_BLOCKw *	tokens.TTypeR*
+RETURN 
+RETURN9 *	tokens.TTypeR,
+R_BRACE!
+R_BRACEl *	tokens.TTypeR0
+	R_BRACKET#
+	R_BRACKETn *	tokens.TTypeR,
+R_PAREN!
+R_PARENj *	tokens.TTypeR0
+	SEMICOLON#
+	SEMICOLONq *	tokens.TTypeR3
+
+SHIFT_LEFT%
+
+SHIFT_LEFTÇ *	tokens.TTypeRA
+SHIFT_LEFT_ASSIGN,
+SHIFT_LEFT_ASSIGNá *	tokens.TTypeR5
+SHIFT_RIGHT&
+SHIFT_RIGHTÉ *	tokens.TTypeRC
+SHIFT_RIGHT_ASSIGN-
+SHIFT_RIGHT_ASSIGNà *	tokens.TTypeR*
+SIZEOF 
+SIZEOF* *	tokens.TTypeR6
+SLASH_ASSIGN&
+SLASH_ASSIGNc *	tokens.TTypeR4
+STAR_ASSIGN%
+STAR_ASSIGNb *	tokens.TTypeR$
+STR
+STR" *	tokens.TTypeR2
+
+STRING_LIT$
+
+STRING_LIT *	tokens.TTypeR*
+STRUCT 
+STRUCT( *	tokens.TTypeR&
+TEST
+TEST> *	tokens.TTypeR(
+THROW
+THROWL *	tokens.TTypeR)
+TILDE 
+TILDEÅ *	tokens.TTypeR&
+TRUE
+TRUE *	tokens.TTypeR$
+TRY
+TRYJ *	tokens.TTypeR&
+TYPE
+TYPE *	tokens.TTypeR$
+VAR
+VAR, *	tokens.TTypeR&
+VOID
+VOID *	tokens.TTypeR(
+WHILE
+WHILE8 *	tokens.TTypeR&
+WITH
+WITH| *	tokens.TType
+⁄
+tokens.Token…
+Tokenô *	tokens.TokenR
+col
+colù *0R!
+inicios
+iniciosû *0R
+lexema
+lexemaõ *0R
+linea
+lineaú *0R)
+tipo!
+tipoö *	tokens.TType0,
+ADDRESS!
+ADDRESSD *	tokens.TType3
+
+AMP_ASSIGN%
+
+AMP_ASSIGNÑ *	tokens.TType$
+AND
+AND_ *	tokens.TType(
+ARROW
+ARROW[ *	tokens.TType*
+ASSIGN 
+ASSIGNP *	tokens.TType&
+BOOL
+BOOL *	tokens.TType(
+BREAK
+BREAK< *	tokens.TType'
+BYTE
+BYTEâ *	tokens.TType)
+CARET 
+CARETÄ *	tokens.TType7
+CARET_ASSIGN'
+CARET_ASSIGNÜ *	tokens.TType&
+CASE
+CASE; *	tokens.TType&
+CAST
+CASTF *	tokens.TType(
+CATCH
+CATCHK *	tokens.TType&
+CHAR
+CHAR! *	tokens.TType.
+CHAR_LIT"
+CHAR_LIT *	tokens.TType(
+COLON
+COLONr *	tokens.TType(
+COMMA
+COMMAp *	tokens.TType(
+CONST
+CONST% *	tokens.TType.
+CONTINUE"
+CONTINUE= *	tokens.TType0
+	DECORATOR#
+	DECORATORu *	tokens.TType0
+	DECREMENT#
+	DECREMENTf *	tokens.TType0
+	DIRECTIVE#
+	DIRECTIVEv *	tokens.TType*
+DIVIDE 
+DIVIDET *	tokens.TType$
+DOT
+DOTo *	tokens.TType*
+DUNDER 
+DUNDER+ *	tokens.TType0
+	DUNDER_KW#
+	DUNDER_KW3 *	tokens.TType&
+ELSE
+ELSE7 *	tokens.TType&
+ENUM
+ENUM) *	tokens.TType$
+EOF
+EOFy *	tokens.TType(
+EQUAL
+EQUALU *	tokens.TType(
+ERROR
+ERRORx *	tokens.TType0
+	ERRORTYPE#
+	ERRORTYPEI *	tokens.TType(
+FALSE
+FALSE *	tokens.TType,
+FINALLY!
+FINALLYM *	tokens.TType(
+FLOAT
+FLOAT  *	tokens.TType0
+	FLOAT_LIT#
+	FLOAT_LIT *	tokens.TType&
+FREE
+FREEB *	tokens.TType.
+FUNCTION"
+FUNCTION' *	tokens.TType,
+GREATER!
+GREATERY *	tokens.TType8
+GREATER_EQUAL'
+GREATER_EQUALZ *	tokens.TType&
+HOOK
+HOOK2 *	tokens.TType2
+
+IDENTIFIER$
+
+IDENTIFIER *	tokens.TType"
+IF
+IF6 *	tokens.TType0
+	INCREMENT#
+	INCREMENTe *	tokens.TType$
+INT
+INT *	tokens.TType.
+INTERNAL"
+INTERNAL1 *	tokens.TType,
+INT_LIT!
+INT_LIT *	tokens.TType&
+LESS
+LESSW *	tokens.TType2
+
+LESS_EQUAL$
+
+LESS_EQUALX *	tokens.TType,
+L_BRACE!
+L_BRACEk *	tokens.TType0
+	L_BRACKET#
+	L_BRACKETm *	tokens.TType,
+L_PAREN!
+L_PARENi *	tokens.TType(
+MATCH
+MATCH: *	tokens.TType(
+MINUS
+MINUSR *	tokens.TType6
+MINUS_ASSIGN&
+MINUS_ASSIGN^ *	tokens.TType*
+MODULO 
+MODULO\ *	tokens.TType&
+MOVE
+MOVEA *	tokens.TType.
+MULTIPLY"
+MULTIPLYS *	tokens.TType,
+MUTABLE!
+MUTABLE& *	tokens.TType$
+NOT
+NOTa *	tokens.TType0
+	NOT_EQUAL#
+	NOT_EQUALV *	tokens.TType&
+NULL
+NULL *	tokens.TType.
+NULLABLE"
+NULLABLEE *	tokens.TType"
+OR
+OR` *	tokens.TType:
+PERCENT_ASSIGN(
+PERCENT_ASSIGNd *	tokens.TType&
+PIPE
+PIPE *	tokens.TType5
+PIPE_ASSIGN&
+PIPE_ASSIGNÖ *	tokens.TType&
+PLUS
+PLUSQ *	tokens.TType4
+PLUS_ASSIGN%
+PLUS_ASSIGN] *	tokens.TType,
+POINTER!
+POINTERC *	tokens.TType,
+PRIVATE!
+PRIVATE0 *	tokens.TType*
+PUBLIC 
+PUBLIC/ *	tokens.TType0
+	RAW_BLOCK#
+	RAW_BLOCKw *	tokens.TType*
+RETURN 
+RETURN9 *	tokens.TType,
+R_BRACE!
+R_BRACEl *	tokens.TType0
+	R_BRACKET#
+	R_BRACKETn *	tokens.TType,
+R_PAREN!
+R_PARENj *	tokens.TType0
+	SEMICOLON#
+	SEMICOLONq *	tokens.TType3
+
+SHIFT_LEFT%
+
+SHIFT_LEFTÇ *	tokens.TTypeA
+SHIFT_LEFT_ASSIGN,
+SHIFT_LEFT_ASSIGNá *	tokens.TType5
+SHIFT_RIGHT&
+SHIFT_RIGHTÉ *	tokens.TTypeC
+SHIFT_RIGHT_ASSIGN-
+SHIFT_RIGHT_ASSIGNà *	tokens.TType*
+SIZEOF 
+SIZEOF* *	tokens.TType6
+SLASH_ASSIGN&
+SLASH_ASSIGNc *	tokens.TType4
+STAR_ASSIGN%
+STAR_ASSIGNb *	tokens.TType$
+STR
+STR" *	tokens.TType2
+
+STRING_LIT$
+
+STRING_LIT *	tokens.TType*
+STRUCT 
+STRUCT( *	tokens.TType&
+TEST
+TEST> *	tokens.TType(
+THROW
+THROWL *	tokens.TType)
+TILDE 
+TILDEÅ *	tokens.TType&
+TRUE
+TRUE *	tokens.TType$
+TRY
+TRYJ *	tokens.TType&
+TYPE
+TYPE *	tokens.TType$
+VAR
+VAR, *	tokens.TType&
+VOID
+VOID *	tokens.TType(
+WHILE
+WHILE8 *	tokens.TType&
+WITH
+WITH| *	tokens.TType-
+es_directiva
+es_directiva› *J5
+	nombre_de(
+	nombre_deÁ *J	tokens.TType=
+palabra_clave,
+palabra_clave© *	tokens.TTypeJG
+token>
+token° *	tokens.TokenJ	tokens.TTypeJJJ"≥b¨
+TType
+
+IDENTIFIER R
+int
+CHAR_LIT R
+int
+INT_LIT R
+int
+	FLOAT_LIT R
+int
+
+STRING_LIT R
+int
+TRUE R
+int
+FALSE R
+int
+NULL R
+int
+VOID R
+int
+
+BOOL R
+int
+TYPE R
+int
+INT R
+int
+FLOAT  R
+int
+CHAR! R
+int
+STR" R
+int
+CONST% R
+int
+MUTABLE& R
+int
+FUNCTION' R
+int
+STRUCT( R
+int
+ENUM) R
+int
+SIZEOF* R
+int
+DUNDER+ R
+int
+VAR, R
+int
+PUBLIC/ R
+int"
+PRIVATE0 R
+int#
+INTERNAL1 R
+int$
+HOOK2 R
+int%
+	DUNDER_KW3 R
+int&
+IF6
+ R
+int
+ELSE7 R
+int
+WHILE8 R
+int
+RETURN9 R
+int
+MATCH: R
+int
+CASE; R
+int
+BREAK< R
+int
+CONTINUE= R
+int 
+TEST> R
+int!
+MOVEA R
+int+
+FREEB R
+int.
+POINTERC R
+int1
+ADDRESSD R
+int2
+NULLABLEE R
+int3
+CASTF R
+int4
+	ERRORTYPEI R
+int5
+TRYJ R
+int6
+CATCHK R
+int7
+THROWL R
+int8
+FINALLYM R
+int;
+ASSIGNP R
+int<
+PLUSQ R
+int=
+MINUSR R
+int>
+MULTIPLYS R
+int?
+DIVIDET R
+int@
+EQUALU R
+intA
+	NOT_EQUALV R
+intB
+LESSW R
+intC
+
+LESS_EQUALX R
+intD
+GREATERY R
+intE 
+GREATER_EQUALZ R
+intF
+ARROW[ R
+intG
+MODULO\ R
+intH
+PLUS_ASSIGN] R
+intI
+MINUS_ASSIGN^ R
+intJ
+AND_ R
+intK
+OR`
+ R
+intL
+NOTa R
+intM
+STAR_ASSIGNb R
+intN
+SLASH_ASSIGNc R
+intO!
+PERCENT_ASSIGNd R
+int[
+	INCREMENTe R
+int\
+	DECREMENTf R
+int]
+L_PARENi R
+intP
+R_PARENj R
+intQ
+L_BRACEk R
+intR
+R_BRACEl R
+intS
+	L_BRACKETm R
+intT
+	R_BRACKETn R
+intU
+DOTo R
+intV
+COMMAp R
+intW
+	SEMICOLONq R
+intX
+COLONr R
+intY
+	DECORATORu R
+int_
+	DIRECTIVEv R
+int`
+	RAW_BLOCKw R
+inta
+ERRORx R
+intb
+EOFy R
+intd
+WITH| R
+inte
+PIPE R
+intf
+CARETÄ R
+intg
+TILDEÅ R
+inth
+
+SHIFT_LEFTÇ R
+inti
+SHIFT_RIGHTÉ R
+intj
+
+AMP_ASSIGNÑ R
+intk
+PIPE_ASSIGNÖ R
+intl 
+CARET_ASSIGNÜ R
+intm%
+SHIFT_LEFT_ASSIGNá R
+intn&
+SHIFT_RIGHT_ASSIGNà R
+into
+BYTEâ R
+intp"EôZ>
+Tokentipo
+lexema	lineacolinicios"·°RŸ
+tokentipo
+lexema	lineacol"£
+†¢Çó
+î¢  â
+tokens.Tokentipolexemalineacolinicios¢ b
+tipo¢' b
+lexema¢6 b
+linea¢B b
+col¢P R
+str" 8"¿©R∏
+palabra_clave
+nombre"ò
+„™z€
+™ b
+nombreK
+´ R
+str"char3´R,
+*´Ç"
+ ´ ö
+´b
+TTypeCHARI
+¨ R
+
+str"int2¨R+
+)¨Ç!
+¨ ö
+¨b
+TTypeINTM
+≠ R
+str"float4≠R-
++≠Ç#
+!≠  ö
+≠ b
+TTypeFLOATI
+Æ R
+
+str"str2ÆR+
+)ÆÇ!
+Æ ö
+Æb
+TTypeSTRK
+Ø R
+str"byte3ØR,
+*ØÇ"
+ Ø ö
+Øb
+TTypeBYTEK
+∞ R
+str"bool3∞R,
+*∞Ç"
+ ∞ ö
+∞b
+TTypeBOOLK
+± R
+str"void3±R,
+*±Ç"
+ ± ö
+±b
+TTypeVOIDK
+≤ R
+str"true3≤R,
+*≤Ç"
+ ≤ ö
+≤b
+TTypeTRUEM
+≥ R
+str"false4≥R-
++≥Ç#
+!≥  ö
+≥ b
+TTypeFALSEK
+¥ R
+str"null3¥R,
+*¥Ç"
+ ¥ ö
+¥b
+TTypeNULLK
+µ R
+str"type3µR,
+*µÇ"
+ µ ö
+µb
+TTypeTYPEM
+∂ R
+str"const4∂R-
++∂Ç#
+!∂  ö
+∂ b
+TTypeCONSTI
+∑ R
+
+str"var2∑R+
+)∑Ç!
+∑ ö
+∑b
+TTypeVARQ
+∏ R
+str"mutable6∏R/
+-∏Ç%
+#∏" ö
+∏"b
+TTypeMUTABLEM
+π R	
+str"fn7πR0
+.πÇ&
+$π ö
+πb
+TTypeFUNCTIONO
+∫ R
+str"struct5∫R.
+,∫Ç$
+"∫! ö
+∫!b
+TTypeSTRUCTK
+ª R
+str"enum3ªR,
+*ªÇ"
+ ª ö
+ªb
+TTypeENUMO
+º R
+str"sizeof5ºR.
+,ºÇ$
+"º! ö
+º!b
+TTypeSIZEOFO
+Ω R
+str"public5ΩR.
+,ΩÇ$
+"Ω! ö
+Ω!b
+TTypePUBLICQ
+æ R
+str"private6æR/
+-æÇ%
+#æ" ö
+æ"b
+TTypePRIVATES
+ø R
+str"internal7øR0
+.øÇ&
+$ø# ö
+ø#b
+TTypeINTERNALK
+¿ R
+str"hook3¿R,
+*¿Ç"
+ ¿ ö
+¿b
+TTypeHOOKR
+¡ R
+str"dunder8¡R1
+/¡Ç'
+%¡! ö
+¡!b
+TType	DUNDER_KWQ
+¬ R
+str"error8¬R1
+/¬Ç'
+%¬  ö
+¬ b
+TType	ERRORTYPEI
+√ R
+
+str"try2√R+
+)√Ç!
+√ ö
+√b
+TTypeTRYM
+ƒ R
+str"catch4ƒR-
++ƒÇ#
+!ƒ  ö
+ƒ b
+TTypeCATCHM
+≈ R
+str"throw4≈R-
++≈Ç#
+!≈  ö
+≈ b
+TTypeTHROWQ
+∆ R
+str"finally6∆R/
+-∆Ç%
+#∆" ö
+∆"b
+TTypeFINALLYK
+« R
+str"with3«R,
+*«Ç"
+ « ö
+«b
+TTypeWITHG
+» R	
+str"if1»R*
+(»Ç 
+» ö
+»b
+TTypeIFK
+… R
+str"else3…R,
+*…Ç"
+ … ö
+…b
+TTypeELSEM
+  R
+str"while4 R-
++ Ç#
+!   ö
+  b
+TTypeWHILEO
+À R
+str"return5ÀR.
+,ÀÇ$
+"À! ö
+À!b
+TTypeRETURNM
+Ã R
+str"match4ÃR-
++ÃÇ#
+!Ã  ö
+Ã b
+TTypeMATCHK
+Õ R
+str"case3ÕR,
+*ÕÇ"
+ Õ ö
+Õb
+TTypeCASEM
+Œ R
+str"break4ŒR-
++ŒÇ#
+!Œ  ö
+Œ b
+TTypeBREAKS
+œ R
+str"continue7œR0
+.œÇ&
+$œ# ö
+œ#b
+TTypeCONTINUEK
+– R
+str"test3–R,
+*–Ç"
+ – ö
+–b
+TTypeTESTK
+— R
+str"move3—R,
+*—Ç"
+ — ö
+—b
+TTypeMOVEK
+“ R
+str"free3“R,
+*“Ç"
+ “ ö
+“b
+TTypeFREEM
+” R
+
+str"ptr6”R/
+-”Ç%
+#” ö
+”b
+TTypePOINTERK
+‘ R
+str"cast3‘R,
+*‘Ç"
+ ‘ ö
+‘b
+TTypeCASTI
+’ R
+
+str"and2’R+
+)’Ç!
+’ ö
+’b
+TTypeANDG
+÷ R	
+str"or1÷R*
+(÷Ç 
+÷ ö
+÷b
+TTypeORI
+◊ R
+
+str"not2◊R+
+)◊Ç!
+◊ ö
+◊b
+TTypeNOT
+0ŸÇ(
+&Ÿ ö
+Ÿb
+TType
+IDENTIFIER8"î›Rå
+es_directiva
+nombre"Ì
+ÍﬁÇ·
+ﬁﬁ r‘
+orïﬁ rã
+orÃﬁ r¬
+orÅﬁ rx
+or8ﬁ r/
+==ﬁ b
+nombreﬁ R
+str"import8ﬁ" r/
+==ﬁ" b
+nombreﬁ, R
+str"export8ﬁ8 r/
+==ﬁ8 b
+nombreﬁB R
+str"extern6ﬂ r-
+==ﬂ b
+nombreﬂ R
+str"test6ﬂ  r-
+==ﬂ  b
+nombreﬂ* R
+str"from8"·?ÁRŸ?
+	nombre_det"¬?
+¢?Ëzö?
+Ë b
+tW
+&È ö
+Èb
+TType
+IDENTIFIER-È R&
+$È"Ç
+È) R
+str"
+IDENTIFIERS
+$Í ö
+Íb
+TTypeCHAR_LIT+ÍR$
+"Í Ç
+Í' R
+str"CHAR_LITQ
+#Î ö
+Îb
+TTypeINT_LIT*ÎR#
+!ÎÇ
+Î& R
+str"INT_LITU
+%Ï ö
+Ïb
+TType	FLOAT_LIT,ÏR%
+#Ï!Ç
+Ï( R
+str"	FLOAT_LITW
+&Ì ö
+Ìb
+TType
+STRING_LIT-Ì R&
+$Ì"Ç
+Ì) R
+str"
+STRING_LITK
+ Ó ö
+Ób
+TTypeTRUE'ÓR 
+ÓÇ
+Ó# R
+str"TRUEM
+!Ô ö
+Ôb
+TTypeFALSE(ÔR!
+ÔÇ
+Ô$ R
+str"FALSEK
+  ö
+b
+TTypeNULL'R 
+Ç
+# R
+str"NULLK
+ Ò ö
+Òb
+TTypeVOID'ÒR 
+ÒÇ
+Ò# R
+str"VOIDK
+ Ú ö
+Úb
+TTypeBOOL'ÚR 
+ÚÇ
+Ú# R
+str"BOOLK
+ Û ö
+Ûb
+TTypeTYPE'ÛR 
+ÛÇ
+Û# R
+str"TYPEI
+Ù ö
+Ùb
+TTypeINT&ÙR
+ÙÇ
+Ù" R
+
+str"INTM
+!ı ö
+ıb
+TTypeFLOAT(ıR!
+ıÇ
+ı$ R
+str"FLOATK
+ ˆ ö
+ˆb
+TTypeCHAR'ˆR 
+ˆÇ
+ˆ# R
+str"CHARI
+˜ ö
+˜b
+TTypeSTR&˜R
+˜Ç
+˜" R
+
+str"STRM
+!¯ ö
+¯b
+TTypeCONST(¯R!
+¯Ç
+¯$ R
+str"CONSTQ
+#˘ ö
+˘b
+TTypeMUTABLE*˘R#
+!˘Ç
+˘& R
+str"MUTABLES
+$˙ ö
+˙b
+TTypeFUNCTION+˙R$
+"˙ Ç
+˙' R
+str"FUNCTIONO
+"˚ ö
+˚b
+TTypeSTRUCT)˚R"
+ ˚Ç
+˚% R
+str"STRUCTK
+ ¸ ö
+¸b
+TTypeENUM'¸R 
+¸Ç
+¸# R
+str"ENUMO
+"˝ ö
+˝b
+TTypeSIZEOF)˝R"
+ ˝Ç
+˝% R
+str"SIZEOFO
+"˛ ö
+˛b
+TTypeDUNDER)˛R"
+ ˛Ç
+˛% R
+str"DUNDERI
+ˇ ö
+ˇb
+TTypeVAR&ˇR
+ˇÇ
+ˇ" R
+
+str"VARO
+"Ä ö
+Äb
+TTypePUBLIC)ÄR"
+ ÄÇ
+Ä% R
+str"PUBLICQ
+#Å ö
+Åb
+TTypePRIVATE*ÅR#
+!ÅÇ
+Å& R
+str"PRIVATES
+$Ç ö
+Çb
+TTypeINTERNAL+ÇR$
+"Ç Ç
+Ç' R
+str"INTERNALK
+ É ö
+Éb
+TTypeHOOK'ÉR 
+ÉÇ
+É# R
+str"HOOKU
+%Ñ ö
+Ñb
+TType	DUNDER_KW,ÑR%
+#Ñ!Ç
+Ñ( R
+str"	DUNDER_KWG
+Ö ö
+Öb
+TTypeIF%ÖR
+ÖÇ
+Ö! R	
+str"IFK
+ Ü ö
+Üb
+TTypeELSE'ÜR 
+ÜÇ
+Ü# R
+str"ELSEM
+!á ö
+áb
+TTypeWHILE(áR!
+áÇ
+á$ R
+str"WHILEO
+"à ö
+àb
+TTypeRETURN)àR"
+ àÇ
+à% R
+str"RETURNM
+!â ö
+âb
+TTypeMATCH(âR!
+âÇ
+â$ R
+str"MATCHK
+ ä ö
+äb
+TTypeCASE'äR 
+äÇ
+ä# R
+str"CASEM
+!ã ö
+ãb
+TTypeBREAK(ãR!
+ãÇ
+ã$ R
+str"BREAKS
+$å ö
+åb
+TTypeCONTINUE+åR$
+"å Ç
+å' R
+str"CONTINUEK
+ ç ö
+çb
+TTypeTEST'çR 
+çÇ
+ç# R
+str"TESTK
+ é ö
+éb
+TTypeMOVE'éR 
+éÇ
+é# R
+str"MOVEK
+ è ö
+èb
+TTypeFREE'èR 
+èÇ
+è# R
+str"FREEQ
+#ê ö
+êb
+TTypePOINTER*êR#
+!êÇ
+ê& R
+str"POINTERQ
+#ë ö
+ëb
+TTypeADDRESS*ëR#
+!ëÇ
+ë& R
+str"ADDRESSS
+$í ö
+íb
+TTypeNULLABLE+íR$
+"í Ç
+í' R
+str"NULLABLEK
+ ì ö
+ìb
+TTypeCAST'ìR 
+ìÇ
+ì# R
+str"CASTU
+%î ö
+îb
+TType	ERRORTYPE,îR%
+#î!Ç
+î( R
+str"	ERRORTYPEI
+ï ö
+ïb
+TTypeTRY&ïR
+ïÇ
+ï" R
+
+str"TRYM
+!ñ ö
+ñb
+TTypeCATCH(ñR!
+ñÇ
+ñ$ R
+str"CATCHM
+!ó ö
+ób
+TTypeTHROW(óR!
+óÇ
+ó$ R
+str"THROWQ
+#ò ö
+òb
+TTypeFINALLY*òR#
+!òÇ
+ò& R
+str"FINALLYK
+ ô ö
+ôb
+TTypeWITH'ôR 
+ôÇ
+ô# R
+str"WITHK
+ ö ö
+öb
+TTypePIPE'öR 
+öÇ
+ö# R
+str"PIPEM
+!õ ö
+õb
+TTypeCARET(õR!
+õÇ
+õ$ R
+str"CARETM
+!ú ö
+úb
+TTypeTILDE(úR!
+úÇ
+ú$ R
+str"TILDEW
+&ù ö
+ùb
+TType
+SHIFT_LEFT-ù R&
+$ù"Ç
+ù) R
+str"
+SHIFT_LEFTY
+'û ö
+ûb
+TTypeSHIFT_RIGHT.û!R'
+%û#Ç
+û* R
+str"SHIFT_RIGHTW
+&ü ö
+üb
+TType
+AMP_ASSIGN-ü R&
+$ü"Ç
+ü) R
+str"
+AMP_ASSIGNY
+'† ö
+†b
+TTypePIPE_ASSIGN.†!R'
+%†#Ç
+†* R
+str"PIPE_ASSIGN[
+(° ö
+°b
+TTypeCARET_ASSIGN/°"R(
+&°$Ç
+°+ R
+str"CARET_ASSIGNe
+-¢ ö#
+¢b
+TTypeSHIFT_LEFT_ASSIGN4¢'R-
++¢)Ç#
+!¢0 R
+str"SHIFT_LEFT_ASSIGNg
+.£ ö$
+£b
+TTypeSHIFT_RIGHT_ASSIGN5£(R.
+,£*Ç$
+"£1 R
+str"SHIFT_RIGHT_ASSIGNK
+ § ö
+§b
+TTypeBYTE'§R 
+§Ç
+§# R
+str"BYTEO
+"• ö
+•b
+TTypeASSIGN)•R"
+ •Ç
+•% R
+str"ASSIGNK
+ ¶ ö
+¶b
+TTypePLUS'¶R 
+¶Ç
+¶# R
+str"PLUSM
+!ß ö
+ßb
+TTypeMINUS(ßR!
+ßÇ
+ß$ R
+str"MINUSS
+$® ö
+®b
+TTypeMULTIPLY+®R$
+"® Ç
+®' R
+str"MULTIPLYO
+"© ö
+©b
+TTypeDIVIDE)©R"
+ ©Ç
+©% R
+str"DIVIDEM
+!™ ö
+™b
+TTypeEQUAL(™R!
+™Ç
+™$ R
+str"EQUALU
+%´ ö
+´b
+TType	NOT_EQUAL,´R%
+#´!Ç
+´( R
+str"	NOT_EQUALK
+ ¨ ö
+¨b
+TTypeLESS'¨R 
+¨Ç
+¨# R
+str"LESSW
+&≠ ö
+≠b
+TType
+LESS_EQUAL-≠ R&
+$≠"Ç
+≠) R
+str"
+LESS_EQUALQ
+#Æ ö
+Æb
+TTypeGREATER*ÆR#
+!ÆÇ
+Æ& R
+str"GREATER]
+)Ø ö
+Øb
+TTypeGREATER_EQUAL0Ø#R)
+'Ø%Ç
+Ø, R
+str"GREATER_EQUALM
+!∞ ö
+∞b
+TTypeARROW(∞R!
+∞Ç
+∞$ R
+str"ARROWO
+"± ö
+±b
+TTypeMODULO)±R"
+ ±Ç
+±% R
+str"MODULOY
+'≤ ö
+≤b
+TTypePLUS_ASSIGN.≤!R'
+%≤#Ç
+≤* R
+str"PLUS_ASSIGN[
+(≥ ö
+≥b
+TTypeMINUS_ASSIGN/≥"R(
+&≥$Ç
+≥+ R
+str"MINUS_ASSIGNI
+¥ ö
+¥b
+TTypeAND&¥R
+¥Ç
+¥" R
+
+str"ANDG
+µ ö
+µb
+TTypeOR%µR
+µÇ
+µ! R	
+str"ORI
+∂ ö
+∂b
+TTypeNOT&∂R
+∂Ç
+∂" R
+
+str"NOTY
+'∑ ö
+∑b
+TTypeSTAR_ASSIGN.∑!R'
+%∑#Ç
+∑* R
+str"STAR_ASSIGN[
+(∏ ö
+∏b
+TTypeSLASH_ASSIGN/∏"R(
+&∏$Ç
+∏+ R
+str"SLASH_ASSIGN_
+*π ö 
+πb
+TTypePERCENT_ASSIGN1π$R*
+(π&Ç 
+π- R
+str"PERCENT_ASSIGNU
+%∫ ö
+∫b
+TType	INCREMENT,∫R%
+#∫!Ç
+∫( R
+str"	INCREMENTU
+%ª ö
+ªb
+TType	DECREMENT,ªR%
+#ª!Ç
+ª( R
+str"	DECREMENTQ
+#º ö
+ºb
+TTypeL_PAREN*ºR#
+!ºÇ
+º& R
+str"L_PARENQ
+#Ω ö
+Ωb
+TTypeR_PAREN*ΩR#
+!ΩÇ
+Ω& R
+str"R_PARENQ
+#æ ö
+æb
+TTypeL_BRACE*æR#
+!æÇ
+æ& R
+str"L_BRACEQ
+#ø ö
+øb
+TTypeR_BRACE*øR#
+!øÇ
+ø& R
+str"R_BRACEU
+%¿ ö
+¿b
+TType	L_BRACKET,¿R%
+#¿!Ç
+¿( R
+str"	L_BRACKETU
+%¡ ö
+¡b
+TType	R_BRACKET,¡R%
+#¡!Ç
+¡( R
+str"	R_BRACKETI
+¬ ö
+¬b
+TTypeDOT&¬R
+¬Ç
+¬" R
+
+str"DOTM
+!√ ö
+√b
+TTypeCOMMA(√R!
+√Ç
+√$ R
+str"COMMAU
+%ƒ ö
+ƒb
+TType	SEMICOLON,ƒR%
+#ƒ!Ç
+ƒ( R
+str"	SEMICOLONM
+!≈ ö
+≈b
+TTypeCOLON(≈R!
+≈Ç
+≈$ R
+str"COLONU
+%∆ ö
+∆b
+TType	DECORATOR,∆R%
+#∆!Ç
+∆( R
+str"	DECORATORU
+%« ö
+«b
+TType	DIRECTIVE,«R%
+#«!Ç
+«( R
+str"	DIRECTIVEU
+%» ö
+»b
+TType	RAW_BLOCK,»R%
+#»!Ç
+»( R
+str"	RAW_BLOCKM
+!… ö
+…b
+TTypeERROR(…R!
+…Ç
+…$ R
+str"ERRORI
+  ö
+ b
+TTypeEOF& R
+ Ç
+ " R
+
+str"EOF
+ÃÇ
+Ã R
+str"?8"œÇ
+tokens2 22	tokens.TType22	tokens.Token2

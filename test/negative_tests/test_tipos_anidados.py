@@ -29,15 +29,15 @@ from helpers import assert_has_code, assert_ok, error_codes  # noqa: E402
 # --------------------------------------------------------------------------- #
 
 def test_un_type_anidado_se_declara_y_se_usa():
-    assert_ok("fn f() -> void { const type Local; const Local x; };")
+    assert_ok("fn f() -> void { const type Local; const Local? x = null; };")
 
 
 def test_var_type_anidado_tambien():
-    assert_ok("fn f() -> void { var type Local; const Local x; };")
+    assert_ok("fn f() -> void { var type Local; const Local? x = null; };")
 
 
 def test_un_type_anidado_admite_punteros_y_nullable():
-    assert_ok("fn f() -> void { const type T; const T ptr p; const T? q; };")
+    assert_ok("fn f() -> void { const type T; const T ptr? p = null; const T? q = null; };")
 
 
 def test_dos_declaraciones_del_mismo_nombre_en_el_scope_colisionan():
@@ -50,27 +50,27 @@ def test_dos_declaraciones_del_mismo_nombre_en_el_scope_colisionan():
 
 def test_un_type_local_no_se_filtra_a_otra_funcion():
     assert_has_code(
-        "fn f() -> void { const type T; };\nfn g() -> void { const T x; };",
+        "fn f() -> void { const type T; };\nfn g() -> void { const T? x = null; };",
         "AST005")
 
 
 def test_dos_funciones_pueden_declarar_el_mismo_nombre():
-    assert_ok("fn f() -> void { const type T; const T x; };\n"
-              "fn g() -> void { const type T; const T y; };")
+    assert_ok("fn f() -> void { const type T; const T? x = null; };\n"
+              "fn g() -> void { const type T; const T? y = null; };")
 
 
 def test_un_type_de_un_bloque_no_sale_del_bloque():
     assert_has_code(
-        "fn f() -> void { if (true) { const type B; } const B x; };", "AST005")
+        "fn f() -> void { if (true) { const type B; } const B? x = null; };", "AST005")
 
 
 def test_un_type_de_la_funcion_si_entra_al_bloque():
-    assert_ok("fn f() -> void { const type T; if (true) { const T x; } };")
+    assert_ok("fn f() -> void { const type T; if (true) { const T? x = null; } };")
 
 
 def test_un_type_del_try_no_sale_al_catch():
     assert_has_code(
-        "fn f() -> void { try { const type E; } catch (e) { const E x; } };",
+        "fn f() -> void { try { const type E; } catch (e) { const E? x = null; } };",
         "AST005")
 
 
@@ -78,11 +78,11 @@ def test_sin_referencia_hacia_adelante_dentro_de_una_funcion():
     """Los globales SÍ admiten forward reference porque ``collect`` los
     registra antes de recorrer nada; dentro de una función las sentencias se
     resuelven en orden, igual que con las variables."""
-    assert_has_code("fn f() -> void { const T x; const type T; };", "AST005")
+    assert_has_code("fn f() -> void { const T? x = null; const type T; };", "AST005")
 
 
 def test_un_type_global_sigue_admitiendo_referencia_hacia_adelante():
-    assert_ok("fn f() -> void { const G x; };\nconst type G;")
+    assert_ok("fn f() -> void { const G? x = null; };\nconst type G;")
 
 
 # --------------------------------------------------------------------------- #
@@ -119,8 +119,8 @@ def test_el_sombreado_funciona_con_la_cache_ya_caliente():
 
 def test_un_type_de_bloque_no_sobrevive_al_bloque_con_un_global_detras():
     assert_ok("const type T;\n"
-              "fn f() -> void { if (true) { const type T; const T x; } "
-              "const T y; };")
+              "fn f() -> void { if (true) { const type T; const T? x = null; } "
+              "const T? y = null; };")
 
 
 # --------------------------------------------------------------------------- #

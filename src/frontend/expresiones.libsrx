@@ -18,6 +18,7 @@
 #import frontend.tipos as ti
 #import frontend.arbol as ar
 #import frontend.lexer as lx
+#import frontend.diagnosticos as dg
 #import array.vector as vec
 
 // --------------------------------------------------------------------------- //
@@ -606,7 +607,7 @@ fn interpolacion(cu.Parser ptr mutable p, str crudo, int linea, int col) -> int 
     if (f.con_spec and not formato_valido(f.spec)) {
         cu.falla("PAR012", f"interpolacion invalida: el formato ':{f.spec}' no se entiende; es [0][ancho][.precision][tipo], con tipo d, x, X, b, o o f", linea, col);
     }
-    var vec.Vector<str> descartados = vec.dynamic<str>(1);
+    var vec.Vector<dg.Diagnostico> descartados = vec.dynamic<dg.Diagnostico>(1);
     var vec.Vector<tk.Token> sub = lx.tokenizar(f.texto, &descartados);
     var int pos_previa = p.pos;
     var int fin_previo = p.fin;

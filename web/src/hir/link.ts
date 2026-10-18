@@ -75,7 +75,7 @@ export class Unit {
   readonly alias: string;
   readonly path: string;
   readonly module: Module;
-  /** Toda función invocable por nombre (incluidos los dunder). */
+  /** Toda función invocable por nombre (incluidos los dunder; no los métodos de nombre llano). */
   readonly functions: ReadonlyMap<string, FunctionDecl>;
   /** Cuerpos de hook por `nombre#línea`: dos `__cast__` comparten nombre. */
   readonly dunderDecls: ReadonlyMap<string, FunctionDecl>;
@@ -98,7 +98,11 @@ export class Unit {
       switch (decl.node.case) {
         case "function": {
           const fn = decl.node.fn;
-          functions.set(fn.name, fn);
+          // un METODO de '@impl' de nombre llano ('dunder' igual al nombre)
+          // no se llama por nombre: se despacha por (tipo, nombre), y aquí
+          // pisaría a una 'fn' homónima del módulo. Misma regla que
+          // 'runtime/interpreter/loader.py' (Unit.functions).
+          if (fn.dunder === "" || fn.dunder !== fn.name) functions.set(fn.name, fn);
           if (fn.dunder !== "") dunderDecls.set(`${fn.name}#${decl.ln}`, fn);
           break;
         }

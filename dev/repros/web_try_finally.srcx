@@ -1,0 +1,8 @@
+#from io #import stdp
+fn ayuda() -> int { return 1; }
+fn main() -> int {
+    var int x = 0;
+    try { x = 1; } finally { x = ayuda(); };
+    stdp.println(f"{x}");
+    return 0;
+}

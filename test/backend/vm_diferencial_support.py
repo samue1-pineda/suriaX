@@ -54,9 +54,11 @@ def _salida(stdout: str) -> list:
             and not (l.lstrip().startswith("unidad '") and " -> " in l)]
 
 
-def _comparar(preparar, argumentos=()) -> None:
+def _comparar(preparar, argumentos=(), esperado=None) -> None:
     """Arma el proyecto con ``preparar(dir) -> fuente``, lo compila una vez
-    y lo corre en los dos motores, con ``argumentos`` para el programa."""
+    y lo corre en los dos motores, con ``argumentos`` para el programa. Con
+    ``esperado`` (las líneas que imprime el programa), además de coincidir
+    entre sí tienen que dar ESO: dos motores igual de equivocados no pasan."""
     vm = _binario()
     if vm is None:
         omitir("suriax-hir no está construido "
@@ -86,6 +88,9 @@ def _comparar(preparar, argumentos=()) -> None:
     # la VM sale con 1 cuando el MIR no cubre algo: eso nunca es "igual"
     assert "no cubre" not in maquina.stderr + maquina.stdout, (
         maquina.stderr[-1500:] or maquina.stdout[-1500:])
+    if esperado is not None:
+        assert _salida(interp.stdout) == list(esperado), (
+            "el intérprete no da lo esperado", _salida(interp.stdout)[-8:], interp.stderr[-400:])
     assert _salida(maquina.stdout) == _salida(interp.stdout), (
         "salidas distintas", _salida(interp.stdout)[-6:],
         _salida(maquina.stdout)[-6:], maquina.stderr[-400:])

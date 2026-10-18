@@ -1,0 +1,2 @@
+public fn g() -> int { return 1; }
+#export as script

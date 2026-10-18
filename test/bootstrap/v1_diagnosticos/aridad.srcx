@@ -1,0 +1,14 @@
+struct { T v; } Caja<T>;
+struct { A a; B b; } Par<A, B>;
+struct { int x; } Plano;
+fn hace<T>(T x) -> T { return x; }
+fn normal(int x) -> int { return x; }
+fn main() -> int {
+    var Caja<int, int> a = Caja<int>{ v: 1 };
+    var Plano<int> b = Plano{ x: 1 };
+    var Par<int> c = Par<int, int, int>{ a: 1, b: 2 };
+    var int d = hace<int, str>(1);
+    var int e = normal<int>(1);
+    var Caja<Plano<int>> f = Caja<Plano>{ v: Plano{ x: 2 } };
+    return 0;
+}

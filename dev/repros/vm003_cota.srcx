@@ -1,0 +1,10 @@
+#from io #import stdp
+@trait struct { fn area(self ptr s) -> int; } Shape;
+@impl(Shape) struct { int r; } Circle;
+@impl Circle { fn area(Circle ptr self) -> int { return self.r * 3; } }
+fn total<T: Shape>(T ptr x) -> int { return x.area(); }
+fn main() -> int {
+    var Circle c = Circle{ r: 2 };
+    stdp.println(f"{total<Circle>(&c)}");
+    return 0;
+}

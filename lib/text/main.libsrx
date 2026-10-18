@@ -2,8 +2,8 @@
 
  Sin esta librería un texto se arma carácter a carácter ('trozo' del
  bootstrap) y cada '+' crea una cadena nueva: sacar un trozo o unir mil
- partes era cuadrático. Aquí cada operación es UNA primitiva del host,
- con el mismo contrato en el intérprete y en la VM:
+ partes era cuadrático. Las operaciones BASE son primitivas del host, con
+ el mismo contrato en el intérprete y en la VM:
 
    text.slice("hola mundo", 5, 10)       // "mundo"
    text.find("hola mundo", "mu")         // 5 (-1 si no está)
@@ -14,8 +14,45 @@
    text.to_bytes("ñ")                    // sus bytes UTF-8: [195, 177]
    text.from_bytes(&bytes)               // la vuelta (ConversionInvalida si no es UTF-8)
 
+ Sobre ellas, lo que necesita una herramienta que analiza texto:
+
+   text.split("a,b,,c", ",")             // ["a", "b", "", "c"]
+   text.split_whitespace("  a \t b ")    // ["a", "b"]
+   text.lines("uno\r\ndos\n")            // ["uno", "dos"]
+   text.trim("  hola \n")                // "hola"
+   text.replace("a-b-c", "-", "+")       // "a+b+c"
+   text.contains(s, "x"), text.count(s, "x"), text.rfind(s, "/")
+   text.repeat("-", 3), text.pad_left("7", 3, '0')     // "---", "007"
+   text.lower("ÁRBOL"), text.upper("straße")           // "árbol", "STRASSE"
+   text.is_digit(c), is_alpha, is_alnum, is_space, is_upper, is_lower
+
+ QUÉ ES DEL HOST Y QUÉ ESTÁ ESCRITO AQUÍ. Dos razones mandan algo al host:
+
+ 1. Necesita las TABLAS de Unicode (qué es una letra en griego, que 'ß' en
+    mayúsculas es 'SS'): mayúsculas y clases de caracteres. Escribirlas en
+    suriaX sería copiar la base de datos de Unicode.
+ 2. Escrita aquí daría UNA VUELTA DEL INTÉRPRETE POR CARÁCTER O POR PARTE:
+    'split', 'split_whitespace', 'lines', 'trim*', 'count', 'rfind'. Serían
+    lineales, pero cada vuelta cuesta del orden de 0.1 ms en el intérprete:
+    partir en líneas un archivo de 10 000 líneas con un bucle de 'find' y
+    'push' tardaba casi 3 segundos; en el host, milisegundos. Y partir un
+    archivo es lo PRIMERO que hace una herramienta que analiza texto.
+
+ Lo que se arma con un número FIJO de llamadas ('contains', 'replace' =
+ 'split' + 'join', 'repeat' por duplicación, 'pad_*') está escrito aquí:
+ no gana nada en el host y funciona en cualquier motor que tenga las
+ primitivas que usa. Lo que devuelve VARIAS partes lo pide en dos tiempos,
+ como 'to_bytes': cuántas son, y que las escriba en un bloque que el
+ 'Vector' adopta sin copiarlas.
+
+ Esas llamadas nuevas, por ahora, solo las cumple el intérprete: en la VM
+ son RT008, que nombra la que falta ('lib/LLAMADAS_AL_HOST.md' lleva la
+ cuenta). Las primitivas base de arriba sí están en los dos motores.
+
  Los índices cuentan CARACTERES (code points), como 's[i]' y 'len(s)'; no
  bytes. Un índice fuera de la cadena es 'excepciones.IndiceFueraDeRango'.
+ Un argumento que no tiene respuesta (un separador vacío, repetir -1
+ veces) es 'excepciones.ValorInvalido'.
 
  'join' es también la forma de CONSTRUIR un texto largo: se van guardando
  las partes en un 'Vector<str>' y se unen una sola vez al final (el
@@ -24,6 +61,7 @@
 
 #import array.vector as vec
 #import mem
+#import excepciones as exc
 
 // --- llamadas al host ------------------------------------------------------ //
 internal fn __trozo__(str s, int desde, int hasta) -> str;
@@ -36,6 +74,32 @@ internal fn __flotante_de__(str s) -> float;
 internal fn __utf8_largo__(str s) -> int;
 internal fn __utf8_a_bytes__(str s, byte ptr mutable destino, int n) -> void;
 internal fn __utf8_de_bytes__(byte ptr datos, int n) -> str;
+internal fn __minusculas__(str s) -> str;
+internal fn __mayusculas__(str s) -> str;
+internal fn __es_digito__(char c) -> bool;
+internal fn __es_letra__(char c) -> bool;
+internal fn __es_alfanumerico__(char c) -> bool;
+internal fn __es_espacio__(char c) -> bool;
+internal fn __es_mayuscula__(char c) -> bool;
+internal fn __es_minuscula__(char c) -> bool;
+internal fn __cuenta_partes__(str s, str separador) -> int;
+internal fn __partir__(str s, str separador, str ptr mutable destino, int n) -> void;
+internal fn __cuenta_palabras__(str s) -> int;
+internal fn __palabras__(str s, str ptr mutable destino, int n) -> void;
+internal fn __cuenta_lineas__(str s) -> int;
+internal fn __lineas__(str s, str ptr mutable destino, int n) -> void;
+internal fn __recorta__(str s) -> str;
+internal fn __recorta_inicio__(str s) -> str;
+internal fn __recorta_final__(str s) -> str;
+internal fn __apariciones__(str s, str parte) -> int;
+internal fn __buscar_ultimo__(str s, str parte) -> int;
+
+// Cuántos espacios reservar para 'n' partes que llenará el host. Nunca 0:
+// un 'Vector' sin elementos también necesita dónde crecer (como 'to_bytes').
+internal fn espacios_para(int n) -> int {
+    if (n < 1) { return 1; };
+    return n;
+}
 
 // El trozo de 's' entre los caracteres 'start' (incluido) y 'end' (no).
 // Tiene que valer 0 <= start <= end <= len(s): fuera de eso es
@@ -96,6 +160,208 @@ public fn to_bytes(str s) -> vec.Vector<byte> {
 // excepciones.ConversionInvalida.
 public fn from_bytes(vec.Vector<byte> ptr bytes) -> str {
     return __utf8_de_bytes__(bytes.data(), bytes.len());
+}
+
+// --- mayúsculas y clases de caracteres (Unicode, del host) ----------------- //
+//
+// Las reglas son las de Unicode SIN idioma: las mismas en cualquier máquina,
+// sin depender de la configuración regional. Por eso 'lower("I")' es "i"
+// también para quien escribe en turco (donde sería "ı").
+//
+// Las clases toman un 'char' y no un 'str': un analizador decide carácter a
+// carácter ('text.is_digit(s[i])'), y una versión para cadenas tendría que
+// inventar qué responde con "" (en Python, "".isdigit() es false aunque
+// "todos" sus caracteres lo sean). Para una cadena entera, un bucle.
+
+// 's' en minúsculas. Puede cambiar de LARGO: "İ" (I con punto) da "i" más
+// un punto combinante, dos caracteres. La sigma final se respeta ("ΟΔΟΣ" ->
+// "οδος").
+public fn lower(str s) -> str {
+    return __minusculas__(s);
+}
+
+// 's' en mayúsculas. Puede cambiar de largo: "straße" -> "STRASSE".
+public fn upper(str s) -> str {
+    return __mayusculas__(s);
+}
+
+// Un dígito DECIMAL de cualquier escritura (categoría Unicode Nd): '7', y
+// también '٣' (árabe). No lo son '²' ni '½': no forman un número en base
+// diez. Ojo: 'parse_int' solo entiende los dígitos ASCII '0'..'9'.
+public fn is_digit(char c) -> bool {
+    return __es_digito__(c);
+}
+
+// Una letra de cualquier alfabeto: 'a', 'Ñ', 'ß', 'λ', '中'. No lo son un
+// acento combinante suelto (U+0301) ni un emoji.
+public fn is_alpha(char c) -> bool {
+    return __es_letra__(c);
+}
+
+// 'is_alpha(c) or is_digit(c)', exactamente (sin '²' ni '½').
+public fn is_alnum(char c) -> bool {
+    return __es_alfanumerico__(c);
+}
+
+// Espacio en blanco: ' ', '\t', '\n', '\r', el espacio duro U+00A0, los
+// separadores de línea y párrafo de Unicode... (el 'str.isspace' de
+// Python). Es lo que recortan 'trim*' y lo que separa 'split_whitespace'.
+public fn is_space(char c) -> bool {
+    return __es_espacio__(c);
+}
+
+// Una letra mayúscula ('A', 'Ñ', 'Ω'). Lo que no tiene caso ('1', '中') no
+// es mayúscula ni minúscula.
+public fn is_upper(char c) -> bool {
+    return __es_mayuscula__(c);
+}
+
+// Una letra minúscula ('a', 'ñ', 'ß').
+public fn is_lower(char c) -> bool {
+    return __es_minuscula__(c);
+}
+
+// --- buscar ----------------------------------------------------------------- //
+
+// ¿Aparece 'part' en 's'? La cadena vacía aparece en todas.
+public fn contains(str s, str part) -> bool {
+    return __buscar__(s, part, 0) >= 0;
+}
+
+// Dónde empieza la ÚLTIMA aparición de 'part' en 's', o -1; puede solaparse
+// con la anterior ('rfind("aaa", "aa")' es 1). La cadena vacía aparece al
+// final: 'rfind(s, "")' es 'len(s)' (como en Python).
+public fn rfind(str s, str part) -> int {
+    return __buscar_ultimo__(s, part);
+}
+
+// Cuántas veces aparece 'part' en 's' SIN SOLAPARSE, de izquierda a
+// derecha: 'count("aaaa", "aa")' es 2. Un 'part' vacío es ValorInvalido
+// (Python responde len(s) + 1, que no cuenta nada útil).
+public fn count(str s, str part) -> int {
+    if (len(part) == 0) {
+        throw exc.ValorInvalido{ mensaje: "text.count: la parte que se cuenta no puede ser vacía" };
+    };
+    return __apariciones__(s, part);
+}
+
+// --- partir ----------------------------------------------------------------- //
+
+// Las partes de 's' entre cada aparición de 'sep', en orden (el
+// 'str.split(sep)' de Python). Siempre hay UNA parte más que separadores, así
+// que un separador al principio o al final da una parte vacía allí, y dos
+// seguidos, una vacía entre ellos:
+//   split("a,b", ",") -> ["a", "b"]      split(",a,", ",") -> ["", "a", ""]
+//   split("", ",")    -> [""]            split("ab", ",")  -> ["ab"]
+// Así 'join(&split(s, sep), sep)' devuelve 's'. Un 'sep' vacío es
+// ValorInvalido: no dice por dónde cortar. Para cortar por espacios de
+// cualquier largo está 'split_whitespace'.
+public fn split(str s, str sep) -> vec.Vector<str> {
+    if (len(sep) == 0) {
+        throw exc.ValorInvalido{ mensaje: "text.split: el separador no puede ser vacío" };
+    };
+    var int n = __cuenta_partes__(s, sep);
+    var int espacios = espacios_para(n);
+    var str ptr mutable bloque = mem.reserve<str>(espacios);
+    __partir__(s, sep, bloque, n);
+    return vec.adopt<str>(bloque, n, espacios);
+}
+
+// Las palabras de 's': los trozos que separan los espacios en blanco
+// ('is_space'), de cualquier largo. Sin partes vacías: los espacios al
+// principio y al final no cuentan, y "" o "   " dan un vector vacío (el
+// 'str.split()' sin argumentos de Python).
+public fn split_whitespace(str s) -> vec.Vector<str> {
+    var int n = __cuenta_palabras__(s);
+    var int espacios = espacios_para(n);
+    var str ptr mutable bloque = mem.reserve<str>(espacios);
+    __palabras__(s, bloque, n);
+    return vec.adopt<str>(bloque, n, espacios);
+}
+
+// Las líneas de 's', sin sus fines de línea. Un fin de línea es "\n" o
+// "\r\n" —los mismos que entiende 'sistema.entrada.leer_linea'—; un "\r"
+// suelto NO corta (es parte de la línea), y tampoco los separadores de
+// Unicode (U+2028) ni '\f': un editor no los cuenta como otra línea, y el
+// número de línea de un diagnóstico tiene que ser el que ve el usuario. El
+// último fin de línea no abre una línea vacía:
+//   lines("a\nb")   -> ["a", "b"]        lines("a\nb\n") -> ["a", "b"]
+//   lines("a\n\nb") -> ["a", "", "b"]    lines("")       -> []
+//   lines("\n")     -> [""]
+// Así la línea 'k' (desde 1) de un archivo es 'lines(contenido).get(k - 1)'.
+public fn lines(str s) -> vec.Vector<str> {
+    var int n = __cuenta_lineas__(s);
+    var int espacios = espacios_para(n);
+    var str ptr mutable bloque = mem.reserve<str>(espacios);
+    __lineas__(s, bloque, n);
+    return vec.adopt<str>(bloque, n, espacios);
+}
+
+// --- recortar, reemplazar, armar ------------------------------------------- //
+
+// 's' sin los espacios en blanco ('is_space') del principio ni del final.
+public fn trim(str s) -> str {
+    return __recorta__(s);
+}
+
+// 's' sin los espacios en blanco del principio.
+public fn trim_start(str s) -> str {
+    return __recorta_inicio__(s);
+}
+
+// 's' sin los espacios en blanco del final.
+public fn trim_end(str s) -> str {
+    return __recorta_final__(s);
+}
+
+// 's' con cada aparición de 'old' (sin solaparse, de izquierda a derecha)
+// cambiada por 'new'. Un 'old' vacío es ValorInvalido: Python mete 'new'
+// entre cada dos caracteres, y casi siempre es un error de quien llama (un
+// patrón que llegó vacío) que convierte el texto en otro sin avisar.
+public fn replace(str s, str old, str new) -> str {
+    if (len(old) == 0) {
+        throw exc.ValorInvalido{ mensaje: "text.replace: el texto que se reemplaza no puede ser vacío" };
+    };
+    var vec.Vector<str> partes = split(s, old);
+    return __unir__(partes.data(), partes.len(), new);
+}
+
+// 's' repetida 'n' veces seguidas ("" si 'n' es 0). Un 'n' negativo es
+// ValorInvalido (Python devuelve "", y esconde un cálculo que salió mal).
+public fn repeat(str s, int n) -> str {
+    if (n < 0) {
+        throw exc.ValorInvalido{ mensaje: f"text.repeat: no se puede repetir {n} veces" };
+    };
+    // Por DUPLICACIÓN: 'bloque' vale s, ss, ssss, ... y se suma al resultado
+    // cuando el bit de 'n' está encendido. Son log2(n) vueltas, y lo que se
+    // copia en total es lineal en el resultado (cada duplicación copia tanto
+    // como todas las anteriores juntas). Un '+' por cada copia sería n
+    // vueltas y, como cada '+' copia todo lo anterior, cuadrático.
+    var str resultado = "";
+    var str bloque = s;
+    var int k = n;
+    while (k > 0) {
+        if (k % 2 == 1) { resultado = resultado + bloque; };
+        k = k / 2;
+        if (k > 0) { bloque = bloque + bloque; };
+    }
+    return resultado;
+}
+
+// 's' con 'fill' a la IZQUIERDA hasta tener 'width' caracteres:
+// 'pad_left("7", 3, '0')' es "007". Si 's' ya tiene 'width' o más, vuelve
+// tal cual (no se corta). Cuenta caracteres, no el ANCHO en pantalla: un
+// emoji o un ideograma chino ocupan dos columnas en una terminal.
+public fn pad_left(str s, int width, char fill) -> str {
+    if (len(s) >= width) { return s; };
+    return repeat(f"{fill}", width - len(s)) + s;
+}
+
+// Como 'pad_left', con el relleno a la DERECHA: 'pad_right("ab", 4, '.')'
+// es "ab..".
+public fn pad_right(str s, int width, char fill) -> str {
+    if (len(s) >= width) { return s; };
+    return s + repeat(f"{fill}", width - len(s));
 }
 
 #export package as text

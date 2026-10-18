@@ -53,15 +53,18 @@ dice qué se puede usar hoy, para que la referencia no prometa de más.
    Qué tipos tienen que destruirse            completo   sistema de tipos
    Drop automático al cerrar el ámbito        completo   semántica + ejecución
    Destruir por tipo (genéricos, bloques)     completo   semántica + ejecución
+   Destruir las globales al terminar          parcial    intérprete (la VM no)
    Arenas como tipo de librería               pendiente  —
    Préstamos verificados al compilar          parcial    MIR (fase 6)
+   Captura de solo lectura de una lambda      completo   ``SEM003``/``SEM015``/``SEM036``
    Recuento de referencias                    futuro     —
    =========================================  =========  ==========================
 
 Propiedad y transferencia
 --------------------------
 
-Un valor pertenece a la variable que lo nombra. Un ``struct`` es un **valor**:
+Un valor pertenece a la variable que lo nombra. Un ``struct`` (y un ``enum``
+con datos) es un **valor**:
 ligarlo a otro nombre lo copia, y mutar la copia no toca el original — el
 único tipo que refiere a otro sitio es ``ptr``. Pero copiar algo que tiene
 **obligación de destrucción** no duplica el recurso: duplica al dueño, y su
@@ -124,7 +127,7 @@ casos el parámetro recibe una copia prestada y **no** la destruye:
   genérica. Los drops se deciden por declaración, no por instancia: es un
   límite conocido.
 
-Antes de la 0.3.1, pasar por nombre dejaba al llamador como dueño y
+Antes de la 0.4.1, pasar por nombre dejaba al llamador como dueño y
 ``consumir(move b)`` no dejaba a nadie: el recurso no se destruía nunca.
 
 En ejecución, el intérprete hace cumplir lo mismo sobre las celdas: leer una
@@ -171,6 +174,52 @@ Y el bloque se cierra igual por un ``return`` anticipado, un ``break``, un
 ``continue`` o un ``throw``: si la destrucción solo ocurriera al llegar al
 final, cualquier salida temprana sería una fuga.
 
+Las globales mueren al terminar el programa
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Una variable global es dueña de su valor igual que un local, y su "llave que
+cierra" es el **final del programa**: cuando ``main`` vuelve (después de que
+mueran sus locales), o al terminar un guion sin ``main``. Mueren en orden
+**inverso al de declaración**, como las de un bloque, y las de las librerías
+**después** que las del programa: las librerías se inicializaron primero, así
+que un global del programa puede depender de uno suyo y no al revés.
+
+.. code-block:: srcx
+   :class: fragmento
+
+   var arch.File registro = arch.open("salida.txt", "w");
+   var Buffer cache = crear(64);
+
+   fn main() -> int {
+       registro.write("hola\n");
+       return 0;
+   }   // mueren los locales de main; después 'cache' y luego 'registro'
+       // (que así llega a escribirse en el disco)
+
+Una global movida (``return move g;``) ya no es de nadie y no se destruye. Si
+el destructor de una global lee otra que ya murió, es un uso tras ``free``
+(``RT003``), no un valor muerto leído en silencio. Un destructor que lanza es
+``RT021``, como en cualquier otro sitio.
+
+Las destruye toda terminación que no sea ``sistema.proceso.salir``: la
+**normal** y la de un error que nadie atrapó, sea un ``throw``, una excepción
+``EXCxxx`` o un error de ejecución (``RT``). Cualquiera de ellos ya
+desenrolló la pila destruyendo los locales de cada marco, y las globales son
+lo único que quedaba vivo (un ``File`` global se vuelca). El error se escribe
+primero; si un destructor falla después, se dice además, y no se vuelve a
+intentar. A diferencia de C++, un ``RT`` no es un ``std::abort``: el
+intérprete sigue vigilando el estado, así que un destructor que choca con
+algo roto da su propio error en vez de comportarse de forma indefinida.
+``sistema.proceso.salir`` no las destruye (es ``std::_Exit``/``os._exit``).
+Con ``--test``, cada prueba tiene sus propias globales: se inician antes de
+ella y mueren al terminarla, con la misma regla.
+
+Hoy esto lo hace el **intérprete**. El HIR no lleva la lista de lo que muere
+al terminar (lo decide el intérprete mirando el valor: lo que no tiene ningún
+``__free__`` dentro no tiene nada que correr), así que no se ve en
+``--hir-pretty``; ``--trace-memory`` sí lo muestra (``drop global``). La VM
+todavía no destruye las globales.
+
 Lo que ya no es suyo no se destruye
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -193,6 +242,35 @@ compilador ni ningún dato nuevo en ejecución.
 Devolver un valor **transfiere su propiedad**, así que tampoco se destruye al
 salir: pasa a morir cuando muera quien lo recibió. Y vale igual para un campo:
 ``return p.a;`` entrega ese campo y deja que el resto de ``p`` muera normal.
+
+Devolver por valor entrega una copia
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Lo que una función devuelve **por valor** le llega al llamador como una
+**copia**, igual que al ligarlo a una variable o pasarlo por parámetro: mutar
+el resultado no toca aquello de donde salió.
+
+.. code-block:: srcx
+   :class: fragmento
+
+   var Caja g = Caja{ n: 1 };
+   fn dame() -> Caja { return g; }
+
+   dame().sube();        // sube una copia: 'g.n' sigue en 1
+   var Caja c = dame();  // 'c' es otra copia
+   c.n = 5;              // 'g.n' sigue en 1
+
+Devolver un **local** no copia nada: el local muere al salir, así que
+devolverlo lo **mueve** (lo de arriba). Pero una **global** sigue viva y
+sigue siendo dueña, así que devolverla por valor deja dos copias. Con un tipo
+sin destructor no pasa nada; con uno que lo tiene serían dos dueños del mismo
+recurso, y ``return g;`` (o ``throw g;``) es ``SEM032``, la misma regla que
+``var R x = g;``. Para entregarla: ``return move g;`` (la global queda movida
+y ya no se destruye al terminar el programa); para dejarla leer, la función
+devuelve un puntero (``R ptr``) y ``return &g;``.
+
+Antes de la 0.4.1 el resultado quedaba **enlazado** al original: ``dame().n =
+5`` cambiaba ``g`` y ``v.get(0).push(8)`` el vector guardado dentro de ``v``.
 
 Valores que nadie recibe
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -260,6 +338,38 @@ leerlo sin copiarlo, ``v.at(0)`` lo **presta** (un puntero); para quedárselo,
    usar(v.at(0));                     // prestado: sigue en el vector
    var Buffer b = v.take(0);          // sacado: ahora es de 'b'
    // al cerrar el ámbito: 'b' se destruye, y el vector con lo que tenga
+
+Modificar un elemento en su sitio
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Como ``v.get(i)`` y ``v[i]`` entregan una **copia**, escribir en ellas no
+cambiaría el vector: la copia muere al terminar la sentencia. Por eso hacerlo
+es un error de compilación, ``SEM041``, y no un programa que corre sin hacer
+nada. Para modificar el elemento guardado se pide **prestado y mutable**, de
+forma explícita, con ``at_mut`` (``Dictionary`` tiene el mismo método, por
+clave):
+
+.. code-block:: srcx
+   :class: fragmento
+
+   v.at_mut(0).n = 5;          // un 'Caja ptr mutable' al elemento 0
+   vv.at_mut(0).push(8);       // 'vv' es un Vector<Vector<int>>
+   d.at_mut("clave").push(1);  // el valor guardado bajo "clave"
+   v[0] = Caja{ n: 5 };        // reemplazar el elemento entero sí vale
+   v[0].n = 5;                 // SEM041: cambiaría una copia
+   vv[0].push(8);              // SEM041: igual, 'push' modifica su receptor
+
+El préstamo es un puntero al **interior** del contenedor, y deja de valer en
+cuanto el contenedor mueve sus elementos: un ``push`` que lo hace crecer, un
+``put`` que redistribuye las casillas, sacar el elemento o destruir el
+contenedor. Usarlo después es ``RT003``. Se pide justo antes de usarlo, no se
+guarda.
+
+Llamar a un método que modifica sobre el **resultado de una llamada**
+(``abrir(...).write(...)``) sí se acepta: ese valor es nuevo, no la copia de
+algo guardado, y el método puede tener otros efectos (escribir un archivo).
+Lo que no se acepta es **asignar** a un campo de ese resultado (``f().n = 5``):
+eso no puede tener ningún efecto.
 
 Liberar antes de tiempo
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -360,6 +470,70 @@ tipos recursivos del lenguaje se cierran sobre sí mismos a través de punteros
 seguir mirando.
 
 ``T?`` y ``error T`` son envoltorios: heredan la respuesta de lo que envuelven.
+Al ejecutar, un ``R?`` que **vale** ``null`` no tiene nada que destruir: su
+``__free__`` no se llama (ni al cerrar el ámbito, ni como temporal, ni con
+``free``), y lo mismo vale para un campo ``R?``, el payload de una variante o
+un elemento de un ``Vector<R?>`` que valen ``null``. El ``__free__`` siempre
+recibe un ``R`` de verdad.
+
+Un ``enum`` suma la tiene si el payload de alguna variante la tiene, y en un
+enum **genérico** se mira el payload ya sustituido: ``Res<R, int>`` destruye
+su ``Ok(R)``, ``Res<int, int>`` no tiene nada que destruir y se copia
+libremente.
+
+Un **valor función** (``fn(int) -> int``, ver
+:ref:`funciones como valores <funciones-como-valores>`) nunca tiene que
+destruirse: no captura nada, así que se copia libremente. Lo que sí cuenta es
+lo que se le PASA al llamarlo: un argumento con destructor hacia un parámetro
+por valor exige ``move`` (``SEM032``), igual que en una llamada directa.
+
+.. _memoria-lambdas:
+
+Lo que lee una lambda es un préstamo
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Una :ref:`lambda <lambdas>` lee los locales y los parámetros de quien la
+escribe (sus **capturas**) sin copiarlos ni moverlos: los lee en su sitio,
+vivos. Para la propiedad, una captura es un **préstamo de solo lectura**,
+igual que lo que se lee a través de un ``ptr`` o lo que liga un patrón:
+
+- no se modifica: asignarlo, llamar a un método que modifica su receptor,
+  moverlo o liberarlo es ``SEM003``, y escribir a través de un puntero
+  capturado es ``SEM015`` (un ``ptr mutable`` capturado se ve como ``ptr``);
+- no se cede: ``return x`` o ``throw x`` con ``x`` capturado y con
+  destructor es ``SEM036`` —serían dos dueños—, y ligarlo a un nombre nuevo
+  (``var R r = x;``) es ``SEM032``;
+- no se destruye al terminar la lambda: lo destruye su dueño, una vez, en la
+  llave que cierra **su** ámbito.
+
+**Por qué es seguro sin un análisis de vidas.** Un préstamo es peligroso
+cuando puede vivir más que lo prestado. Una lambda no puede: solo existe como
+argumento de una llamada (``SEM050``), y la función que la recibe solo puede
+llamarla o pasarla a otro parámetro de tipo función (``SEM051``), nunca
+guardarla ni devolverla. Así que la lambda muere **antes de que termine la
+llamada** que la recibe, y esa llamada está dentro del ámbito de quien la
+escribió: todo lo que captura sigue vivo mientras la lambda pueda correr. Es
+la misma garantía que da un ``ptr`` a un local pasado a una función que no lo
+guarda, pero aquí la comprueba el compilador con dos reglas locales, sin
+seguir vidas entre funciones.
+
+El riesgo que cierra ``SEM051`` es concreto: si una función pudiera guardar
+su parámetro ``fn(...) -> R`` en un campo o en una global, una lambda que
+llega por él sobreviviría a la llamada, y leería después los locales de un
+marco que ya terminó (y que pudieron destruirse). Por eso el parámetro es
+prestado, y quien necesite guardar una función que recibe la declara
+``(fn(...) -> R)?``, que no admite lambdas.
+
+Lo que la regla **no** cubre, como el resto de los préstamos (ver
+`Punteros y préstamos`_): mientras la lambda corre, la función que la recibe
+puede estar modificando lo mismo que ella lee —``v.sort_by(...)`` con una
+lambda que lee ``v``—. Leer una celda que el ordenamiento sacó un momento es
+un error de ejecución (``RT001``), no un valor equivocado.
+
+Lo que la lambda **posee** es suyo, como en una función: un parámetro por
+valor con destructor se lo cede quien la llama (con ``move``, ``SEM032``) y
+muere al terminar **cada** llamada a la lambda, salvo que ella lo ceda; y sus
+locales mueren en la llave que cierra su cuerpo.
 
 Punteros y préstamos
 ---------------------
@@ -384,6 +558,29 @@ tiempos de vida se hará sobre el MIR, cuando exista (fase 6 del
 :doc:`repo/ROADMAP`). Hasta entonces el modelo es seguro pero conservador: sin
 préstamos verificados al compilar, la forma garantizada de llevar un valor a
 otro sitio es moverlo.
+
+.. _prestamo-de-patron:
+
+Lo que liga un patrón es prestado
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Un ``match`` no saca nada de su sujeto: lo que liga un patrón es **lo de
+dentro, prestado**. Vale igual para el payload de ``case Nodo.A(x)`` y para el
+contenido de ``case v`` sobre un ``T?``
+(:ref:`desenvolver un opcional <desenvolver-opcional>`):
+
+- no se copia: modificar un campo de ``v`` (``v.n = 1``) modifica el del
+  sujeto, y solo se puede si el sujeto se puede modificar (``SEM003``);
+- no se reasigna (``v = otra``, ``SEM003``);
+- no se cede: ``move v`` o ``return v`` dejarían dos dueños, y es ``SEM036``
+  —el mismo error que ceder algo a lo que se llega por un puntero—; ligarlo a
+  un nombre nuevo con destructor (``var R r = v;``) es ``SEM032``;
+- al cerrar la rama **no se destruye**: lo destruye el sujeto, una vez.
+
+``x ?? d``, en cambio, es una lectura: entrega una **copia** del contenido de
+``x`` (o ``d``). Por eso, si el contenido tiene destructor, es ``SEM032``: la
+copia y el original serían dos dueños del mismo recurso. Un opcional con
+destructor se desenvuelve con ``match``.
 
 Arenas
 -------

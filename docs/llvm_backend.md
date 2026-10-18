@@ -3,14 +3,13 @@
 > **Este plan no se va a ejecutar.** Se conserva como registro de la decisión,
 > no como trabajo pendiente.
 >
-> El target nativo es una **VM de bytecode con JIT** (ver
+> El target nativo es una **VM de registros** (con un JIT pendiente; ver
 > [ARCHITECTURE.md](../ARCHITECTURE.md) y [mir.md](mir.md)). El MIR ya es un
 > IR de registros con CFG, así que LLVM en medio añadía una dependencia
 > enorme y un segundo modelo de memoria que verificar, a cambio de un
 > generador de código que la VM también da.
 >
-> `--check` sigue detectando `llvm-config` y reportándolo, pero nada del
-> pipeline lo usa.
+> Ni `--check` ni ninguna otra parte del compilador detecta o usa LLVM.
 >
 > WebAssembly sí llegó, y por otro camino: el target web baja del `.phir` a
 > WIR y de ahí a JS/WASM, sin pasar por LLVM.

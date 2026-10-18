@@ -1,0 +1,10 @@
+#from io #import stdp
+fn baja(int n) -> int {
+    if (n == 0) { return 0; }
+    return 1 + baja(n - 1);
+}
+fn main() -> int {
+    stdp.println(f"{baja(800)}");
+    stdp.println(f"{baja(5000)}");
+    return 0;
+}

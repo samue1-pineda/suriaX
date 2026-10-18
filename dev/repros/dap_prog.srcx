@@ -1,0 +1,10 @@
+#from io #import stdp
+fn main() -> int {
+    var int a = 41;
+    stdp.println(f"{a}");
+    return 0;
+}
+test "una prueba" {
+    var int b = 1;
+    expect (b == 1);
+}

@@ -51,6 +51,7 @@ from .control_flow import (
 from .directives import parse_from_dir, parse_import_dir
 from .errors import parse_throw_stmt, parse_try_stmt
 from .memory import parse_free_stmt, parse_move_stmt
+from .testing import parse_expect_stmt
 from .types import parse_type, parse_type_params
 
 
@@ -103,6 +104,84 @@ def _dispatch_statement(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
 def _with(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
     from .with_stmt import parse_with_stmt  # import diferido: with -> block -> statements
     return parse_with_stmt(cursor, ctx)
+
+
+def _fn_statement(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
+    """``fn(int) -> int g = doble;``: un TIPO funcion arranca la declaracion.
+
+    Igual que ``int x = 3;`` se escribe sin ``var``, un binding de tipo
+    funcion tambien. ``fn`` seguido de ``(`` solo puede ser un tipo (una
+    declaracion de funcion lleva su nombre ahi); cualquier otra forma sigue
+    el camino de siempre, con el diagnostico de siempre."""
+    if cursor.peek(1).type is TokenType.L_PAREN:
+        return parse_var_decl(cursor, ctx)
+    return parse_expr_stmt(cursor, ctx)
+
+
+#: tokens que solo pueden empezar un TIPO, nunca una expresion: tras un '('
+#: al comienzo de una sentencia dicen que el parentesis agrupa un tipo
+_TYPE_ONLY_STARTS = frozenset({
+    TokenType.VOID, TokenType.BOOL, TokenType.INT, TokenType.FLOAT,
+    TokenType.CHAR, TokenType.STR, TokenType.BYTE, TokenType.ERRORTYPE,
+})
+
+
+def _paren_statement(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
+    """``(fn(int) -> int)? h = null;``: un tipo ENTRE PARENTESIS arranca la
+    declaracion, igual que ``fn(int) -> int g = doble;`` sin ``var``.
+
+    Se decide con dos tokens de lookahead y sin retroceso: tras el ``(``,
+    ``fn (`` o una palabra de tipo (``int``, ``str``, ``error``...) no pueden
+    empezar ninguna expresion, asi que el parentesis solo puede agrupar un
+    tipo. Un nombre (``(Caja ptr)? p``) si podria empezar una expresion
+    (``(c) = d;``): ese caso sigue el camino de las expresiones y, si como
+    expresion no se entiende y tiene forma de tipo, el error pide ``var``.
+    Antes la forma con ``fn`` era ``PAR012: token inesperado en expresion:
+    FUNCTION``, que no decia que faltaba ``var``."""
+    nxt = cursor.peek(1).type
+    if (nxt is TokenType.FUNCTION and cursor.peek(2).type is TokenType.L_PAREN)             or nxt in _TYPE_ONLY_STARTS:
+        return parse_var_decl(cursor, ctx)
+    start = cursor.pos
+    try:
+        return parse_expr_stmt(cursor, ctx)
+    except ParseError.ParseError as exc:
+        if not _parenthesized_type_ahead(cursor, start):
+            raise
+        raise ParseError.ExpectedTokenError(
+            f"{exc.message}. Si es una declaracion con un tipo entre "
+            "parentesis, empiezala con 'var' o 'const' "
+            "('var (Caja ptr)? p = null;'): sin ellos, un '(' al comienzo de "
+            "una sentencia abre una expresion",
+            line=exc.line, column=exc.column,
+        ) from exc
+
+
+def _parenthesized_type_ahead(cursor: Cursor, start: int) -> bool:
+    """¿Tras el ``(`` de ``start`` y su ``)`` viene un sufijo de tipo (``?``
+    o ``ptr``) seguido de un nombre? Es la forma ``(T ptr)? nombre``, que
+    ninguna expresion tiene. Solo se mira para EXPLICAR un error: no decide
+    como se lee la sentencia."""
+    tokens, i, depth = cursor.tokens, start, 0
+    while i < len(tokens):
+        t = tokens[i].type
+        if t is TokenType.L_PAREN:
+            depth += 1
+        elif t is TokenType.R_PAREN:
+            depth -= 1
+            if depth == 0:
+                break
+        elif t in (TokenType.SEMICOLON, TokenType.L_BRACE, TokenType.R_BRACE,
+                   TokenType.EOF):
+            return False
+        i += 1
+    i += 1
+    seen_suffix = False
+    while i < len(tokens) and tokens[i].type in (TokenType.NULLABLE,
+                                                 TokenType.POINTER,
+                                                 TokenType.MUTABLE):
+        seen_suffix = True
+        i += 1
+    return seen_suffix and i < len(tokens) and _is_name(tokens[i].type)
 
 
 def _looks_like_typed_decl(cursor: Cursor) -> bool:
@@ -165,6 +244,16 @@ def parse_var_decl(cursor: Cursor, ctx: ParserContext) -> ast.Statement:
         return parse_type_decl(cursor, ctx, start_tok, qualifier)
 
     type_expr = parse_type(cursor, ctx)
+    if isinstance(type_expr, ast.FunctionTypeExpr) and qualifier is None \
+            and cursor.peek().type in (TokenType.L_BRACE, TokenType.SEMICOLON):
+        # 'fn () -> int { ... }': se leyo un TIPO funcion porque falta el
+        # nombre de la funcion, no el de una variable
+        nxt = cursor.peek()
+        raise ParseError.ExpectedTokenError(
+            "a la declaracion de la funcion le falta el NOMBRE "
+            "('fn nombre() -> ...'); 'fn(...)' sin nombre es un TIPO funcion",
+            line=nxt.ln, column=nxt.col,
+        )
     # 'const a = ...': lo que se leyo como TIPO era en realidad el nombre, y
     # falta la anotacion. Sin este caso el error hablaba de un nombre que
     # falta ("se esperaba IDENTIFIER, se encontro ASSIGN") justo despues de
@@ -306,7 +395,11 @@ def _llamada_al_constructor(contenedor, elemento, capacidad, ln, col):
 
 
 def _texto_de_tipo(t) -> str:
-    return t.name if isinstance(t, ast.NominalTypeExpr) else "<tipo>"
+    if isinstance(t, ast.NominalTypeExpr):
+        return t.name
+    if isinstance(t, ast.FunctionTypeExpr):
+        return "fn(...)"
+    return "<tipo>"
 
 
 def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
@@ -322,7 +415,7 @@ def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
         start_tok = cursor.peek()
     cursor.expect(TokenType.TYPE)
     name_tok = cursor.expect_name()
-    params = parse_type_params(cursor, ctx)
+    params, bounds = parse_type_params(cursor, ctx)
 
     value = None
     if cursor.match(TokenType.ASSIGN):
@@ -333,7 +426,7 @@ def parse_type_decl(cursor: Cursor, ctx: ParserContext, start_tok=None,
     cursor.expect(TokenType.SEMICOLON)
     return ast.TypeDecl(ln=start_tok.ln, col=start_tok.col,
                         qualifier=qualifier, name=name_tok.lexeme, value=value,
-                        type_params=params)
+                        type_params=params, type_bounds=bounds)
 
 
 def _looks_like_import_binding(cursor: Cursor) -> bool:
@@ -435,8 +528,11 @@ _STATEMENT_DISPATCH: Dict[TokenType, Callable[[Cursor, ParserContext], ast.State
     TokenType.STR: parse_var_decl,
     TokenType.BYTE: parse_var_decl,
     TokenType.ERRORTYPE: parse_var_decl,  # 'error int n = ...;' (tipo union)
+    TokenType.FUNCTION: _fn_statement,  # 'fn(int) -> int g = doble;'
+    TokenType.L_PAREN: _paren_statement,  # '(fn(int) -> int)? h = null;'
     TokenType.THROW: parse_throw_stmt,
     TokenType.TRY: parse_try_stmt,
+    TokenType.EXPECT: parse_expect_stmt,   # solo dentro de un 'test'
     TokenType.POINTER: _parse_ptr_prefix_misuse,  # 'ptr' ya no arranca un tipo (es postfijo)
     TokenType.IF: parse_if_stmt,
     TokenType.WHILE: parse_while_stmt,

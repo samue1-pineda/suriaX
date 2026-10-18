@@ -1,0 +1,2 @@
+fn id<T>(T x) -> T { return x; }
+fn main() -> int { var fn(int) -> int f = id; return 0; }

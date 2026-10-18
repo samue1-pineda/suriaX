@@ -1,0 +1,3 @@
+var (fn(int) -> int)? g = null;
+fn guarda(fn(int) -> int f) -> void { g = f; }
+fn main() -> int { return 0; }

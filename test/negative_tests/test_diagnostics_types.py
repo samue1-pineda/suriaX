@@ -116,7 +116,7 @@ def test_type_decl_sin_inicializador_sigue_limpio():
 
 
 def test_un_type_en_el_nivel_superior_sigue_siendo_valido():
-    assert_ok("const type int8;\nfn f() -> void { const int8 x; };")
+    assert_ok("const type int8;\nfn f() -> void { const int8? x = null; };")
 
 
 # --------------------------------------------------------------------------- #

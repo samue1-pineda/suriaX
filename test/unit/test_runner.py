@@ -87,6 +87,23 @@ def test_una_excepcion_cualquiera_tambien_es_un_fallo():
     assert fallos[0]["error"].startswith("KeyError"), fallos[0]["error"]
 
 
+def test_una_prueba_que_termina_el_proceso_es_un_fallo_y_no_corta_la_corrida():
+    """Una prueba que llama a algo que hace ``SystemExit`` (el ``main`` de
+    una herramienta) mataba el runner: la corrida terminaba sin resumen y
+    las categorías siguientes no corrían. Ahora es un fallo más, y las
+    pruebas de después corren. Lo mismo al importar el módulo."""
+    p, f, s, fallos, _o = _correr(
+        "def test_a():\n    raise SystemExit(3)\n"
+        "def test_b():\n    pass\n")
+    assert (p, f, s) == (1, 1, 0), (p, f, s)
+    assert fallos[0]["test"] == "test_a"
+    assert fallos[0]["error"].startswith("SystemExit"), fallos[0]["error"]
+
+    p, f, s, fallos, _o = _correr("raise SystemExit(1)\ndef test_a():\n    pass\n")
+    assert (p, f, s) == (0, 1, 0), (p, f, s)
+    assert fallos[0]["test"] == "<importación del módulo>"
+
+
 def test_un_modulo_que_no_importa_es_un_fallo_reportado():
     """Antes tumbaba el runner entero y se perdía el resultado del resto."""
     p, f, s, fallos, _o = _correr("def test_a(:\n    pass\n")

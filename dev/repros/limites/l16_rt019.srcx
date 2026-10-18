@@ -1,0 +1,6 @@
+#from io #import stdp
+fn baja(int n) -> int { return 1 + baja(n + 1); }
+fn main() -> int {
+    try { baja(0); } catch (e) { stdp.println("atrapado"); };
+    return 0;
+}

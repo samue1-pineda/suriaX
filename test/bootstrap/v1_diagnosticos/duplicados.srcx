@@ -1,0 +1,18 @@
+struct { int x; int x; } Punto;
+struct { int y; } Punto;
+fn f() -> int { return 1; }
+fn f() -> int { return 2; }
+var int g = 1;
+var int g = 2;
+enum Color { ROJO, VERDE, ROJO };
+enum Otro { VERDE, AZUL };
+fn AZUL() -> int { return 0; }
+struct { int v; } T;
+fn id<T>(T x) -> T { return x; }
+fn locales(int a, int a) -> int {
+    var int b = 1;
+    var int b = 2;
+    if (true) { var int b = 3; };
+    return b;
+}
+fn main() -> int { return f(); }

@@ -39,6 +39,7 @@ enum TypeKind : int {
     META = 10,
     ERROR = 11,
     BYTE = 12,
+    FUNCTION_TYPE = 13,
 };
 
 inline std::string TypeKind_Name(int valor) {
@@ -56,6 +57,7 @@ inline std::string TypeKind_Name(int valor) {
         case 10: return "META";
         case 11: return "ERROR";
         case 12: return "BYTE";
+        case 13: return "FUNCTION_TYPE";
         default: return std::string();
     }
 }
@@ -104,6 +106,7 @@ enum HookKind : int {
     MIN = 10,
     MAX = 11,
     HASH = 12,
+    CMP = 13,
     EXTENDED = 100,
 };
 
@@ -121,6 +124,7 @@ inline std::string HookKind_Name(int valor) {
         case 10: return "MIN";
         case 11: return "MAX";
         case 12: return "HASH";
+        case 13: return "CMP";
         case 100: return "EXTENDED";
         default: return std::string();
     }
@@ -231,6 +235,7 @@ class Caja {
         if (!p_) p_ = std::make_unique<T>();
         return *p_;
     }
+    void borra() { p_.reset(); }
 
  private:
     std::unique_ptr<T> p_;
@@ -319,6 +324,7 @@ class Assignment;
 class AddrOf;
 class Call;
 class MoveExpr;
+class LambdaExpr;
 class Index;
 class MemberAccess;
 class SizeofExpr;
@@ -338,6 +344,7 @@ class BreakStmt;
 class ContinueStmt;
 class MoveStmt;
 class ThrowStmt;
+class ExpectStmt;
 class CatchClause;
 class TryStmt;
 class FreeStmt;
@@ -376,18 +383,25 @@ class Module {
     bool has_symbols() const;
     const SymbolTable& symbols() const;
     SymbolTable* mutable_symbols();
+    void clear_symbols();
     const std::vector<Decl>& items() const;
     const Decl& items(int i) const;
     int items_size() const;
     Decl* add_items();
+    Decl* mutable_items(int i);
+    void clear_items();
     const std::vector<LibraryRef>& libraries() const;
     const LibraryRef& libraries(int i) const;
     int libraries_size() const;
     LibraryRef* add_libraries();
+    LibraryRef* mutable_libraries(int i);
+    void clear_libraries();
     const std::vector<Type>& types() const;
     const Type& types(int i) const;
     int types_size() const;
     Type* add_types();
+    Type* mutable_types(int i);
+    void clear_types();
  private:
     std::uint32_t m_schema_version{};
     std::string m_source_file{};
@@ -439,12 +453,15 @@ class Type {
     bool has_inner() const;
     const Type& inner() const;
     Type* mutable_inner();
+    void clear_inner();
     bool mut() const;
     void set_mut(bool valor);
     const std::vector<Type>& args() const;
     const Type& args(int i) const;
     int args_size() const;
     Type* add_args();
+    Type* mutable_args(int i);
+    void clear_args();
  private:
     int m_kind = 0;
     std::string m_name{};
@@ -477,6 +494,7 @@ class Symbol {
     bool has_type() const;
     const Type& type() const;
     Type* mutable_type();
+    void clear_type();
     bool mutable_() const;
     void set_mutable(bool valor);
     std::uint32_t moved_at() const;
@@ -485,6 +503,8 @@ class Symbol {
     const Type& param_types(int i) const;
     int param_types_size() const;
     Type* add_param_types();
+    Type* mutable_param_types(int i);
+    void clear_param_types();
     const detalle::Mapa<Symbol>& members() const;
     int members_size() const;
     HookKind hook_kind() const;
@@ -528,6 +548,7 @@ class HookEntry {
     bool has_symbol() const;
     const Symbol& symbol() const;
     Symbol* mutable_symbol();
+    void clear_symbol();
     const std::string& hook_name() const;
     void set_hook_name(std::string valor);
     const std::string& extension() const;
@@ -561,10 +582,14 @@ class SymbolTable {
     const HookEntry& hooks(int i) const;
     int hooks_size() const;
     HookEntry* add_hooks();
+    HookEntry* mutable_hooks(int i);
+    void clear_hooks();
     const std::vector<Symbol>& casts() const;
     const Symbol& casts(int i) const;
     int casts_size() const;
     Symbol* add_casts();
+    Symbol* mutable_casts(int i);
+    void clear_casts();
  private:
     detalle::Mapa<Symbol> m_types;
     detalle::Mapa<Symbol> m_values;
@@ -625,6 +650,7 @@ class Expr {
         kCastExpr = 24,
         kStructLiteral = 25,
         kMoveExpr = 26,
+        kLambdaExpr = 27,
         NODE_NOT_SET = 0,
     };
     NodeCase node_case() const;
@@ -634,6 +660,10 @@ class Expr {
     void set_col(std::uint32_t valor);
     std::uint32_t type_id() const;
     void set_type_id(std::uint32_t valor);
+    bool has_restype() const;
+    const Type& restype() const;
+    Type* mutable_restype();
+    void clear_restype();
     bool has_literal() const;
     const Literal& literal() const;
     Literal* mutable_literal();
@@ -676,11 +706,15 @@ class Expr {
     bool has_move_expr() const;
     const MoveExpr& move_expr() const;
     MoveExpr* mutable_move_expr();
+    bool has_lambda_expr() const;
+    const LambdaExpr& lambda_expr() const;
+    LambdaExpr* mutable_lambda_expr();
  private:
     int node_caso_ = 0;
     std::uint32_t m_ln{};
     std::uint32_t m_col{};
     std::uint32_t m_type_id{};
+    detalle::Caja<Type> m_restype;
     detalle::Caja<Literal> m_literal;
     detalle::Caja<InterpolatedString> m_interp;
     detalle::Caja<Identifier> m_identifier;
@@ -695,6 +729,7 @@ class Expr {
     detalle::Caja<CastExpr> m_cast_expr;
     detalle::Caja<StructLiteral> m_struct_literal;
     detalle::Caja<MoveExpr> m_move_expr;
+    detalle::Caja<LambdaExpr> m_lambda_expr;
 };
 
 class Literal {
@@ -759,6 +794,8 @@ class InterpolatedString {
     const InterpolatedString_Part& parts(int i) const;
     int parts_size() const;
     InterpolatedString_Part* add_parts();
+    InterpolatedString_Part* mutable_parts(int i);
+    void clear_parts();
  private:
     std::vector<InterpolatedString_Part> m_parts;
 };
@@ -837,6 +874,7 @@ class UnaryOp {
     bool has_operand() const;
     const Expr& operand() const;
     Expr* mutable_operand();
+    void clear_operand();
  private:
     std::string m_op{};
     detalle::Caja<Expr> m_operand;
@@ -860,9 +898,11 @@ class BinaryOp {
     bool has_left() const;
     const Expr& left() const;
     Expr* mutable_left();
+    void clear_left();
     bool has_right() const;
     const Expr& right() const;
     Expr* mutable_right();
+    void clear_right();
  private:
     std::string m_op{};
     detalle::Caja<Expr> m_left;
@@ -885,9 +925,11 @@ class Assignment {
     bool has_target() const;
     const Expr& target() const;
     Expr* mutable_target();
+    void clear_target();
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
     bool drops_old() const;
     void set_drops_old(bool valor);
  private:
@@ -912,6 +954,7 @@ class AddrOf {
     bool has_operand() const;
     const Expr& operand() const;
     Expr* mutable_operand();
+    void clear_operand();
     bool mut() const;
     void set_mut(bool valor);
  private:
@@ -935,16 +978,21 @@ class Call {
     bool has_callee() const;
     const Expr& callee() const;
     Expr* mutable_callee();
+    void clear_callee();
     const std::vector<Expr>& args() const;
     const Expr& args(int i) const;
     int args_size() const;
     Expr* add_args();
+    Expr* mutable_args(int i);
+    void clear_args();
     bool has_hook() const;
     const HookRef& hook() const;
     HookRef* mutable_hook();
+    void clear_hook();
     bool has_temp_drop() const;
     const HookRef& temp_drop() const;
     HookRef* mutable_temp_drop();
+    void clear_temp_drop();
     bool temp_by_type() const;
     void set_temp_by_type(bool valor);
  private:
@@ -971,8 +1019,51 @@ class MoveExpr {
     bool has_operand() const;
     const Expr& operand() const;
     Expr* mutable_operand();
+    void clear_operand();
  private:
     detalle::Caja<Expr> m_operand;
+};
+
+class LambdaExpr {
+ public:
+    LambdaExpr();
+    LambdaExpr(const LambdaExpr&);
+    LambdaExpr& operator=(const LambdaExpr&);
+    LambdaExpr(LambdaExpr&&) noexcept;
+    LambdaExpr& operator=(LambdaExpr&&) noexcept;
+    ~LambdaExpr();
+    static const LambdaExpr& default_instance();
+    bool ParseFromString(const std::string& datos);
+    bool ParseFromArray(const void* datos, int largo);
+    bool ParseFromIstream(std::istream* entrada);
+    bool _lee(detalle::Lector& lector, std::size_t fin);
+    const std::vector<Parameter>& params() const;
+    const Parameter& params(int i) const;
+    int params_size() const;
+    Parameter* add_params();
+    Parameter* mutable_params(int i);
+    void clear_params();
+    std::uint32_t return_type_id() const;
+    void set_return_type_id(std::uint32_t valor);
+    bool has_body() const;
+    const Block& body() const;
+    Block* mutable_body();
+    void clear_body();
+    const std::vector<std::string>& captures() const;
+    const std::string& captures(int i) const;
+    int captures_size() const;
+    void add_captures(std::string valor);
+    void clear_captures();
+    bool has_return_type() const;
+    const Type& return_type() const;
+    Type* mutable_return_type();
+    void clear_return_type();
+ private:
+    std::vector<Parameter> m_params;
+    std::uint32_t m_return_type_id{};
+    detalle::Caja<Block> m_body;
+    std::vector<std::string> m_captures;
+    detalle::Caja<Type> m_return_type;
 };
 
 class Index {
@@ -991,9 +1082,11 @@ class Index {
     bool has_obj() const;
     const Expr& obj() const;
     Expr* mutable_obj();
+    void clear_obj();
     bool has_index() const;
     const Expr& index() const;
     Expr* mutable_index();
+    void clear_index();
  private:
     detalle::Caja<Expr> m_obj;
     detalle::Caja<Expr> m_index;
@@ -1015,6 +1108,7 @@ class MemberAccess {
     bool has_obj() const;
     const Expr& obj() const;
     Expr* mutable_obj();
+    void clear_obj();
     const std::string& member() const;
     void set_member(std::string valor);
  private:
@@ -1038,9 +1132,11 @@ class SizeofExpr {
     bool has_type() const;
     const Type& type() const;
     Type* mutable_type();
+    void clear_type();
     bool has_hook() const;
     const HookRef& hook() const;
     HookRef* mutable_hook();
+    void clear_hook();
  private:
     detalle::Caja<Type> m_type;
     detalle::Caja<HookRef> m_hook;
@@ -1062,12 +1158,15 @@ class CastExpr {
     bool has_type() const;
     const Type& type() const;
     Type* mutable_type();
+    void clear_type();
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
     bool has_hook() const;
     const HookRef& hook() const;
     HookRef* mutable_hook();
+    void clear_hook();
  private:
     detalle::Caja<Type> m_type;
     detalle::Caja<Expr> m_value;
@@ -1092,13 +1191,18 @@ class StructLiteral {
     const std::vector<std::string>& field_names() const;
     const std::string& field_names(int i) const;
     int field_names_size() const;
+    void add_field_names(std::string valor);
+    void clear_field_names();
     const std::vector<Expr>& values() const;
     const Expr& values(int i) const;
     int values_size() const;
     Expr* add_values();
+    Expr* mutable_values(int i);
+    void clear_values();
     bool has_temp_drop() const;
     const HookRef& temp_drop() const;
     HookRef* mutable_temp_drop();
+    void clear_temp_drop();
     bool temp_by_type() const;
     void set_temp_by_type(bool valor);
  private:
@@ -1138,6 +1242,7 @@ class Stmt {
         kTypeDecl = 23,
         kThrowStmt = 24,
         kTryStmt = 25,
+        kExpectStmt = 26,
         NODE_NOT_SET = 0,
     };
     NodeCase node_case() const;
@@ -1190,6 +1295,9 @@ class Stmt {
     bool has_try_stmt() const;
     const TryStmt& try_stmt() const;
     TryStmt* mutable_try_stmt();
+    bool has_expect_stmt() const;
+    const ExpectStmt& expect_stmt() const;
+    ExpectStmt* mutable_expect_stmt();
  private:
     int node_caso_ = 0;
     std::uint32_t m_ln{};
@@ -1209,6 +1317,7 @@ class Stmt {
     detalle::Caja<TypeDecl> m_type_decl;
     detalle::Caja<ThrowStmt> m_throw_stmt;
     detalle::Caja<TryStmt> m_try_stmt;
+    detalle::Caja<ExpectStmt> m_expect_stmt;
 };
 
 class Drop {
@@ -1227,9 +1336,12 @@ class Drop {
     const std::vector<std::string>& path() const;
     const std::string& path(int i) const;
     int path_size() const;
+    void add_path(std::string valor);
+    void clear_path();
     bool has_hook() const;
     const HookRef& hook() const;
     HookRef* mutable_hook();
+    void clear_hook();
     bool by_type() const;
     void set_by_type(bool valor);
  private:
@@ -1255,10 +1367,14 @@ class Block {
     const Stmt& statements(int i) const;
     int statements_size() const;
     Stmt* add_statements();
+    Stmt* mutable_statements(int i);
+    void clear_statements();
     const std::vector<Drop>& drops() const;
     const Drop& drops(int i) const;
     int drops_size() const;
     Drop* add_drops();
+    Drop* mutable_drops(int i);
+    void clear_drops();
  private:
     std::vector<Stmt> m_statements;
     std::vector<Drop> m_drops;
@@ -1284,13 +1400,19 @@ class VarDecl {
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
     std::uint32_t type_id() const;
     void set_type_id(std::uint32_t valor);
+    bool has_type() const;
+    const Type& type() const;
+    Type* mutable_type();
+    void clear_type();
  private:
     std::string m_qualifier{};
     std::string m_name{};
     detalle::Caja<Expr> m_value;
     std::uint32_t m_type_id{};
+    detalle::Caja<Type> m_type;
 };
 
 class TypeDecl {
@@ -1313,6 +1435,7 @@ class TypeDecl {
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
  private:
     std::string m_qualifier{};
     std::string m_name{};
@@ -1341,9 +1464,11 @@ class IfStmt {
     bool has_condition() const;
     const Expr& condition() const;
     Expr* mutable_condition();
+    void clear_condition();
     bool has_then_block() const;
     const Block& then_block() const;
     Block* mutable_then_block();
+    void clear_then_block();
     bool has_else_block() const;
     const Block& else_block() const;
     Block* mutable_else_block();
@@ -1374,9 +1499,11 @@ class WhileStmt {
     bool has_condition() const;
     const Expr& condition() const;
     Expr* mutable_condition();
+    void clear_condition();
     bool has_body() const;
     const Block& body() const;
     Block* mutable_body();
+    void clear_body();
  private:
     detalle::Caja<Expr> m_condition;
     detalle::Caja<Block> m_body;
@@ -1398,12 +1525,17 @@ class CaseArm {
     bool has_pattern() const;
     const Expr& pattern() const;
     Expr* mutable_pattern();
+    void clear_pattern();
     bool has_body() const;
     const Stmt& body() const;
     Stmt* mutable_body();
+    void clear_body();
+    bool binds() const;
+    void set_binds(bool valor);
  private:
     detalle::Caja<Expr> m_pattern;
     detalle::Caja<Stmt> m_body;
+    bool m_binds{};
 };
 
 class MatchStmt {
@@ -1422,10 +1554,13 @@ class MatchStmt {
     bool has_subject() const;
     const Expr& subject() const;
     Expr* mutable_subject();
+    void clear_subject();
     const std::vector<CaseArm>& cases() const;
     const CaseArm& cases(int i) const;
     int cases_size() const;
     CaseArm* add_cases();
+    CaseArm* mutable_cases(int i);
+    void clear_cases();
  private:
     detalle::Caja<Expr> m_subject;
     std::vector<CaseArm> m_cases;
@@ -1447,6 +1582,7 @@ class ReturnStmt {
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
     bool transfers() const;
     void set_transfers(bool valor);
  private:
@@ -1502,6 +1638,7 @@ class MoveStmt {
     bool has_target() const;
     const Expr& target() const;
     Expr* mutable_target();
+    void clear_target();
  private:
     detalle::Caja<Expr> m_target;
 };
@@ -1522,8 +1659,38 @@ class ThrowStmt {
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
  private:
     detalle::Caja<Expr> m_value;
+};
+
+class ExpectStmt {
+ public:
+    ExpectStmt();
+    ExpectStmt(const ExpectStmt&);
+    ExpectStmt& operator=(const ExpectStmt&);
+    ExpectStmt(ExpectStmt&&) noexcept;
+    ExpectStmt& operator=(ExpectStmt&&) noexcept;
+    ~ExpectStmt();
+    static const ExpectStmt& default_instance();
+    bool ParseFromString(const std::string& datos);
+    bool ParseFromArray(const void* datos, int largo);
+    bool ParseFromIstream(std::istream* entrada);
+    bool _lee(detalle::Lector& lector, std::size_t fin);
+    bool has_condition() const;
+    const Expr& condition() const;
+    Expr* mutable_condition();
+    void clear_condition();
+    bool has_body() const;
+    const Block& body() const;
+    Block* mutable_body();
+    void clear_body();
+    const std::string& text() const;
+    void set_text(std::string valor);
+ private:
+    detalle::Caja<Expr> m_condition;
+    detalle::Caja<Block> m_body;
+    std::string m_text{};
 };
 
 class CatchClause {
@@ -1544,9 +1711,11 @@ class CatchClause {
     bool has_block() const;
     const Block& block() const;
     Block* mutable_block();
+    void clear_block();
     bool has_type() const;
     const Type& type() const;
     Type* mutable_type();
+    void clear_type();
  private:
     std::string m_name{};
     detalle::Caja<Block> m_block;
@@ -1569,13 +1738,17 @@ class TryStmt {
     bool has_try_block() const;
     const Block& try_block() const;
     Block* mutable_try_block();
+    void clear_try_block();
     const std::vector<CatchClause>& catches() const;
     const CatchClause& catches(int i) const;
     int catches_size() const;
     CatchClause* add_catches();
+    CatchClause* mutable_catches(int i);
+    void clear_catches();
     bool has_finally_block() const;
     const Block& finally_block() const;
     Block* mutable_finally_block();
+    void clear_finally_block();
  private:
     detalle::Caja<Block> m_try_block;
     std::vector<CatchClause> m_catches;
@@ -1598,9 +1771,11 @@ class FreeStmt {
     bool has_target() const;
     const Expr& target() const;
     Expr* mutable_target();
+    void clear_target();
     bool has_hook() const;
     const HookRef& hook() const;
     HookRef* mutable_hook();
+    void clear_hook();
  private:
     detalle::Caja<Expr> m_target;
     detalle::Caja<HookRef> m_hook;
@@ -1622,6 +1797,7 @@ class ExprStmt {
     bool has_expr() const;
     const Expr& expr() const;
     Expr* mutable_expr();
+    void clear_expr();
  private:
     detalle::Caja<Expr> m_expr;
 };
@@ -1744,9 +1920,20 @@ class TestDecl {
     bool has_body() const;
     const Block& body() const;
     Block* mutable_body();
+    void clear_body();
+    bool has_errfinally() const;
+    const Block& errfinally() const;
+    Block* mutable_errfinally();
+    void clear_errfinally();
+    bool has_finally_block() const;
+    const Block& finally_block() const;
+    Block* mutable_finally_block();
+    void clear_finally_block();
  private:
     std::string m_name{};
     detalle::Caja<Block> m_body;
+    detalle::Caja<Block> m_errfinally;
+    detalle::Caja<Block> m_finally_block;
 };
 
 class Parameter {
@@ -1766,9 +1953,14 @@ class Parameter {
     void set_name(std::string valor);
     std::uint32_t type_id() const;
     void set_type_id(std::uint32_t valor);
+    bool has_type() const;
+    const Type& type() const;
+    Type* mutable_type();
+    void clear_type();
  private:
     std::string m_name{};
     std::uint32_t m_type_id{};
+    detalle::Caja<Type> m_type;
 };
 
 class FunctionDecl {
@@ -1790,11 +1982,14 @@ class FunctionDecl {
     const Parameter& params(int i) const;
     int params_size() const;
     Parameter* add_params();
+    Parameter* mutable_params(int i);
+    void clear_params();
     std::uint32_t return_type_id() const;
     void set_return_type_id(std::uint32_t valor);
     bool has_body() const;
     const Block& body() const;
     Block* mutable_body();
+    void clear_body();
     const std::string& dunder() const;
     void set_dunder(std::string valor);
     const std::string& decorator() const;
@@ -1802,6 +1997,12 @@ class FunctionDecl {
     const std::vector<std::string>& type_params() const;
     const std::string& type_params(int i) const;
     int type_params_size() const;
+    void add_type_params(std::string valor);
+    void clear_type_params();
+    bool has_return_type() const;
+    const Type& return_type() const;
+    Type* mutable_return_type();
+    void clear_return_type();
  private:
     std::string m_name{};
     std::vector<Parameter> m_params;
@@ -1810,6 +2011,7 @@ class FunctionDecl {
     std::string m_dunder{};
     std::string m_decorator{};
     std::vector<std::string> m_type_params;
+    detalle::Caja<Type> m_return_type;
 };
 
 class Field {
@@ -1829,9 +2031,14 @@ class Field {
     void set_name(std::string valor);
     std::uint32_t type_id() const;
     void set_type_id(std::uint32_t valor);
+    bool has_type() const;
+    const Type& type() const;
+    Type* mutable_type();
+    void clear_type();
  private:
     std::string m_name{};
     std::uint32_t m_type_id{};
+    detalle::Caja<Type> m_type;
 };
 
 class StructDecl {
@@ -1853,9 +2060,13 @@ class StructDecl {
     const Field& fields(int i) const;
     int fields_size() const;
     Field* add_fields();
+    Field* mutable_fields(int i);
+    void clear_fields();
     const std::vector<std::string>& type_params() const;
     const std::string& type_params(int i) const;
     int type_params_size() const;
+    void add_type_params(std::string valor);
+    void clear_type_params();
  private:
     std::string m_name{};
     std::vector<Field> m_fields;
@@ -1880,13 +2091,23 @@ class EnumItem {
     bool has_value() const;
     const Expr& value() const;
     Expr* mutable_value();
+    void clear_value();
     const std::vector<std::uint32_t>& payload_type_ids() const;
     std::uint32_t payload_type_ids(int i) const;
     int payload_type_ids_size() const;
+    void add_payload_type_ids(std::uint32_t valor);
+    void clear_payload_type_ids();
+    const std::vector<Type>& payload_types() const;
+    const Type& payload_types(int i) const;
+    int payload_types_size() const;
+    Type* add_payload_types();
+    Type* mutable_payload_types(int i);
+    void clear_payload_types();
  private:
     std::string m_name{};
     detalle::Caja<Expr> m_value;
     std::vector<std::uint32_t> m_payload_type_ids;
+    std::vector<Type> m_payload_types;
 };
 
 class EnumDecl {
@@ -1908,9 +2129,17 @@ class EnumDecl {
     const EnumItem& items(int i) const;
     int items_size() const;
     EnumItem* add_items();
+    EnumItem* mutable_items(int i);
+    void clear_items();
+    const std::vector<std::string>& type_params() const;
+    const std::string& type_params(int i) const;
+    int type_params_size() const;
+    void add_type_params(std::string valor);
+    void clear_type_params();
  private:
     std::string m_name{};
     std::vector<EnumItem> m_items;
+    std::vector<std::string> m_type_params;
 };
 
 class ExternBlock {
@@ -1933,6 +2162,8 @@ class ExternBlock {
     const std::vector<std::string>& requires_() const;
     const std::string& requires_(int i) const;
     int requires_size() const;
+    void add_requires(std::string valor);
+    void clear_requires();
  private:
     std::string m_target{};
     std::string m_raw{};
@@ -2049,18 +2280,25 @@ inline void Module::set_source_file(std::string valor) { m_source_file = std::mo
 inline bool Module::has_symbols() const { return m_symbols.hay(); }
 inline const SymbolTable& Module::symbols() const { return m_symbols.hay() ? m_symbols.valor() : SymbolTable::default_instance(); }
 inline SymbolTable* Module::mutable_symbols() { return &m_symbols.crea(); }
+inline void Module::clear_symbols() { m_symbols.borra(); }
 inline const std::vector<Decl>& Module::items() const { return m_items; }
 inline const Decl& Module::items(int i) const { return m_items.at(static_cast<std::size_t>(i)); }
 inline int Module::items_size() const { return static_cast<int>(m_items.size()); }
 inline Decl* Module::add_items() { return &m_items.emplace_back(); }
+inline Decl* Module::mutable_items(int i) { return &m_items.at(static_cast<std::size_t>(i)); }
+inline void Module::clear_items() { m_items.clear(); }
 inline const std::vector<LibraryRef>& Module::libraries() const { return m_libraries; }
 inline const LibraryRef& Module::libraries(int i) const { return m_libraries.at(static_cast<std::size_t>(i)); }
 inline int Module::libraries_size() const { return static_cast<int>(m_libraries.size()); }
 inline LibraryRef* Module::add_libraries() { return &m_libraries.emplace_back(); }
+inline LibraryRef* Module::mutable_libraries(int i) { return &m_libraries.at(static_cast<std::size_t>(i)); }
+inline void Module::clear_libraries() { m_libraries.clear(); }
 inline const std::vector<Type>& Module::types() const { return m_types; }
 inline const Type& Module::types(int i) const { return m_types.at(static_cast<std::size_t>(i)); }
 inline int Module::types_size() const { return static_cast<int>(m_types.size()); }
 inline Type* Module::add_types() { return &m_types.emplace_back(); }
+inline Type* Module::mutable_types(int i) { return &m_types.at(static_cast<std::size_t>(i)); }
+inline void Module::clear_types() { m_types.clear(); }
 inline bool Module::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -2190,12 +2428,15 @@ inline void Type::set_name(std::string valor) { m_name = std::move(valor); }
 inline bool Type::has_inner() const { return m_inner.hay(); }
 inline const Type& Type::inner() const { return m_inner.hay() ? m_inner.valor() : Type::default_instance(); }
 inline Type* Type::mutable_inner() { return &m_inner.crea(); }
+inline void Type::clear_inner() { m_inner.borra(); }
 inline bool Type::mut() const { return m_mut; }
 inline void Type::set_mut(bool valor) { m_mut = std::move(valor); }
 inline const std::vector<Type>& Type::args() const { return m_args; }
 inline const Type& Type::args(int i) const { return m_args.at(static_cast<std::size_t>(i)); }
 inline int Type::args_size() const { return static_cast<int>(m_args.size()); }
 inline Type* Type::add_args() { return &m_args.emplace_back(); }
+inline Type* Type::mutable_args(int i) { return &m_args.at(static_cast<std::size_t>(i)); }
+inline void Type::clear_args() { m_args.clear(); }
 inline bool Type::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -2271,6 +2512,7 @@ inline void Symbol::set_col(std::uint32_t valor) { m_col = std::move(valor); }
 inline bool Symbol::has_type() const { return m_type.hay(); }
 inline const Type& Symbol::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
 inline Type* Symbol::mutable_type() { return &m_type.crea(); }
+inline void Symbol::clear_type() { m_type.borra(); }
 inline bool Symbol::mutable_() const { return m_mutable; }
 inline void Symbol::set_mutable(bool valor) { m_mutable = std::move(valor); }
 inline std::uint32_t Symbol::moved_at() const { return m_moved_at; }
@@ -2279,6 +2521,8 @@ inline const std::vector<Type>& Symbol::param_types() const { return m_param_typ
 inline const Type& Symbol::param_types(int i) const { return m_param_types.at(static_cast<std::size_t>(i)); }
 inline int Symbol::param_types_size() const { return static_cast<int>(m_param_types.size()); }
 inline Type* Symbol::add_param_types() { return &m_param_types.emplace_back(); }
+inline Type* Symbol::mutable_param_types(int i) { return &m_param_types.at(static_cast<std::size_t>(i)); }
+inline void Symbol::clear_param_types() { m_param_types.clear(); }
 inline const detalle::Mapa<Symbol>& Symbol::members() const { return m_members; }
 inline int Symbol::members_size() const { return static_cast<int>(m_members.size()); }
 inline HookKind Symbol::hook_kind() const { return static_cast<HookKind>(m_hook_kind); }
@@ -2408,6 +2652,7 @@ inline void HookEntry::set_kind(HookKind valor) { m_kind = valor; }
 inline bool HookEntry::has_symbol() const { return m_symbol.hay(); }
 inline const Symbol& HookEntry::symbol() const { return m_symbol.hay() ? m_symbol.valor() : Symbol::default_instance(); }
 inline Symbol* HookEntry::mutable_symbol() { return &m_symbol.crea(); }
+inline void HookEntry::clear_symbol() { m_symbol.borra(); }
 inline const std::string& HookEntry::hook_name() const { return m_hook_name; }
 inline void HookEntry::set_hook_name(std::string valor) { m_hook_name = std::move(valor); }
 inline const std::string& HookEntry::extension() const { return m_extension; }
@@ -2482,10 +2727,14 @@ inline const std::vector<HookEntry>& SymbolTable::hooks() const { return m_hooks
 inline const HookEntry& SymbolTable::hooks(int i) const { return m_hooks.at(static_cast<std::size_t>(i)); }
 inline int SymbolTable::hooks_size() const { return static_cast<int>(m_hooks.size()); }
 inline HookEntry* SymbolTable::add_hooks() { return &m_hooks.emplace_back(); }
+inline HookEntry* SymbolTable::mutable_hooks(int i) { return &m_hooks.at(static_cast<std::size_t>(i)); }
+inline void SymbolTable::clear_hooks() { m_hooks.clear(); }
 inline const std::vector<Symbol>& SymbolTable::casts() const { return m_casts; }
 inline const Symbol& SymbolTable::casts(int i) const { return m_casts.at(static_cast<std::size_t>(i)); }
 inline int SymbolTable::casts_size() const { return static_cast<int>(m_casts.size()); }
 inline Symbol* SymbolTable::add_casts() { return &m_casts.emplace_back(); }
+inline Symbol* SymbolTable::mutable_casts(int i) { return &m_casts.at(static_cast<std::size_t>(i)); }
+inline void SymbolTable::clear_casts() { m_casts.clear(); }
 inline bool SymbolTable::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -2638,6 +2887,10 @@ inline std::uint32_t Expr::col() const { return m_col; }
 inline void Expr::set_col(std::uint32_t valor) { m_col = std::move(valor); }
 inline std::uint32_t Expr::type_id() const { return m_type_id; }
 inline void Expr::set_type_id(std::uint32_t valor) { m_type_id = std::move(valor); }
+inline bool Expr::has_restype() const { return m_restype.hay(); }
+inline const Type& Expr::restype() const { return m_restype.hay() ? m_restype.valor() : Type::default_instance(); }
+inline Type* Expr::mutable_restype() { return &m_restype.crea(); }
+inline void Expr::clear_restype() { m_restype.borra(); }
 inline bool Expr::has_literal() const { return node_caso_ == kLiteral; }
 inline const Literal& Expr::literal() const {
     return node_caso_ == kLiteral && m_literal.hay() ? m_literal.valor() : Literal::default_instance();
@@ -2708,6 +2961,11 @@ inline const MoveExpr& Expr::move_expr() const {
     return node_caso_ == kMoveExpr && m_move_expr.hay() ? m_move_expr.valor() : MoveExpr::default_instance();
 }
 inline MoveExpr* Expr::mutable_move_expr() { node_caso_ = kMoveExpr; return &m_move_expr.crea(); }
+inline bool Expr::has_lambda_expr() const { return node_caso_ == kLambdaExpr; }
+inline const LambdaExpr& Expr::lambda_expr() const {
+    return node_caso_ == kLambdaExpr && m_lambda_expr.hay() ? m_lambda_expr.valor() : LambdaExpr::default_instance();
+}
+inline LambdaExpr* Expr::mutable_lambda_expr() { node_caso_ = kLambdaExpr; return &m_lambda_expr.crea(); }
 inline bool Expr::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -2722,6 +2980,13 @@ inline bool Expr::_lee(detalle::Lector& lector, std::size_t fin) {
         case 2: {
             if (tipo != 0) { if (!lector.salta(tipo)) return false; break; }
             std::uint64_t v; if (!lector.varint(v)) return false; m_col = static_cast<std::uint32_t>(v);
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_restype.crea()._lee(lector, hasta)) return false;
             break;
         }
         case 4: {
@@ -2841,6 +3106,14 @@ inline bool Expr::_lee(detalle::Lector& lector, std::size_t fin) {
             if (!m_move_expr.crea()._lee(lector, hasta)) return false;
             break;
         }
+        case 27: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            node_caso_ = kLambdaExpr;
+            if (!m_lambda_expr.crea()._lee(lector, hasta)) return false;
+            break;
+        }
         default:
             if (!lector.salta(tipo)) return false;
         }
@@ -2953,6 +3226,8 @@ inline const std::vector<InterpolatedString_Part>& InterpolatedString::parts() c
 inline const InterpolatedString_Part& InterpolatedString::parts(int i) const { return m_parts.at(static_cast<std::size_t>(i)); }
 inline int InterpolatedString::parts_size() const { return static_cast<int>(m_parts.size()); }
 inline InterpolatedString_Part* InterpolatedString::add_parts() { return &m_parts.emplace_back(); }
+inline InterpolatedString_Part* InterpolatedString::mutable_parts(int i) { return &m_parts.at(static_cast<std::size_t>(i)); }
+inline void InterpolatedString::clear_parts() { m_parts.clear(); }
 inline bool InterpolatedString::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3114,6 +3389,7 @@ inline void UnaryOp::set_op(std::string valor) { m_op = std::move(valor); }
 inline bool UnaryOp::has_operand() const { return m_operand.hay(); }
 inline const Expr& UnaryOp::operand() const { return m_operand.hay() ? m_operand.valor() : Expr::default_instance(); }
 inline Expr* UnaryOp::mutable_operand() { return &m_operand.crea(); }
+inline void UnaryOp::clear_operand() { m_operand.borra(); }
 inline bool UnaryOp::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3166,9 +3442,11 @@ inline void BinaryOp::set_op(std::string valor) { m_op = std::move(valor); }
 inline bool BinaryOp::has_left() const { return m_left.hay(); }
 inline const Expr& BinaryOp::left() const { return m_left.hay() ? m_left.valor() : Expr::default_instance(); }
 inline Expr* BinaryOp::mutable_left() { return &m_left.crea(); }
+inline void BinaryOp::clear_left() { m_left.borra(); }
 inline bool BinaryOp::has_right() const { return m_right.hay(); }
 inline const Expr& BinaryOp::right() const { return m_right.hay() ? m_right.valor() : Expr::default_instance(); }
 inline Expr* BinaryOp::mutable_right() { return &m_right.crea(); }
+inline void BinaryOp::clear_right() { m_right.borra(); }
 inline bool BinaryOp::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3226,9 +3504,11 @@ inline bool Assignment::ParseFromIstream(std::istream* entrada) {
 inline bool Assignment::has_target() const { return m_target.hay(); }
 inline const Expr& Assignment::target() const { return m_target.hay() ? m_target.valor() : Expr::default_instance(); }
 inline Expr* Assignment::mutable_target() { return &m_target.crea(); }
+inline void Assignment::clear_target() { m_target.borra(); }
 inline bool Assignment::has_value() const { return m_value.hay(); }
 inline const Expr& Assignment::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* Assignment::mutable_value() { return &m_value.crea(); }
+inline void Assignment::clear_value() { m_value.borra(); }
 inline bool Assignment::drops_old() const { return m_drops_old; }
 inline void Assignment::set_drops_old(bool valor) { m_drops_old = std::move(valor); }
 inline bool Assignment::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -3288,6 +3568,7 @@ inline bool AddrOf::ParseFromIstream(std::istream* entrada) {
 inline bool AddrOf::has_operand() const { return m_operand.hay(); }
 inline const Expr& AddrOf::operand() const { return m_operand.hay() ? m_operand.valor() : Expr::default_instance(); }
 inline Expr* AddrOf::mutable_operand() { return &m_operand.crea(); }
+inline void AddrOf::clear_operand() { m_operand.borra(); }
 inline bool AddrOf::mut() const { return m_mut; }
 inline void AddrOf::set_mut(bool valor) { m_mut = std::move(valor); }
 inline bool AddrOf::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -3340,16 +3621,21 @@ inline bool Call::ParseFromIstream(std::istream* entrada) {
 inline bool Call::has_callee() const { return m_callee.hay(); }
 inline const Expr& Call::callee() const { return m_callee.hay() ? m_callee.valor() : Expr::default_instance(); }
 inline Expr* Call::mutable_callee() { return &m_callee.crea(); }
+inline void Call::clear_callee() { m_callee.borra(); }
 inline const std::vector<Expr>& Call::args() const { return m_args; }
 inline const Expr& Call::args(int i) const { return m_args.at(static_cast<std::size_t>(i)); }
 inline int Call::args_size() const { return static_cast<int>(m_args.size()); }
 inline Expr* Call::add_args() { return &m_args.emplace_back(); }
+inline Expr* Call::mutable_args(int i) { return &m_args.at(static_cast<std::size_t>(i)); }
+inline void Call::clear_args() { m_args.clear(); }
 inline bool Call::has_hook() const { return m_hook.hay(); }
 inline const HookRef& Call::hook() const { return m_hook.hay() ? m_hook.valor() : HookRef::default_instance(); }
 inline HookRef* Call::mutable_hook() { return &m_hook.crea(); }
+inline void Call::clear_hook() { m_hook.borra(); }
 inline bool Call::has_temp_drop() const { return m_temp_drop.hay(); }
 inline const HookRef& Call::temp_drop() const { return m_temp_drop.hay() ? m_temp_drop.valor() : HookRef::default_instance(); }
 inline HookRef* Call::mutable_temp_drop() { return &m_temp_drop.crea(); }
+inline void Call::clear_temp_drop() { m_temp_drop.borra(); }
 inline bool Call::temp_by_type() const { return m_temp_by_type; }
 inline void Call::set_temp_by_type(bool valor) { m_temp_by_type = std::move(valor); }
 inline bool Call::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -3423,6 +3709,7 @@ inline bool MoveExpr::ParseFromIstream(std::istream* entrada) {
 inline bool MoveExpr::has_operand() const { return m_operand.hay(); }
 inline const Expr& MoveExpr::operand() const { return m_operand.hay() ? m_operand.valor() : Expr::default_instance(); }
 inline Expr* MoveExpr::mutable_operand() { return &m_operand.crea(); }
+inline void MoveExpr::clear_operand() { m_operand.borra(); }
 inline bool MoveExpr::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3434,6 +3721,93 @@ inline bool MoveExpr::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_operand.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        default:
+            if (!lector.salta(tipo)) return false;
+        }
+    }
+    return lector.pos() == fin;
+}
+
+inline LambdaExpr::LambdaExpr() = default;
+inline LambdaExpr::LambdaExpr(const LambdaExpr&) = default;
+inline LambdaExpr& LambdaExpr::operator=(const LambdaExpr&) = default;
+inline LambdaExpr::LambdaExpr(LambdaExpr&&) noexcept = default;
+inline LambdaExpr& LambdaExpr::operator=(LambdaExpr&&) noexcept = default;
+inline LambdaExpr::~LambdaExpr() = default;
+inline const LambdaExpr& LambdaExpr::default_instance() { static const LambdaExpr vacio; return vacio; }
+inline bool LambdaExpr::ParseFromString(const std::string& datos) {
+    return ParseFromArray(datos.data(), static_cast<int>(datos.size()));
+}
+inline bool LambdaExpr::ParseFromArray(const void* datos, int largo) {
+    *this = LambdaExpr();
+    detalle::Lector lector(static_cast<const unsigned char*>(datos),
+                           static_cast<std::size_t>(largo));
+    return _lee(lector, static_cast<std::size_t>(largo));
+}
+inline bool LambdaExpr::ParseFromIstream(std::istream* entrada) {
+    std::string datos((std::istreambuf_iterator<char>(*entrada)),
+                      std::istreambuf_iterator<char>());
+    if (entrada->bad()) return false;
+    return ParseFromString(datos);
+}
+inline const std::vector<Parameter>& LambdaExpr::params() const { return m_params; }
+inline const Parameter& LambdaExpr::params(int i) const { return m_params.at(static_cast<std::size_t>(i)); }
+inline int LambdaExpr::params_size() const { return static_cast<int>(m_params.size()); }
+inline Parameter* LambdaExpr::add_params() { return &m_params.emplace_back(); }
+inline Parameter* LambdaExpr::mutable_params(int i) { return &m_params.at(static_cast<std::size_t>(i)); }
+inline void LambdaExpr::clear_params() { m_params.clear(); }
+inline std::uint32_t LambdaExpr::return_type_id() const { return m_return_type_id; }
+inline void LambdaExpr::set_return_type_id(std::uint32_t valor) { m_return_type_id = std::move(valor); }
+inline bool LambdaExpr::has_body() const { return m_body.hay(); }
+inline const Block& LambdaExpr::body() const { return m_body.hay() ? m_body.valor() : Block::default_instance(); }
+inline Block* LambdaExpr::mutable_body() { return &m_body.crea(); }
+inline void LambdaExpr::clear_body() { m_body.borra(); }
+inline const std::vector<std::string>& LambdaExpr::captures() const { return m_captures; }
+inline const std::string& LambdaExpr::captures(int i) const { return m_captures.at(static_cast<std::size_t>(i)); }
+inline int LambdaExpr::captures_size() const { return static_cast<int>(m_captures.size()); }
+inline void LambdaExpr::add_captures(std::string valor) { m_captures.push_back(std::move(valor)); }
+inline void LambdaExpr::clear_captures() { m_captures.clear(); }
+inline bool LambdaExpr::has_return_type() const { return m_return_type.hay(); }
+inline const Type& LambdaExpr::return_type() const { return m_return_type.hay() ? m_return_type.valor() : Type::default_instance(); }
+inline Type* LambdaExpr::mutable_return_type() { return &m_return_type.crea(); }
+inline void LambdaExpr::clear_return_type() { m_return_type.borra(); }
+inline bool LambdaExpr::_lee(detalle::Lector& lector, std::size_t fin) {
+    while (lector.pos() < fin) {
+        std::uint64_t etiqueta;
+        if (!lector.varint(etiqueta)) return false;
+        const int tipo = static_cast<int>(etiqueta & 7);
+        switch (etiqueta >> 3) {
+        case 1: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_params.emplace_back()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 2: {
+            if (tipo != 0) { if (!lector.salta(tipo)) return false; break; }
+            std::uint64_t v; if (!lector.varint(v)) return false; m_return_type_id = static_cast<std::uint32_t>(v);
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_body.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 4: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            if (!lector.texto(m_captures.emplace_back(), fin)) return false;
+            break;
+        }
+        case 5: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_return_type.crea()._lee(lector, hasta)) return false;
             break;
         }
         default:
@@ -3468,9 +3842,11 @@ inline bool Index::ParseFromIstream(std::istream* entrada) {
 inline bool Index::has_obj() const { return m_obj.hay(); }
 inline const Expr& Index::obj() const { return m_obj.hay() ? m_obj.valor() : Expr::default_instance(); }
 inline Expr* Index::mutable_obj() { return &m_obj.crea(); }
+inline void Index::clear_obj() { m_obj.borra(); }
 inline bool Index::has_index() const { return m_index.hay(); }
 inline const Expr& Index::index() const { return m_index.hay() ? m_index.valor() : Expr::default_instance(); }
 inline Expr* Index::mutable_index() { return &m_index.crea(); }
+inline void Index::clear_index() { m_index.borra(); }
 inline bool Index::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3523,6 +3899,7 @@ inline bool MemberAccess::ParseFromIstream(std::istream* entrada) {
 inline bool MemberAccess::has_obj() const { return m_obj.hay(); }
 inline const Expr& MemberAccess::obj() const { return m_obj.hay() ? m_obj.valor() : Expr::default_instance(); }
 inline Expr* MemberAccess::mutable_obj() { return &m_obj.crea(); }
+inline void MemberAccess::clear_obj() { m_obj.borra(); }
 inline const std::string& MemberAccess::member() const { return m_member; }
 inline void MemberAccess::set_member(std::string valor) { m_member = std::move(valor); }
 inline bool MemberAccess::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -3575,9 +3952,11 @@ inline bool SizeofExpr::ParseFromIstream(std::istream* entrada) {
 inline bool SizeofExpr::has_type() const { return m_type.hay(); }
 inline const Type& SizeofExpr::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
 inline Type* SizeofExpr::mutable_type() { return &m_type.crea(); }
+inline void SizeofExpr::clear_type() { m_type.borra(); }
 inline bool SizeofExpr::has_hook() const { return m_hook.hay(); }
 inline const HookRef& SizeofExpr::hook() const { return m_hook.hay() ? m_hook.valor() : HookRef::default_instance(); }
 inline HookRef* SizeofExpr::mutable_hook() { return &m_hook.crea(); }
+inline void SizeofExpr::clear_hook() { m_hook.borra(); }
 inline bool SizeofExpr::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3630,12 +4009,15 @@ inline bool CastExpr::ParseFromIstream(std::istream* entrada) {
 inline bool CastExpr::has_type() const { return m_type.hay(); }
 inline const Type& CastExpr::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
 inline Type* CastExpr::mutable_type() { return &m_type.crea(); }
+inline void CastExpr::clear_type() { m_type.borra(); }
 inline bool CastExpr::has_value() const { return m_value.hay(); }
 inline const Expr& CastExpr::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* CastExpr::mutable_value() { return &m_value.crea(); }
+inline void CastExpr::clear_value() { m_value.borra(); }
 inline bool CastExpr::has_hook() const { return m_hook.hay(); }
 inline const HookRef& CastExpr::hook() const { return m_hook.hay() ? m_hook.valor() : HookRef::default_instance(); }
 inline HookRef* CastExpr::mutable_hook() { return &m_hook.crea(); }
+inline void CastExpr::clear_hook() { m_hook.borra(); }
 inline bool CastExpr::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3697,13 +4079,18 @@ inline void StructLiteral::set_type_name(std::string valor) { m_type_name = std:
 inline const std::vector<std::string>& StructLiteral::field_names() const { return m_field_names; }
 inline const std::string& StructLiteral::field_names(int i) const { return m_field_names.at(static_cast<std::size_t>(i)); }
 inline int StructLiteral::field_names_size() const { return static_cast<int>(m_field_names.size()); }
+inline void StructLiteral::add_field_names(std::string valor) { m_field_names.push_back(std::move(valor)); }
+inline void StructLiteral::clear_field_names() { m_field_names.clear(); }
 inline const std::vector<Expr>& StructLiteral::values() const { return m_values; }
 inline const Expr& StructLiteral::values(int i) const { return m_values.at(static_cast<std::size_t>(i)); }
 inline int StructLiteral::values_size() const { return static_cast<int>(m_values.size()); }
 inline Expr* StructLiteral::add_values() { return &m_values.emplace_back(); }
+inline Expr* StructLiteral::mutable_values(int i) { return &m_values.at(static_cast<std::size_t>(i)); }
+inline void StructLiteral::clear_values() { m_values.clear(); }
 inline bool StructLiteral::has_temp_drop() const { return m_temp_drop.hay(); }
 inline const HookRef& StructLiteral::temp_drop() const { return m_temp_drop.hay() ? m_temp_drop.valor() : HookRef::default_instance(); }
 inline HookRef* StructLiteral::mutable_temp_drop() { return &m_temp_drop.crea(); }
+inline void StructLiteral::clear_temp_drop() { m_temp_drop.borra(); }
 inline bool StructLiteral::temp_by_type() const { return m_temp_by_type; }
 inline void StructLiteral::set_temp_by_type(bool valor) { m_temp_by_type = std::move(valor); }
 inline bool StructLiteral::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -3850,6 +4237,11 @@ inline const TryStmt& Stmt::try_stmt() const {
     return node_caso_ == kTryStmt && m_try_stmt.hay() ? m_try_stmt.valor() : TryStmt::default_instance();
 }
 inline TryStmt* Stmt::mutable_try_stmt() { node_caso_ = kTryStmt; return &m_try_stmt.crea(); }
+inline bool Stmt::has_expect_stmt() const { return node_caso_ == kExpectStmt; }
+inline const ExpectStmt& Stmt::expect_stmt() const {
+    return node_caso_ == kExpectStmt && m_expect_stmt.hay() ? m_expect_stmt.valor() : ExpectStmt::default_instance();
+}
+inline ExpectStmt* Stmt::mutable_expect_stmt() { node_caso_ = kExpectStmt; return &m_expect_stmt.crea(); }
 inline bool Stmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -3986,6 +4378,14 @@ inline bool Stmt::_lee(detalle::Lector& lector, std::size_t fin) {
             if (!m_try_stmt.crea()._lee(lector, hasta)) return false;
             break;
         }
+        case 26: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            node_caso_ = kExpectStmt;
+            if (!m_expect_stmt.crea()._lee(lector, hasta)) return false;
+            break;
+        }
         default:
             if (!lector.salta(tipo)) return false;
         }
@@ -4018,9 +4418,12 @@ inline bool Drop::ParseFromIstream(std::istream* entrada) {
 inline const std::vector<std::string>& Drop::path() const { return m_path; }
 inline const std::string& Drop::path(int i) const { return m_path.at(static_cast<std::size_t>(i)); }
 inline int Drop::path_size() const { return static_cast<int>(m_path.size()); }
+inline void Drop::add_path(std::string valor) { m_path.push_back(std::move(valor)); }
+inline void Drop::clear_path() { m_path.clear(); }
 inline bool Drop::has_hook() const { return m_hook.hay(); }
 inline const HookRef& Drop::hook() const { return m_hook.hay() ? m_hook.valor() : HookRef::default_instance(); }
 inline HookRef* Drop::mutable_hook() { return &m_hook.crea(); }
+inline void Drop::clear_hook() { m_hook.borra(); }
 inline bool Drop::by_type() const { return m_by_type; }
 inline void Drop::set_by_type(bool valor) { m_by_type = std::move(valor); }
 inline bool Drop::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -4079,10 +4482,14 @@ inline const std::vector<Stmt>& Block::statements() const { return m_statements;
 inline const Stmt& Block::statements(int i) const { return m_statements.at(static_cast<std::size_t>(i)); }
 inline int Block::statements_size() const { return static_cast<int>(m_statements.size()); }
 inline Stmt* Block::add_statements() { return &m_statements.emplace_back(); }
+inline Stmt* Block::mutable_statements(int i) { return &m_statements.at(static_cast<std::size_t>(i)); }
+inline void Block::clear_statements() { m_statements.clear(); }
 inline const std::vector<Drop>& Block::drops() const { return m_drops; }
 inline const Drop& Block::drops(int i) const { return m_drops.at(static_cast<std::size_t>(i)); }
 inline int Block::drops_size() const { return static_cast<int>(m_drops.size()); }
 inline Drop* Block::add_drops() { return &m_drops.emplace_back(); }
+inline Drop* Block::mutable_drops(int i) { return &m_drops.at(static_cast<std::size_t>(i)); }
+inline void Block::clear_drops() { m_drops.clear(); }
 inline bool Block::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4139,8 +4546,13 @@ inline void VarDecl::set_name(std::string valor) { m_name = std::move(valor); }
 inline bool VarDecl::has_value() const { return m_value.hay(); }
 inline const Expr& VarDecl::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* VarDecl::mutable_value() { return &m_value.crea(); }
+inline void VarDecl::clear_value() { m_value.borra(); }
 inline std::uint32_t VarDecl::type_id() const { return m_type_id; }
 inline void VarDecl::set_type_id(std::uint32_t valor) { m_type_id = std::move(valor); }
+inline bool VarDecl::has_type() const { return m_type.hay(); }
+inline const Type& VarDecl::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
+inline Type* VarDecl::mutable_type() { return &m_type.crea(); }
+inline void VarDecl::clear_type() { m_type.borra(); }
 inline bool VarDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4150,6 +4562,13 @@ inline bool VarDecl::_lee(detalle::Lector& lector, std::size_t fin) {
         case 1: {
             if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
             if (!lector.texto(m_qualifier, fin)) return false;
+            break;
+        }
+        case 2: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_type.crea()._lee(lector, hasta)) return false;
             break;
         }
         case 3: {
@@ -4205,6 +4624,7 @@ inline void TypeDecl::set_name(std::string valor) { m_name = std::move(valor); }
 inline bool TypeDecl::has_value() const { return m_value.hay(); }
 inline const Expr& TypeDecl::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* TypeDecl::mutable_value() { return &m_value.crea(); }
+inline void TypeDecl::clear_value() { m_value.borra(); }
 inline bool TypeDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4261,9 +4681,11 @@ inline IfStmt::ElseBranchCase IfStmt::else_branch_case() const { return static_c
 inline bool IfStmt::has_condition() const { return m_condition.hay(); }
 inline const Expr& IfStmt::condition() const { return m_condition.hay() ? m_condition.valor() : Expr::default_instance(); }
 inline Expr* IfStmt::mutable_condition() { return &m_condition.crea(); }
+inline void IfStmt::clear_condition() { m_condition.borra(); }
 inline bool IfStmt::has_then_block() const { return m_then_block.hay(); }
 inline const Block& IfStmt::then_block() const { return m_then_block.hay() ? m_then_block.valor() : Block::default_instance(); }
 inline Block* IfStmt::mutable_then_block() { return &m_then_block.crea(); }
+inline void IfStmt::clear_then_block() { m_then_block.borra(); }
 inline bool IfStmt::has_else_block() const { return else_branch_caso_ == kElseBlock; }
 inline const Block& IfStmt::else_block() const {
     return else_branch_caso_ == kElseBlock && m_else_block.hay() ? m_else_block.valor() : Block::default_instance();
@@ -4342,9 +4764,11 @@ inline bool WhileStmt::ParseFromIstream(std::istream* entrada) {
 inline bool WhileStmt::has_condition() const { return m_condition.hay(); }
 inline const Expr& WhileStmt::condition() const { return m_condition.hay() ? m_condition.valor() : Expr::default_instance(); }
 inline Expr* WhileStmt::mutable_condition() { return &m_condition.crea(); }
+inline void WhileStmt::clear_condition() { m_condition.borra(); }
 inline bool WhileStmt::has_body() const { return m_body.hay(); }
 inline const Block& WhileStmt::body() const { return m_body.hay() ? m_body.valor() : Block::default_instance(); }
 inline Block* WhileStmt::mutable_body() { return &m_body.crea(); }
+inline void WhileStmt::clear_body() { m_body.borra(); }
 inline bool WhileStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4397,9 +4821,13 @@ inline bool CaseArm::ParseFromIstream(std::istream* entrada) {
 inline bool CaseArm::has_pattern() const { return m_pattern.hay(); }
 inline const Expr& CaseArm::pattern() const { return m_pattern.hay() ? m_pattern.valor() : Expr::default_instance(); }
 inline Expr* CaseArm::mutable_pattern() { return &m_pattern.crea(); }
+inline void CaseArm::clear_pattern() { m_pattern.borra(); }
 inline bool CaseArm::has_body() const { return m_body.hay(); }
 inline const Stmt& CaseArm::body() const { return m_body.hay() ? m_body.valor() : Stmt::default_instance(); }
 inline Stmt* CaseArm::mutable_body() { return &m_body.crea(); }
+inline void CaseArm::clear_body() { m_body.borra(); }
+inline bool CaseArm::binds() const { return m_binds; }
+inline void CaseArm::set_binds(bool valor) { m_binds = std::move(valor); }
 inline bool CaseArm::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4418,6 +4846,11 @@ inline bool CaseArm::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_body.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 3: {
+            if (tipo != 0) { if (!lector.salta(tipo)) return false; break; }
+            std::uint64_t v; if (!lector.varint(v)) return false; m_binds = v != 0;
             break;
         }
         default:
@@ -4452,10 +4885,13 @@ inline bool MatchStmt::ParseFromIstream(std::istream* entrada) {
 inline bool MatchStmt::has_subject() const { return m_subject.hay(); }
 inline const Expr& MatchStmt::subject() const { return m_subject.hay() ? m_subject.valor() : Expr::default_instance(); }
 inline Expr* MatchStmt::mutable_subject() { return &m_subject.crea(); }
+inline void MatchStmt::clear_subject() { m_subject.borra(); }
 inline const std::vector<CaseArm>& MatchStmt::cases() const { return m_cases; }
 inline const CaseArm& MatchStmt::cases(int i) const { return m_cases.at(static_cast<std::size_t>(i)); }
 inline int MatchStmt::cases_size() const { return static_cast<int>(m_cases.size()); }
 inline CaseArm* MatchStmt::add_cases() { return &m_cases.emplace_back(); }
+inline CaseArm* MatchStmt::mutable_cases(int i) { return &m_cases.at(static_cast<std::size_t>(i)); }
+inline void MatchStmt::clear_cases() { m_cases.clear(); }
 inline bool MatchStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4508,6 +4944,7 @@ inline bool ReturnStmt::ParseFromIstream(std::istream* entrada) {
 inline bool ReturnStmt::has_value() const { return m_value.hay(); }
 inline const Expr& ReturnStmt::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* ReturnStmt::mutable_value() { return &m_value.crea(); }
+inline void ReturnStmt::clear_value() { m_value.borra(); }
 inline bool ReturnStmt::transfers() const { return m_transfers; }
 inline void ReturnStmt::set_transfers(bool valor) { m_transfers = std::move(valor); }
 inline bool ReturnStmt::_lee(detalle::Lector& lector, std::size_t fin) {
@@ -4624,6 +5061,7 @@ inline bool MoveStmt::ParseFromIstream(std::istream* entrada) {
 inline bool MoveStmt::has_target() const { return m_target.hay(); }
 inline const Expr& MoveStmt::target() const { return m_target.hay() ? m_target.valor() : Expr::default_instance(); }
 inline Expr* MoveStmt::mutable_target() { return &m_target.crea(); }
+inline void MoveStmt::clear_target() { m_target.borra(); }
 inline bool MoveStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4669,6 +5107,7 @@ inline bool ThrowStmt::ParseFromIstream(std::istream* entrada) {
 inline bool ThrowStmt::has_value() const { return m_value.hay(); }
 inline const Expr& ThrowStmt::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* ThrowStmt::mutable_value() { return &m_value.crea(); }
+inline void ThrowStmt::clear_value() { m_value.borra(); }
 inline bool ThrowStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4680,6 +5119,70 @@ inline bool ThrowStmt::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_value.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        default:
+            if (!lector.salta(tipo)) return false;
+        }
+    }
+    return lector.pos() == fin;
+}
+
+inline ExpectStmt::ExpectStmt() = default;
+inline ExpectStmt::ExpectStmt(const ExpectStmt&) = default;
+inline ExpectStmt& ExpectStmt::operator=(const ExpectStmt&) = default;
+inline ExpectStmt::ExpectStmt(ExpectStmt&&) noexcept = default;
+inline ExpectStmt& ExpectStmt::operator=(ExpectStmt&&) noexcept = default;
+inline ExpectStmt::~ExpectStmt() = default;
+inline const ExpectStmt& ExpectStmt::default_instance() { static const ExpectStmt vacio; return vacio; }
+inline bool ExpectStmt::ParseFromString(const std::string& datos) {
+    return ParseFromArray(datos.data(), static_cast<int>(datos.size()));
+}
+inline bool ExpectStmt::ParseFromArray(const void* datos, int largo) {
+    *this = ExpectStmt();
+    detalle::Lector lector(static_cast<const unsigned char*>(datos),
+                           static_cast<std::size_t>(largo));
+    return _lee(lector, static_cast<std::size_t>(largo));
+}
+inline bool ExpectStmt::ParseFromIstream(std::istream* entrada) {
+    std::string datos((std::istreambuf_iterator<char>(*entrada)),
+                      std::istreambuf_iterator<char>());
+    if (entrada->bad()) return false;
+    return ParseFromString(datos);
+}
+inline bool ExpectStmt::has_condition() const { return m_condition.hay(); }
+inline const Expr& ExpectStmt::condition() const { return m_condition.hay() ? m_condition.valor() : Expr::default_instance(); }
+inline Expr* ExpectStmt::mutable_condition() { return &m_condition.crea(); }
+inline void ExpectStmt::clear_condition() { m_condition.borra(); }
+inline bool ExpectStmt::has_body() const { return m_body.hay(); }
+inline const Block& ExpectStmt::body() const { return m_body.hay() ? m_body.valor() : Block::default_instance(); }
+inline Block* ExpectStmt::mutable_body() { return &m_body.crea(); }
+inline void ExpectStmt::clear_body() { m_body.borra(); }
+inline const std::string& ExpectStmt::text() const { return m_text; }
+inline void ExpectStmt::set_text(std::string valor) { m_text = std::move(valor); }
+inline bool ExpectStmt::_lee(detalle::Lector& lector, std::size_t fin) {
+    while (lector.pos() < fin) {
+        std::uint64_t etiqueta;
+        if (!lector.varint(etiqueta)) return false;
+        const int tipo = static_cast<int>(etiqueta & 7);
+        switch (etiqueta >> 3) {
+        case 1: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_condition.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 2: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_body.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            if (!lector.texto(m_text, fin)) return false;
             break;
         }
         default:
@@ -4716,9 +5219,11 @@ inline void CatchClause::set_name(std::string valor) { m_name = std::move(valor)
 inline bool CatchClause::has_block() const { return m_block.hay(); }
 inline const Block& CatchClause::block() const { return m_block.hay() ? m_block.valor() : Block::default_instance(); }
 inline Block* CatchClause::mutable_block() { return &m_block.crea(); }
+inline void CatchClause::clear_block() { m_block.borra(); }
 inline bool CatchClause::has_type() const { return m_type.hay(); }
 inline const Type& CatchClause::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
 inline Type* CatchClause::mutable_type() { return &m_type.crea(); }
+inline void CatchClause::clear_type() { m_type.borra(); }
 inline bool CatchClause::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4776,13 +5281,17 @@ inline bool TryStmt::ParseFromIstream(std::istream* entrada) {
 inline bool TryStmt::has_try_block() const { return m_try_block.hay(); }
 inline const Block& TryStmt::try_block() const { return m_try_block.hay() ? m_try_block.valor() : Block::default_instance(); }
 inline Block* TryStmt::mutable_try_block() { return &m_try_block.crea(); }
+inline void TryStmt::clear_try_block() { m_try_block.borra(); }
 inline const std::vector<CatchClause>& TryStmt::catches() const { return m_catches; }
 inline const CatchClause& TryStmt::catches(int i) const { return m_catches.at(static_cast<std::size_t>(i)); }
 inline int TryStmt::catches_size() const { return static_cast<int>(m_catches.size()); }
 inline CatchClause* TryStmt::add_catches() { return &m_catches.emplace_back(); }
+inline CatchClause* TryStmt::mutable_catches(int i) { return &m_catches.at(static_cast<std::size_t>(i)); }
+inline void TryStmt::clear_catches() { m_catches.clear(); }
 inline bool TryStmt::has_finally_block() const { return m_finally_block.hay(); }
 inline const Block& TryStmt::finally_block() const { return m_finally_block.hay() ? m_finally_block.valor() : Block::default_instance(); }
 inline Block* TryStmt::mutable_finally_block() { return &m_finally_block.crea(); }
+inline void TryStmt::clear_finally_block() { m_finally_block.borra(); }
 inline bool TryStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4842,9 +5351,11 @@ inline bool FreeStmt::ParseFromIstream(std::istream* entrada) {
 inline bool FreeStmt::has_target() const { return m_target.hay(); }
 inline const Expr& FreeStmt::target() const { return m_target.hay() ? m_target.valor() : Expr::default_instance(); }
 inline Expr* FreeStmt::mutable_target() { return &m_target.crea(); }
+inline void FreeStmt::clear_target() { m_target.borra(); }
 inline bool FreeStmt::has_hook() const { return m_hook.hay(); }
 inline const HookRef& FreeStmt::hook() const { return m_hook.hay() ? m_hook.valor() : HookRef::default_instance(); }
 inline HookRef* FreeStmt::mutable_hook() { return &m_hook.crea(); }
+inline void FreeStmt::clear_hook() { m_hook.borra(); }
 inline bool FreeStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -4897,6 +5408,7 @@ inline bool ExprStmt::ParseFromIstream(std::istream* entrada) {
 inline bool ExprStmt::has_expr() const { return m_expr.hay(); }
 inline const Expr& ExprStmt::expr() const { return m_expr.hay() ? m_expr.valor() : Expr::default_instance(); }
 inline Expr* ExprStmt::mutable_expr() { return &m_expr.crea(); }
+inline void ExprStmt::clear_expr() { m_expr.borra(); }
 inline bool ExprStmt::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5174,6 +5686,15 @@ inline void TestDecl::set_name(std::string valor) { m_name = std::move(valor); }
 inline bool TestDecl::has_body() const { return m_body.hay(); }
 inline const Block& TestDecl::body() const { return m_body.hay() ? m_body.valor() : Block::default_instance(); }
 inline Block* TestDecl::mutable_body() { return &m_body.crea(); }
+inline void TestDecl::clear_body() { m_body.borra(); }
+inline bool TestDecl::has_errfinally() const { return m_errfinally.hay(); }
+inline const Block& TestDecl::errfinally() const { return m_errfinally.hay() ? m_errfinally.valor() : Block::default_instance(); }
+inline Block* TestDecl::mutable_errfinally() { return &m_errfinally.crea(); }
+inline void TestDecl::clear_errfinally() { m_errfinally.borra(); }
+inline bool TestDecl::has_finally_block() const { return m_finally_block.hay(); }
+inline const Block& TestDecl::finally_block() const { return m_finally_block.hay() ? m_finally_block.valor() : Block::default_instance(); }
+inline Block* TestDecl::mutable_finally_block() { return &m_finally_block.crea(); }
+inline void TestDecl::clear_finally_block() { m_finally_block.borra(); }
 inline bool TestDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5190,6 +5711,20 @@ inline bool TestDecl::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_body.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_errfinally.crea()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 4: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_finally_block.crea()._lee(lector, hasta)) return false;
             break;
         }
         default:
@@ -5225,12 +5760,23 @@ inline const std::string& Parameter::name() const { return m_name; }
 inline void Parameter::set_name(std::string valor) { m_name = std::move(valor); }
 inline std::uint32_t Parameter::type_id() const { return m_type_id; }
 inline void Parameter::set_type_id(std::uint32_t valor) { m_type_id = std::move(valor); }
+inline bool Parameter::has_type() const { return m_type.hay(); }
+inline const Type& Parameter::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
+inline Type* Parameter::mutable_type() { return &m_type.crea(); }
+inline void Parameter::clear_type() { m_type.borra(); }
 inline bool Parameter::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
         if (!lector.varint(etiqueta)) return false;
         const int tipo = static_cast<int>(etiqueta & 7);
         switch (etiqueta >> 3) {
+        case 1: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_type.crea()._lee(lector, hasta)) return false;
+            break;
+        }
         case 2: {
             if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
             if (!lector.texto(m_name, fin)) return false;
@@ -5276,11 +5822,14 @@ inline const std::vector<Parameter>& FunctionDecl::params() const { return m_par
 inline const Parameter& FunctionDecl::params(int i) const { return m_params.at(static_cast<std::size_t>(i)); }
 inline int FunctionDecl::params_size() const { return static_cast<int>(m_params.size()); }
 inline Parameter* FunctionDecl::add_params() { return &m_params.emplace_back(); }
+inline Parameter* FunctionDecl::mutable_params(int i) { return &m_params.at(static_cast<std::size_t>(i)); }
+inline void FunctionDecl::clear_params() { m_params.clear(); }
 inline std::uint32_t FunctionDecl::return_type_id() const { return m_return_type_id; }
 inline void FunctionDecl::set_return_type_id(std::uint32_t valor) { m_return_type_id = std::move(valor); }
 inline bool FunctionDecl::has_body() const { return m_body.hay(); }
 inline const Block& FunctionDecl::body() const { return m_body.hay() ? m_body.valor() : Block::default_instance(); }
 inline Block* FunctionDecl::mutable_body() { return &m_body.crea(); }
+inline void FunctionDecl::clear_body() { m_body.borra(); }
 inline const std::string& FunctionDecl::dunder() const { return m_dunder; }
 inline void FunctionDecl::set_dunder(std::string valor) { m_dunder = std::move(valor); }
 inline const std::string& FunctionDecl::decorator() const { return m_decorator; }
@@ -5288,6 +5837,12 @@ inline void FunctionDecl::set_decorator(std::string valor) { m_decorator = std::
 inline const std::vector<std::string>& FunctionDecl::type_params() const { return m_type_params; }
 inline const std::string& FunctionDecl::type_params(int i) const { return m_type_params.at(static_cast<std::size_t>(i)); }
 inline int FunctionDecl::type_params_size() const { return static_cast<int>(m_type_params.size()); }
+inline void FunctionDecl::add_type_params(std::string valor) { m_type_params.push_back(std::move(valor)); }
+inline void FunctionDecl::clear_type_params() { m_type_params.clear(); }
+inline bool FunctionDecl::has_return_type() const { return m_return_type.hay(); }
+inline const Type& FunctionDecl::return_type() const { return m_return_type.hay() ? m_return_type.valor() : Type::default_instance(); }
+inline Type* FunctionDecl::mutable_return_type() { return &m_return_type.crea(); }
+inline void FunctionDecl::clear_return_type() { m_return_type.borra(); }
 inline bool FunctionDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5304,6 +5859,13 @@ inline bool FunctionDecl::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_params.emplace_back()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_return_type.crea()._lee(lector, hasta)) return false;
             break;
         }
         case 4: {
@@ -5366,12 +5928,23 @@ inline const std::string& Field::name() const { return m_name; }
 inline void Field::set_name(std::string valor) { m_name = std::move(valor); }
 inline std::uint32_t Field::type_id() const { return m_type_id; }
 inline void Field::set_type_id(std::uint32_t valor) { m_type_id = std::move(valor); }
+inline bool Field::has_type() const { return m_type.hay(); }
+inline const Type& Field::type() const { return m_type.hay() ? m_type.valor() : Type::default_instance(); }
+inline Type* Field::mutable_type() { return &m_type.crea(); }
+inline void Field::clear_type() { m_type.borra(); }
 inline bool Field::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
         if (!lector.varint(etiqueta)) return false;
         const int tipo = static_cast<int>(etiqueta & 7);
         switch (etiqueta >> 3) {
+        case 1: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_type.crea()._lee(lector, hasta)) return false;
+            break;
+        }
         case 2: {
             if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
             if (!lector.texto(m_name, fin)) return false;
@@ -5417,9 +5990,13 @@ inline const std::vector<Field>& StructDecl::fields() const { return m_fields; }
 inline const Field& StructDecl::fields(int i) const { return m_fields.at(static_cast<std::size_t>(i)); }
 inline int StructDecl::fields_size() const { return static_cast<int>(m_fields.size()); }
 inline Field* StructDecl::add_fields() { return &m_fields.emplace_back(); }
+inline Field* StructDecl::mutable_fields(int i) { return &m_fields.at(static_cast<std::size_t>(i)); }
+inline void StructDecl::clear_fields() { m_fields.clear(); }
 inline const std::vector<std::string>& StructDecl::type_params() const { return m_type_params; }
 inline const std::string& StructDecl::type_params(int i) const { return m_type_params.at(static_cast<std::size_t>(i)); }
 inline int StructDecl::type_params_size() const { return static_cast<int>(m_type_params.size()); }
+inline void StructDecl::add_type_params(std::string valor) { m_type_params.push_back(std::move(valor)); }
+inline void StructDecl::clear_type_params() { m_type_params.clear(); }
 inline bool StructDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5477,9 +6054,18 @@ inline void EnumItem::set_name(std::string valor) { m_name = std::move(valor); }
 inline bool EnumItem::has_value() const { return m_value.hay(); }
 inline const Expr& EnumItem::value() const { return m_value.hay() ? m_value.valor() : Expr::default_instance(); }
 inline Expr* EnumItem::mutable_value() { return &m_value.crea(); }
+inline void EnumItem::clear_value() { m_value.borra(); }
 inline const std::vector<std::uint32_t>& EnumItem::payload_type_ids() const { return m_payload_type_ids; }
 inline std::uint32_t EnumItem::payload_type_ids(int i) const { return m_payload_type_ids.at(static_cast<std::size_t>(i)); }
 inline int EnumItem::payload_type_ids_size() const { return static_cast<int>(m_payload_type_ids.size()); }
+inline void EnumItem::add_payload_type_ids(std::uint32_t valor) { m_payload_type_ids.push_back(std::move(valor)); }
+inline void EnumItem::clear_payload_type_ids() { m_payload_type_ids.clear(); }
+inline const std::vector<Type>& EnumItem::payload_types() const { return m_payload_types; }
+inline const Type& EnumItem::payload_types(int i) const { return m_payload_types.at(static_cast<std::size_t>(i)); }
+inline int EnumItem::payload_types_size() const { return static_cast<int>(m_payload_types.size()); }
+inline Type* EnumItem::add_payload_types() { return &m_payload_types.emplace_back(); }
+inline Type* EnumItem::mutable_payload_types(int i) { return &m_payload_types.at(static_cast<std::size_t>(i)); }
+inline void EnumItem::clear_payload_types() { m_payload_types.clear(); }
 inline bool EnumItem::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5517,6 +6103,13 @@ inline bool EnumItem::_lee(detalle::Lector& lector, std::size_t fin) {
             }
             break;
         }
+        case 4: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            std::size_t hasta;
+            if (!lector.largo(hasta, fin)) return false;
+            if (!m_payload_types.emplace_back()._lee(lector, hasta)) return false;
+            break;
+        }
         default:
             if (!lector.salta(tipo)) return false;
         }
@@ -5552,6 +6145,13 @@ inline const std::vector<EnumItem>& EnumDecl::items() const { return m_items; }
 inline const EnumItem& EnumDecl::items(int i) const { return m_items.at(static_cast<std::size_t>(i)); }
 inline int EnumDecl::items_size() const { return static_cast<int>(m_items.size()); }
 inline EnumItem* EnumDecl::add_items() { return &m_items.emplace_back(); }
+inline EnumItem* EnumDecl::mutable_items(int i) { return &m_items.at(static_cast<std::size_t>(i)); }
+inline void EnumDecl::clear_items() { m_items.clear(); }
+inline const std::vector<std::string>& EnumDecl::type_params() const { return m_type_params; }
+inline const std::string& EnumDecl::type_params(int i) const { return m_type_params.at(static_cast<std::size_t>(i)); }
+inline int EnumDecl::type_params_size() const { return static_cast<int>(m_type_params.size()); }
+inline void EnumDecl::add_type_params(std::string valor) { m_type_params.push_back(std::move(valor)); }
+inline void EnumDecl::clear_type_params() { m_type_params.clear(); }
 inline bool EnumDecl::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;
@@ -5568,6 +6168,11 @@ inline bool EnumDecl::_lee(detalle::Lector& lector, std::size_t fin) {
             std::size_t hasta;
             if (!lector.largo(hasta, fin)) return false;
             if (!m_items.emplace_back()._lee(lector, hasta)) return false;
+            break;
+        }
+        case 3: {
+            if (tipo != 2) { if (!lector.salta(tipo)) return false; break; }
+            if (!lector.texto(m_type_params.emplace_back(), fin)) return false;
             break;
         }
         default:
@@ -5606,6 +6211,8 @@ inline void ExternBlock::set_raw(std::string valor) { m_raw = std::move(valor); 
 inline const std::vector<std::string>& ExternBlock::requires_() const { return m_requires; }
 inline const std::string& ExternBlock::requires_(int i) const { return m_requires.at(static_cast<std::size_t>(i)); }
 inline int ExternBlock::requires_size() const { return static_cast<int>(m_requires.size()); }
+inline void ExternBlock::add_requires(std::string valor) { m_requires.push_back(std::move(valor)); }
+inline void ExternBlock::clear_requires() { m_requires.clear(); }
 inline bool ExternBlock::_lee(detalle::Lector& lector, std::size_t fin) {
     while (lector.pos() < fin) {
         std::uint64_t etiqueta;

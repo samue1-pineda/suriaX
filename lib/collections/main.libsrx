@@ -4,6 +4,8 @@
  conjunto, una cola) sea añadir un archivo:
 
      collections.dictionary   Dictionary<K, V>: claves a valores, por hash
+     collections.pair         Pair<K, V>: dos valores juntos ('key', 'value');
+                              lo que da 'Dictionary.items()'
 
      #import collections.dictionary as dic
 

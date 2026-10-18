@@ -1,0 +1,9 @@
+#import array.vector as vec
+#from io #import stdp
+
+fn main() -> int {
+    var vec.Vector<int> v = vec.dynamic<int>(4);
+    v.push(1);
+    stdp.println(f"{v.len()}");
+    return 0;
+}

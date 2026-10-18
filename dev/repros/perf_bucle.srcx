@@ -1,0 +1,11 @@
+#from io #import stdp
+fn f(int x) -> int { return x + 1; }
+fn main() -> int {
+    var int i = 0;
+    var int s = 0;
+    while (i < 200000) { s = s + i; i = i + 1; }
+    var int j = 0;
+    while (j < 50000) { s = f(s); j = j + 1; }
+    stdp.println(f"{s}");
+    return 0;
+}

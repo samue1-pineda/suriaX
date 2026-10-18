@@ -1,0 +1,5 @@
+#import text
+fn main() -> int {
+    var float f = text.parse_float("3\n");
+    return 0;
+}

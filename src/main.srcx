@@ -11,9 +11,11 @@
  la V0 la deduce de dónde está instalada, y la V1 —un `.phir` que corre en
  la VM— no tiene forma de saberlo.
 
- Cubre un SUBCONJUNTO del lenguaje (ver `src/readme.md`) y supone un
- programa válido: los errores de sintaxis y de las librerías se informan y
- detienen la compilación, los semánticos todavía no se detectan.
+ Cubre un SUBCONJUNTO del lenguaje (ver `src/readme.md`): lo que queda
+ fuera se informa y detiene la compilación (nunca un `.phir` incompleto).
+ Los errores léxicos, de sintaxis y semánticos se informan como en la V0
+ (`ruta:linea:col: CODIGO mensaje`, en el mismo orden) y detienen la
+ compilación; los semánticos llegan por tandas (lote 18).
 -/
 
 #from io #import stdp
@@ -21,6 +23,7 @@
 #import semantica.nodos as nd
 #import semantica.resolver as res
 #import semantica.enlazador as enl
+#import frontend.diagnosticos as dg
 #import hir.emisor as em
 #import sistema.archivos as arch
 #import sistema.proceso as proc
@@ -37,14 +40,37 @@ fn nivel_de(str arg) -> int {
     return -1;
 }
 
-/- Escribe los errores a la salida de errores; ¿había alguno? -/
-fn informa(vec.Vector<str> ptr errores, str donde) -> bool {
+/- Escribe los diagnósticos a la salida de errores, en orden, como
+   `ruta:linea:col: CODIGO mensaje` (la forma que leen los editores). ¿Hay
+   alguno que detenga la compilación? (un aviso o una nota, no) -/
+fn reporta(vec.Vector<dg.Diagnostico> ptr ds, str ruta) -> bool {
+    var bool bloquea = false;
     var int i = 0;
-    while (i < errores.len()) {
-        proc.escribir_error(f"{donde}: {errores.get(i)}\n");
+    while (i < ds.len()) {
+        var dg.Diagnostico d = ds.get(i);
+        // el de una librería lleva SU archivo
+        var str donde = ruta;
+        if (d.archivo != "") { donde = d.archivo; };
+        proc.escribir_error(f"{donde}:{d.linea}:{d.col}: {d.codigo} {d.mensaje}\n");
+        if (dg.bloquea(d)) { bloquea = true; };
         i = i + 1;
     };
-    return errores.len() > 0;
+    return bloquea;
+}
+
+/- ¿El árbol usa algo que la V1 todavía no emite? Lo dice (con su posición,
+   sin código: no es un error del programa, que para la V0 es válido) y
+   detiene la compilación: un `.phir` incompleto sin aviso sería peor. -/
+fn fuera_del_subconjunto(vec.Vector<ar.Nodo> ptr a, int raiz, res.Analisis ptr r,
+                         str ruta) -> bool {
+    var int n = em.no_soportado(a, raiz, r);
+    if (n < 0) { return false; };
+    var str que = em.que_falta(nd.clase(a, n));
+    if (que == "") { que = r.no_emitible.get(n); };
+    proc.escribir_error(f"{ruta}:{nd.linea(a, n)}:{nd.col(a, n)}: la V1 todavía no compila "
+                        + f"{que} (fuera de su subconjunto, ver src/readme.md); compílalo con "
+                        + "la V0\n");
+    return true;
 }
 
 fn main() -> int {
@@ -87,12 +113,19 @@ fn main() -> int {
 
     var enl.Contexto ctx = enl.contexto(enl.raiz_del_proyecto(absoluta), stdlib);
     var enl.Arbol arbol = enl.lee(ruta);
-    if (informa(&arbol.errores, ruta)) { return 1; };
+    // un error léxico o de sintaxis detiene aquí: el árbol es el "mejor
+    // esfuerzo" de la recuperación, y analizarlo daría errores falsos (la V0
+    // tampoco lo hace)
+    if (reporta(&arbol.errores, ruta)) { return 1; };
     var res.Analisis analisis = res.analiza(&arbol.p.arbol, arbol.raiz, &ctx, absoluta, "");
-    if (informa(&ctx.errores, ruta)) { return 1; };
-    // el programa lleva su ruta como se la pasaron; cada librería, la
-    // absoluta (como la V0)
+    // los diagnósticos de la Semántica: con alguno que bloquee, no hay .phir
+    if (reporta(&analisis.diagnosticos, ruta)) { return 1; };
+    if (fuera_del_subconjunto(&arbol.p.arbol, arbol.raiz, &analisis, ruta)) { return 1; };
+    // el programa lleva su ruta como se la pasaron; cada librería, su ruta
+    // pública (como la V0)
     var vec.Vector<byte> bytes = em.emite(&arbol.p.arbol, arbol.raiz, &analisis, ruta);
+    // la carpeta de salida y las que le falten, como la V0 ('mkdir -p')
+    if (rt.carpeta_de(salida) != "") { arch.crear_carpeta(rt.carpeta_de(salida)); };
     arch.write_bytes(salida, &bytes);
     stdp.println(f"HIR ({bytes.len()} bytes) -> {salida}");
 
@@ -112,18 +145,22 @@ fn main() -> int {
         if (not hechas.contains(info.unidad)) {
             hechas.put(info.unidad, true);
             var enl.Arbol lib = enl.lee(info.archivo);
-            if (informa(&lib.errores, info.archivo)) { return 1; };
+            if (reporta(&lib.errores, info.archivo)) { return 1; };
             var vec.Vector<int> items = nd.hijos(&lib.p.arbol, lib.raiz, "items");
             var str alias = nd.atributo(&lib.p.arbol, items.get(items.len() - 1), "alias");
             var res.Analisis unidad = res.analiza(&lib.p.arbol, lib.raiz, &ctx, info.archivo,
                                                   alias);
-            if (informa(&ctx.errores, info.archivo)) { return 1; };
+            // sus diagnósticos, con su archivo (como la V0 al compilar cada unidad)
+            if (reporta(&unidad.diagnosticos, info.archivo)) { return 1; };
+            if (fuera_del_subconjunto(&lib.p.arbol, lib.raiz, &unidad, info.archivo)) { return 1; };
             var int k = 0;
             while (k < unidad.librerias.len()) {
                 pendientes.push(unidad.librerias.get(k));
                 k = k + 1;
             };
-            var vec.Vector<byte> datos = em.emite(&lib.p.arbol, lib.raiz, &unidad, info.archivo);
+            // su ruta PÚBLICA (reproducible: relativa a la stdlib o al proyecto)
+            var vec.Vector<byte> datos = em.emite(&lib.p.arbol, lib.raiz, &unidad,
+                                                  enl.ruta_publica(&ctx, info.archivo));
             var str destino = rt.une(carpeta, info.unidad + ".phir");
             arch.write_bytes(destino, &datos);
             stdp.println(f"  unidad '{info.unidad}': {datos.len()} bytes -> {destino}");

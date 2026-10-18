@@ -1,0 +1,49 @@
+/- sistema.entrada: la entrada estándar del programa.
+
+ Es lo que permite usar un programa en una tubería (`cat datos.txt | prog`)
+ o escribirle a mano. Se lee como texto UTF-8, igual que un archivo, en
+ cualquier máquina.
+
+     #from io #import stdp
+     #import sistema.entrada as entrada
+
+     fn main() -> int {
+         var int n = 0;
+         while (not entrada.terminada()) {
+             var str linea = entrada.linea();
+             n = n + 1;
+         };
+         stdp.println(f"{n} líneas");
+         return 0;
+     }
+
+ - 'linea()' devuelve la siguiente línea SIN su fin ('\n' o '\r\n').
+   Pedirla cuando ya no queda nada lanza 'excepciones.ErrorDeArchivo': por
+   eso se pregunta antes con 'terminada()'.
+ - 'todo()' devuelve lo que queda, tal cual, con sus fines de línea.
+ - Una entrada que no es UTF-8 lanza 'excepciones.ErrorDeArchivo'.
+ - Bajo el depurador la entrada está vacía: allí la entrada estándar es el
+   canal por el que habla el editor.
+-/
+
+// llamadas al host
+internal fn __entrada_terminada__() -> bool;
+internal fn __leer_linea__() -> str;
+internal fn __leer_entrada__() -> str;
+
+// ¿Se acabó la entrada? Si alguien escribe a mano, espera a la siguiente línea.
+public fn terminada() -> bool {
+    return __entrada_terminada__();
+}
+
+// La siguiente línea, sin su fin de línea.
+public fn linea() -> str {
+    return __leer_linea__();
+}
+
+// Todo lo que queda de la entrada, tal cual.
+public fn todo() -> str {
+    return __leer_entrada__();
+}
+
+#export as entrada

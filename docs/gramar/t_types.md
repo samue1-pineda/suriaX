@@ -121,7 +121,7 @@ const type float16;
 ```srcx
 // consumidor
 #from d_types #import dt_variables as dt;
-const dt.int8 abc;          // tipo cualificado: 'int8' lo declara la librería
+const dt.int8 abc = 5;      // tipo cualificado: 'int8' lo declara la librería
 ```
 
 | Forma        | Significado                                                  |
@@ -235,11 +235,14 @@ cuerpo declara un **prototipo** (solo la firma).
 | Token       | Lexema   | Uso                                         |
 |-------------|----------|---------------------------------------------|
 | `FUNCTION`  | `fn`     | Declara una función.                        |
+| `LAMBDA`    | `lambda` | Una función sin nombre como argumento: `lambda (int x) -> bool: x > 3` o `lambda (int x) -> bool { ... }`. El `->` es obligatorio. |
 | `ARROW`     | `->`     | Tipo de retorno (opcional): `fn f() -> int`. |
 | `RETURN`    | `return` | `return <expr>;`                            |
 | `SIZEOF`    | `sizeof` | `sizeof(<type>)`                            |
 | `DECORATOR` | `@`      | `@<name>` sobre la función.                 |
-| `TEST`      | `test`   | Función nativa de prueba ≠ `#test`.         |
+| `TEST`      | `test`   | Una prueba: `test "nombre" { ... }` ≠ `#test`. |
+| `EXPECT`    | `expect` | La comprobación de un `test`: `expect (cond);`. Solo dentro de su cuerpo. |
+| `ERRFINALLY` | `errfinally` | Cláusula de un `test`: corre solo si la prueba falló. |
 | `HOOK`      | `hook`   | Antes de `fn`: método del set fijo de hooks (`hook fn __free__(...)`). |
 | `DUNDER_KW` | `dunder` | Antes de `fn`: método especial LIBRE (`dunder fn __x__(...)`), sin significado especial. |
 
@@ -332,7 +335,7 @@ with definition:      with ( <recurso o valor> ) { <block> }    // RAII: se dest
 | `THROW`     | `throw`   | Lanza un valor (cede su propiedad).                      |
 | `TRY`       | `try`     | Bloque protegido.                                        |
 | `CATCH`     | `catch`   | Rama que atrapa (con tipo, solo ese tipo).               |
-| `FINALLY`   | `finally` | Corre al salir del `try` por cualquier camino.           |
+| `FINALLY`   | `finally` | Corre al salir del `try` por cualquier camino; tras un `test`, siempre. |
 | `ERRORTYPE` | `error`   | Tipo `error T`: un valor o un error.                     |
 | `WITH`      | `with`    | Recurso, guardián o receptor con ámbito (`.campo`).      |
 
@@ -391,6 +394,7 @@ arithmetic:   <expr> ( + | - | * | / | % ) <expr>
 bits:         <expr> ( & | | | ^ | << | >> ) <expr>   |   ~ <expr>
 comparison:   <expr> ( == | != | < | <= | > | >= ) <expr>
 logical:      <expr> ( and | or ) <expr>   |   not <expr>
+unwrap:       <expr> ?? <expr>          (x: T?, d: T -> T)
 assign:       <name> ( = | += | -= | *= | /= | %= | &= | |= | ^= | <<= | >>= ) <expr>;
 step:         <name>++;   <name>--;
 ```
@@ -401,13 +405,28 @@ step:         <name>++;   <name>--;
 | Bits        | `ADDRESS &` `PIPE \|` `CARET ^` `TILDE ~` `SHIFT_LEFT <<` `SHIFT_RIGHT >>` |
 | Comparación | `EQUAL ==` `NOT_EQUAL !=` `LESS <` `LESS_EQUAL <=` `GREATER >` `GREATER_EQUAL >=` |
 | Lógicos     | `AND and` `OR or` `NOT not`                                    |
+| Opcional    | `NULL_COALESCE ??` (lo arma el parser: dos `NULLABLE` pegados) |
 | Asignación  | `ASSIGN =` `PLUS_ASSIGN +=` `MINUS_ASSIGN -=` `STAR_ASSIGN *=` `SLASH_ASSIGN /=` `PERCENT_ASSIGN %=` `AMP_ASSIGN &=` `PIPE_ASSIGN \|=` `CARET_ASSIGN ^=` `SHIFT_LEFT_ASSIGN <<=` `SHIFT_RIGHT_ASSIGN >>=` |
 | Paso        | `INCREMENT ++` `DECREMENT --` (solo como sentencia: `i++;`)    |
 
 `&` es a la vez la dirección (`&x`, prefijo) y el y de bits (`a & b`, infijo).
-La precedencia, de menor a mayor: asignación, `or`, `and`, igualdad,
+
+Qué compara cada operador de comparación lo decide el tipo, no la gramática:
+`==` es igualdad de **valor** (un `struct` campo a campo, un enum con datos
+por variante y payload, un puntero por su dirección) salvo que el tipo declare
+`__eq__`; `<`, `<=`, `>`, `>=` ordenan los números, `char`, `str`, `byte` y
+los enums sin datos, y un tipo propio que declare `__cmp__`. Ver
+`documentation/source/type_system.rst` (Igualdad y orden).
+La precedencia, de menor a mayor: asignación, `??`, `or`, `and`, igualdad,
 comparación, `|`, `^`, `&`, desplazamientos, suma, producto; los unarios y
-los sufijos (`.`, `()`, `[]`) ligan más fuerte (ver `grammar.ebnf`).
+los sufijos (`.`, `()`, `[]`) ligan más fuerte (ver `grammar.ebnf`). La
+asignación y `??` asocian por la derecha (`a ?? b ?? c` es `a ?? (b ?? c)`).
+
+`??` desenvuelve un `T?`: vale el contenido de `x` si no es `null` y, si lo
+es, `d`, que solo entonces se evalúa. `d` tiene que ser exactamente el `T`.
+Como `>>`, el lexer no lo emite: son dos `?` pegados que el parser junta en
+posición de operador, así que `int??` sigue siendo un tipo con dos sufijos.
+Ver `documentation/source/type_system.rst` (Desenvolver un `T?`).
 
 ---
 
@@ -477,7 +496,7 @@ extern definition:    #extern cpp{ <c++ crudo> };         // RAW_BLOCK, no se to
 |---------|--------------------------------------------------------------|
 | `EOF`   | Marca el fin del flujo de tokens. Siempre el último.         |
 | `ERROR` | Token sintético emitido ante un error léxico (recuperación). |
-| `DUNDER`| `__foo__` (empieza y termina en `__`, ≥1 caracter dentro). El lexer reconoce la FORMA para cualquier nombre, sin validar una lista cerrada; qué nombres son *hooks* de tipo reconocidos lo decide la fase Semántica (`semantic/hooks.py`), que valida la firma completa y enlaza el despacho: `free x;` y el cierre del ámbito→`__free__`, `sizeof(T)`→`__sizeof__`, `print(x)`/`x.print()`→`__print__`, `len(x)`/`x.len()`→`__len__`, `cast<T>(x)`→`__cast__`, `v[i]`→`__index__`, `v[i] = x`→`__index_set__`, `a == b`→`__eq__`. `__min__`/`__max__` no los dispara ninguna sintaxis: los LEE el compilador para decidir si un literal cabe en un tipo numérico de librería. Un `__foo__` no reconocido se trata como una función normal, sin error. |
+| `DUNDER`| `__foo__` (empieza y termina en `__`, ≥1 caracter dentro). El lexer reconoce la FORMA para cualquier nombre, sin validar una lista cerrada; qué nombres son *hooks* de tipo reconocidos lo decide la fase Semántica (`semantic/hooks.py`), que valida la firma completa y enlaza el despacho: `free x;` y el cierre del ámbito→`__free__`, `sizeof(T)`→`__sizeof__`, `print(x)`/`x.print()`→`__print__`, `len(x)`/`x.len()`→`__len__`, `cast<T>(x)`→`__cast__`, `v[i]`→`__index__`, `v[i] = x`→`__index_set__`, `a == b`→`__eq__`, `a < b` (y `<=`, `>`, `>=`)→`__cmp__`, `hash(x)`→`__hash__`. `__min__`/`__max__` no los dispara ninguna sintaxis: los LEE el compilador para decidir si un literal cabe en un tipo numérico de librería. Un `__foo__` no reconocido se trata como una función normal, sin error. |
 
 ---
 

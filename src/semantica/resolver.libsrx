@@ -39,11 +39,13 @@
 -/
 
 #import frontend.arbol as ar
+#import frontend.diagnosticos as dg
 #import semantica.nodos as nd
 #import semantica.tipos as tip
 #import semantica.simbolos as sim
 #import semantica.propiedad as prop
 #import semantica.enlazador as enl
+#import semantica.muertos as mu
 #import sistema.rutas as rt
 #import array.vector as vec
 #import collections.dictionary as dic
@@ -61,6 +63,9 @@ public const int HOOK_LEN = 5;
 public const int HOOK_INDEX = 7;
 public const int HOOK_INDEX_SET = 8;
 public const int HOOK_HASH = 12;
+public const int HOOK_CAST = 6;
+public const int HOOK_MIN = 10;
+public const int HOOK_MAX = 11;
 
 /- Una referencia a un hook (`HookRef`): el tipo dueño y la clase. -/
 struct {
@@ -88,8 +93,40 @@ struct {
     dic.Dictionary<int, str> nombre_canonico; // StructLiteral -> su tipo canónico
     dic.Dictionary<int, int> lib_de;          // ImportDirective/FromDirective -> su librería
     vec.Vector<str> genericos;     // los parámetros de tipo del cuerpo en curso (`_genericos`)
-    str receptor;                  // el receptor del método en curso ("" fuera de uno)
+    vec.Vector<dg.Diagnostico> diagnosticos;  // los de la Semántica, en el orden de la V0
+    dic.Dictionary<int, bool> repetidos;      // StructDecl/EnumDecl/TypeDecl cuyo nombre ya era de otro tipo
+    dic.Dictionary<str, int> traits;          // cada '@trait' declarado -> su TraitDecl
+    vec.Vector<int> impls;                    // los '@impl(trait)' a verificar al final de 'recoge'
+    vec.Vector<dg.Diagnostico> notas;         // las NOTAS: van después de todos los errores
+    vec.Vector<dg.Diagnostico> pendientes;    // los del '#import' de 'pendiente_de': las
+    vec.Vector<int> pendiente_de;             // librerías se cargan en 1a, se informan en 1b
+    dic.Dictionary<str, str> ocultos;         // "imp|nombre" -> 'internal' o 'private'
+    // SEM038 (`verificar_copias`): qué copia cada cuerpo genérico y cada
+    // llamada que instancia un genérico, para decidir al cerrar el módulo
+    dic.Dictionary<int, int> simbolo_de;      // FunctionDecl -> su símbolo (`fn_symbols`)
+    vec.Vector<int> copia_fn;                 // (símbolo, tipo) de cada copia directa
+    vec.Vector<int> copia_tipo;
+    vec.Vector<int> inst_llamador;            // cada instancia: quién llama (-1 fuera de una fn),
+    vec.Vector<int> inst_llamado;             // a quién, con qué mapa, desde dónde, y los
+    vec.Vector<int> inst_mapa_desde;          // parámetros de tipo que ve el llamador
+    vec.Vector<int> inst_mapa_n;
+    vec.Vector<str> inst_nombres;
+    vec.Vector<int> inst_args;
+    vec.Vector<int> inst_gen_desde;
+    vec.Vector<int> inst_gen_n;
+    vec.Vector<str> inst_genericos;
+    vec.Vector<int> inst_linea;
+    vec.Vector<int> inst_col;
+    bool ligo;                                // la última `liga` ligó algo (un mapa no vacío)
+    str receptor;                 // el receptor del método en curso ("" fuera de uno)
     dic.Dictionary<int, bool> mueve; // ThrowStmt cuyo valor se cede con un 'move' implícito
+    dic.Dictionary<int, str> no_emitible; // nodo -> lo que la V1 todavía no emite ('min', una
+                                          // conversión implícita de un literal...)
+    int retorno;                   // el tipo de retorno de la función en curso
+    int funcion;                   // el nodo de la función en curso (-1 fuera de una)
+    dic.Dictionary<str, int> locales_fn; // nombre -> tipo de cada local de la función en
+                                   // curso, el ÚLTIMO declarado (`self.locals` de la V0)
+    bool en_funcion;               // ¿se está dentro del cuerpo de una función?
 } Analisis;
 
 /- El mapa de sustitución de un uso concreto: cada parámetro de tipo
@@ -116,7 +153,20 @@ fn nuevo(vec.Vector<ar.Nodo> ptr a, enl.Contexto ptr mutable ctx, str fuente,
         librerias: vec.dynamic<int>(4), unidad_de: dic.make<int, str>(4),
         ligadura_de: dic.make<int, str>(4), nombre_canonico: dic.make<int, str>(4),
         lib_de: dic.make<int, int>(4), genericos: vec.dynamic<str>(2), receptor: "",
-        mueve: dic.make<int, bool>(4) };
+        diagnosticos: vec.dynamic<dg.Diagnostico>(4), repetidos: dic.make<int, bool>(2),
+        traits: dic.make<str, int>(2), impls: vec.dynamic<int>(1),
+        notas: vec.dynamic<dg.Diagnostico>(1), pendientes: vec.dynamic<dg.Diagnostico>(1),
+        pendiente_de: vec.dynamic<int>(1), ocultos: dic.make<str, str>(1),
+        simbolo_de: dic.make<int, int>(8), copia_fn: vec.dynamic<int>(1),
+        copia_tipo: vec.dynamic<int>(1), inst_llamador: vec.dynamic<int>(2),
+        inst_llamado: vec.dynamic<int>(2), inst_mapa_desde: vec.dynamic<int>(2),
+        inst_mapa_n: vec.dynamic<int>(2), inst_nombres: vec.dynamic<str>(2),
+        inst_args: vec.dynamic<int>(2), inst_gen_desde: vec.dynamic<int>(2),
+        inst_gen_n: vec.dynamic<int>(2), inst_genericos: vec.dynamic<str>(2),
+        inst_linea: vec.dynamic<int>(2), inst_col: vec.dynamic<int>(2), ligo: false,
+        mueve: dic.make<int, bool>(4), no_emitible: dic.make<int, str>(1),
+        retorno: 0, en_funcion: false, funcion: -1,
+        locales_fn: dic.make<str, int>(1) };
     r.tabla.unidad = unidad;
     return r;
 }
@@ -128,6 +178,14 @@ public fn analiza(vec.Vector<ar.Nodo> ptr a, int raiz, enl.Contexto ptr mutable 
     var Analisis r = nuevo(a, ctx, fuente, unidad);
     recoge(a, raiz, &r);
     resuelve(a, raiz, &r);
+    // la última pasada de la V0 (`memory_check`): lo movido y lo liberado
+    mu.verifica(a, raiz, &r.mueve, &r.diagnosticos);
+    // las notas, después de todos los errores (como `emit_diagnostics`)
+    var int i = 0;
+    while (i < r.notas.len()) {
+        r.diagnosticos.push(r.notas.get(i));
+        i = i + 1;
+    };
     return r;
 }
 
@@ -155,6 +213,142 @@ fn tiene_dueno(Analisis ptr mutable r, int n) -> void {
 fn referencia(Analisis ptr mutable r, int n, str owner, int kind) -> void {
     r.refs.push(RefHook{ owner: owner, kind: kind });
     r.ref_hook[n] = r.refs.len() - 1;
+}
+
+/- Un diagnóstico de la Semántica. Van en el orden en que la V0 los
+   encuentra: por eso cada uno se informa en el punto del recorrido que le
+   corresponde en la V0, no donde la V1 ya tenga el dato. -/
+fn reporta(Analisis ptr mutable r, str codigo, int linea, int col, str mensaje) -> void {
+    r.diagnosticos.push(dg.nuevo(codigo, linea, col, mensaje));
+}
+
+// ------------------------------------------------------------------------ //
+// validar lo escrito (type_resolver.TypeBinder)
+// ------------------------------------------------------------------------ //
+
+/- El símbolo del tipo escrito como `nombre`, o -1 diciendo por qué no
+   resuelve (`_check_nominal` sobre `lookup_type_path`): `AST005` si no
+   existe o no nombra un tipo; `SEM011` si se baja por algo que no lo
+   publica. Un nombre con puntos arranca en un VALOR (el import), y un
+   local cuenta: no tiene miembros. ¿Resuelve? -/
+fn valida_nominal(Analisis ptr mutable r, str nombre, int linea, int col) -> bool {
+    var vec.Vector<str> partes = tramos(nombre);
+    if (partes.len() == 1) {
+        if (tipo_local(r, nombre) or r.tabla.tipos.contains(nombre)) { return true; };
+        reporta(r, "AST005", linea, col, f"el tipo '{nombre}' no está declarado");
+        return false;
+    };
+    var bool es_local = sim.busca_local(&r.tabla, partes.get(0)) >= 0;
+    var int base = -1;
+    if (not es_local) { base = sim.busca_valor(&r.tabla, partes.get(0)); };
+    if (not es_local and base < 0) {
+        reporta(r, "AST005", linea, col, f"el tipo '{nombre}' no está declarado: '{partes.get(0)}' "
+                                         + "no es un módulo importado aquí");
+        return false;
+    };
+    var str dueno = partes.get(0);
+    var int i = 1;
+    while (i < partes.len()) {
+        var int siguiente = -1;
+        // una librería que no cargó: su error ya se dijo (`OPAQUE`)
+        if (not es_local and sim.simbolo(&r.tabla, base).opaco) { return false; };
+        if (not es_local) {
+            var int clase = sim.simbolo(&r.tabla, base).clase;
+            if (clase == sim.IMPORT or clase == sim.STRUCT or clase == sim.ENUM) {
+                siguiente = sim.busca_miembro(&r.tabla, base, partes.get(i));
+            };
+        };
+        if (siguiente < 0) {
+            reporta(r, "SEM011", linea, col, f"'{dueno}' no publica el tipo '{partes.get(i)}'");
+            return false;
+        };
+        base = siguiente;
+        es_local = false;
+        dueno = dueno + "." + partes.get(i);
+        i = i + 1;
+    };
+    var int clase = sim.simbolo(&r.tabla, base).clase;
+    if (clase != sim.STRUCT and clase != sim.ENUM and clase != sim.TYPE) {
+        reporta(r, "AST005", linea, col, f"'{nombre}' no nombra un tipo");
+        return false;
+    };
+    return true;
+}
+
+/- ¿`nombre` es un `type` LOCAL visible desde aquí? (Los tipos son otro
+   espacio: un local que no es un tipo no lo tapa.) -/
+fn tipo_local(Analisis ptr r, str nombre) -> bool {
+    var int i = r.tabla.locales.len() - 1;
+    while (i >= 0) {
+        var sim.Local l = sim.local(&r.tabla, i);
+        if (l.nombre == nombre and l.clase == sim.TYPE) { return true; };
+        i = i - 1;
+    };
+    return false;
+}
+
+/- Valida el tipo escrito `n` (`_check_type`): su núcleo nominal (bajo
+   `ptr`, `?` y `error`) y, si existe, sus argumentos; todo se informa en
+   `linea:col`, la posición de quien lo escribe. (La aridad de un genérico,
+   `SEM027`, llega con los genéricos: 18c.) -/
+fn valida_tipo(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r, int linea, int col)
+        -> void {
+    var int x = n;
+    while (x >= 0 and (nd.clase(a, x) == "PointerTypeExpr" or nd.clase(a, x) == "NullableTypeExpr"
+                       or nd.clase(a, x) == "ErrorTypeExpr")) {
+        x = nd.hijo(a, x, "inner");
+    };
+    if (x < 0 or nd.clase(a, x) != "NominalTypeExpr") { return; };
+    if (not valida_nominal(r, nd.atributo(a, x, "name"), linea, col)) { return; };
+    var vec.Vector<int> args = nd.hijos(a, x, "args");
+    var int i = 0;
+    while (i < args.len()) {
+        valida_tipo(a, args.get(i), r, linea, col);
+        i = i + 1;
+    };
+    var str nombre = nd.atributo(a, x, "name");
+    aridad(r, hoja(nombre), parametros_de_tipo(r, nombre), args.len(), linea, col);
+}
+
+/- Cuántos parámetros de tipo declara el tipo `nombre` (ya validado). -/
+fn parametros_de_tipo(Analisis ptr r, str nombre) -> int {
+    if (tipo_local(r, nombre)) { return 0; };
+    var int s = tipo_por_ruta_estricta(r, nombre);
+    if (s < 0) { return 0; };
+    return sim.simbolo(&r.tabla, s).n_tparams;
+}
+
+/- El uso de un genérico trae tantos argumentos como parámetros declara
+   (`_check_arity`): `SEM027` si no. -/
+fn aridad(Analisis ptr mutable r, str nombre, int esperados, int dados, int linea, int col) -> void {
+    if (esperados == dados) { return; };
+    if (esperados == 0) {
+        reporta(r, "SEM027", linea, col,
+                f"'{nombre}' no es un tipo generico: no admite argumentos de tipo, y se le pasaron {dados}");
+        return;
+    };
+    reporta(r, "SEM027", linea, col,
+            f"'{nombre}' declara {esperados} parametro(s) de tipo y se usa con {dados}");
+}
+
+/- ¿El tipo escrito `n` es `void` (sin envolver)? -/
+fn es_void(vec.Vector<ar.Nodo> ptr a, int n) -> bool {
+    return n >= 0 and nd.clase(a, n) == "PrimitiveTypeExpr" and nd.atributo(a, n, "name") == "void";
+}
+
+/- El tipo escrito de una declaración CON NOMBRE —variable, parámetro,
+   campo, `catch`— (`TypeBinder.bind`), en la posición de la declaración:
+   `void` no es el tipo de ningún valor (`SEM025`). -/
+fn valida_declarado(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var int escrito = nd.hijo(a, n, "type");
+    if (escrito < 0) { return; };
+    valida_tipo(a, escrito, r, nd.linea(a, n), nd.col(a, n));
+    if (es_void(a, escrito)) {
+        var str nombre = nd.atributo(a, n, "name");
+        reporta(r, "SEM025", nd.linea(a, n), nd.col(a, n),
+                f"'void' significa que no hay valor: no puede ser el tipo de '{nombre}' "
+                + "(solo vale como retorno)");
+    };
 }
 
 // ------------------------------------------------------------------------ //
@@ -215,8 +409,10 @@ fn tipo_escrito_por_ruta(Analisis ptr r, str nombre) -> int {
         else { base = sim.busca_miembro(&r.tabla, base, partes.get(i)); };
         i = i + 1;
     };
+    // (un 'type' de librería también: 'dt.int8' es 'dt_variables.int8')
     if (base >= 0 and (sim.simbolo(&r.tabla, base).clase == sim.STRUCT
-                       or sim.simbolo(&r.tabla, base).clase == sim.ENUM)) {
+                       or sim.simbolo(&r.tabla, base).clase == sim.ENUM
+                       or sim.simbolo(&r.tabla, base).clase == sim.TYPE)) {
         return base;
     };
     // un nombre ya canónico ('calc.Par' dentro de 'calc', o el de un tipo
@@ -278,14 +474,23 @@ fn recoge(vec.Vector<ar.Nodo> ptr a, int raiz, Analisis ptr mutable r) -> void {
     // 1a. los imports (cargan sus librerías y ligan sus nombres) y los
     // NOMBRES de los tipos: una firma puede nombrar un tipo declarado más
     // abajo o traído de una librería, y su nombre canónico ya tiene que
-    // resolver
+    // resolver. Los parámetros de tipo (`Caja<T>`, `fn make<T>`) entran en
+    // el mismo orden que en la V0 (los de un struct, antes que su nombre):
+    // quién gana un nombre repetido lo decide ese orden
     var int i = 0;
     while (i < items.len()) {
-        var int n = items.get(i);
+        var int n = desenvuelve(a, items.get(i));
         var str c = nd.clase(a, n);
         if (c == "ImportDirective" or c == "FromDirective") { importa(a, n, r); }
-        else if (c == "StructDecl") { declara_tipo(a, n, r, sim.STRUCT); }
-        else if (c == "EnumDecl") { declara_tipo(a, n, r, sim.ENUM); };
+        else if (c == "StructDecl" or c == "TypeDecl") {
+            declara_parametros(a, n, r);
+            if (c == "StructDecl") { declara_tipo(a, n, r, sim.STRUCT); }
+            else { declara_tipo(a, n, r, sim.TYPE); };
+        } else if (c == "EnumDecl") { declara_tipo(a, n, r, sim.ENUM); }
+        else if (c == "FunctionDecl" and nd.atributo(a, n, "specifier") != "hook"
+                 and nd.atributo(a, n, "specifier") != "dunder") {
+            declara_parametros(a, n, r);
+        };
         i = i + 1;
     };
     // 1b. lo demás, en el ORDEN del archivo: es el orden en que la V0 llena
@@ -293,15 +498,150 @@ fn recoge(vec.Vector<ar.Nodo> ptr a, int raiz, Analisis ptr mutable r) -> void {
     // propios, al pasar por su 'hook fn')
     i = 0;
     while (i < items.len()) {
-        var int n = items.get(i);
+        var int n = desenvuelve(a, items.get(i));
         var str c = nd.clase(a, n);
-        if (c == "ImportDirective" or c == "FromDirective") { fusiona_hooks(n, r); }
+        // '@impl(trait) struct ...': se verifica al FINAL (los métodos y el
+        // trait pueden declararse en cualquier orden)
+        if (nd.clase(a, items.get(i)) == "DecoratorDecl" and c == "StructDecl"
+                and nd.atributo(a, items.get(i), "name") == "impl") {
+            r.impls.push(items.get(i));
+        };
+        if (c == "ImportDirective" or c == "FromDirective") {
+            suelta_pendientes(n, r);
+            fusiona_hooks(n, r);
+        }
+        else if (c == "TypeDecl") { recoge_tipo(a, n, r); }
+        else if (c == "TraitDecl") { recoge_trait(a, n, r); }
         else if (c == "FunctionDecl") { recoge_funcion(a, n, r); }
         else if (c == "VarDecl") { recoge_global(a, n, r); }
-        else if (c == "StructDecl") { recoge_struct(a, n, r); declara_parametros(a, n, r); }
+        else if (c == "StructDecl") { recoge_struct(a, n, r); }
         else if (c == "EnumDecl") { recoge_enum(a, n, r); };
         i = i + 1;
     };
+    i = 0;
+    while (i < r.impls.len()) {
+        verifica_impl(a, r.impls.get(i), r);
+        i = i + 1;
+    };
+}
+
+/- Lo que declara un item: el decorado de un `@decorador decl` (la V0 lo
+   recoge tal cual; el decorador solo cuenta si es un `@impl(trait)`). -/
+fn desenvuelve(vec.Vector<ar.Nodo> ptr a, int n) -> int {
+    if (nd.clase(a, n) == "DecoratorDecl") { return nd.hijo(a, n, "target"); };
+    return n;
+}
+
+/- `[const] type T;` (`_collect_type_decl`): un tipo OPACO, en los dos
+   espacios: como tipo (declarado en 1a) y como VALOR de tipo `type` (en
+   1b, en su lugar del orden). -/
+fn recoge_tipo(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var str nombre = nd.atributo(a, n, "name");
+    choque_de_parametros(a, n, r);
+    if (r.repetidos.contains(n)) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n), f"el tipo '{nombre}' ya está declarado");
+        return;
+    };
+    var vec.Vector<str> tparams = nd.lista(a, n, "type_params");
+    sim.pon_tparams(&r.tabla, sim.busca_tipo(&r.tabla, nombre), &tparams);
+    var sim.Simbolo v = sim.simbolo_simple(nombre, sim.TYPE, nd.linea(a, n), nd.col(a, n),
+        tip.simple(&r.ctx.u, tip.META), nd.atributo(a, n, "qualifier") != "const");
+    v.visibilidad = nd.atributo(a, n, "visibility");
+    v.tipo_nombre = sim.califica(&r.tabla, nombre);
+    if (sim.define_valor(&r.tabla, v) < 0) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                f"el tipo '{nombre}' colisiona con otro símbolo del mismo scope");
+    };
+}
+
+/- `@trait struct { ... } nombre;` (`_collect_trait`): por ahora solo su
+   nombre. (Que sus métodos sean dunder y que un `@impl` lo cumpla llega con
+   la tanda 18c.) -/
+fn recoge_trait(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var str nombre = nd.atributo(a, n, "name");
+    // un método de trait siempre se cumple con un 'dunder fn': nombre '__x__'
+    var vec.Vector<int> metodos = nd.hijos(a, n, "methods");
+    var int i = 0;
+    while (i < metodos.len()) {
+        var str m = nd.atributo(a, metodos.get(i), "name");
+        if (not (text.starts_with(m, "__") and text.ends_with(m, "__") and len(m) > 4)) {
+            reporta(r, "SEM021", nd.linea(a, metodos.get(i)), nd.col(a, metodos.get(i)),
+                    f"el método '{m}' del trait '{nombre}' debe tener nombre dunder ('__x__')");
+        };
+        i = i + 1;
+    };
+    if (r.traits.contains(nombre)) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n), f"el trait '{nombre}' ya está declarado");
+        return;
+    };
+    r.traits.put(nombre, n);
+}
+
+/- `@impl(t1, t2) struct ... X;` (`traits.check_impl`): `X` cumple cada
+   trait con un `dunder fn` de la MISMA firma (`self` es `X`). `SEM021` en el
+   decorador por cada trait que no existe, método que falta o firma distinta. -/
+fn verifica_impl(vec.Vector<ar.Nodo> ptr a, int deco, Analisis ptr mutable r) -> void {
+    var str tipo = nd.atributo(a, nd.hijo(a, deco, "target"), "name");
+    var vec.Vector<int> sin_args = vec.dynamic<int>(1);
+    var int propio = tip.nominal(&r.ctx.u, tipo, &sin_args);
+    var vec.Vector<str> traits = nd.lista(a, deco, "args");
+    var int i = 0;
+    while (i < traits.len()) {
+        var str t = traits.get(i);
+        if (not r.traits.contains(t)) {
+            reporta(r, "SEM021", nd.linea(a, deco), nd.col(a, deco),
+                    f"'@impl({t})': el trait '{t}' no está declarado");
+        } else {
+            var vec.Vector<int> metodos = nd.hijos(a, r.traits.get(t), "methods");
+            var int k = 0;
+            while (k < metodos.len()) {
+                var int m = metodos.get(k);
+                var str nombre = nd.atributo(a, m, "name");
+                var int d = sim.busca_dunder(&r.tabla, tipo, nombre);
+                if (d < 0) {
+                    reporta(r, "SEM021", nd.linea(a, deco), nd.col(a, deco),
+                            f"'{tipo}' no implementa '{nombre}', requerido por el trait '{t}'");
+                } else if (not firma_cumple(a, m, d, propio, r)) {
+                    reporta(r, "SEM021", nd.linea(a, deco), nd.col(a, deco),
+                            f"la firma de '{nombre}' en '{tipo}' no coincide con la que exige el trait '{t}'");
+                };
+                k = k + 1;
+            };
+        };
+        i = i + 1;
+    };
+}
+
+/- ¿El método `d` tiene la firma del prototipo `m` con `self` = `propio`? -/
+fn firma_cumple(vec.Vector<ar.Nodo> ptr a, int m, int d, int propio, Analisis ptr mutable r) -> bool {
+    var vec.Vector<int> params = nd.hijos(a, m, "params");
+    if (params.len() != sim.simbolo(&r.tabla, d).n_params) { return false; };
+    var int i = 0;
+    while (i < params.len()) {
+        if (con_self(a, params.get(i), propio, r) != sim.param_de(&r.tabla, d, i)) { return false; };
+        i = i + 1;
+    };
+    var int retorno = tip.simple(&r.ctx.u, tip.VOID);
+    if (nd.hijo(a, m, "return_type") >= 0) { retorno = con_self(a, nd.hijo(a, m, "return_type"), propio, r); };
+    return retorno == sim.simbolo(&r.tabla, d).tipo;
+}
+
+/- El tipo escrito `n` con `self` sustituido por `propio` (`subst_self`). -/
+fn con_self(vec.Vector<ar.Nodo> ptr a, int n, int propio, Analisis ptr mutable r) -> int {
+    var str c = nd.clase(a, n);
+    if (c == "SelfTypeExpr") { return propio; };
+    if (c == "PointerTypeExpr") {
+        return tip.puntero(&r.ctx.u, con_self(a, nd.hijo(a, n, "inner"), propio, r),
+                           nd.atributo(a, n, "mutable") == "true");
+    };
+    if (c == "NullableTypeExpr") { return tip.nullable(&r.ctx.u, con_self(a, nd.hijo(a, n, "inner"), propio, r)); };
+    if (c == "ErrorTypeExpr") {
+        var int dentro = 0;
+        if (nd.hijo(a, n, "inner") >= 0) { dentro = con_self(a, nd.hijo(a, n, "inner"), propio, r); };
+        var vec.Vector<int> nada = vec.dynamic<int>(1);
+        return tip.interna(&r.ctx.u, tip.ERROR, "", dentro, false, &nada);
+    };
+    return tipo_escrito(a, n, r);
 }
 
 /- El nombre de un struct o un enum, con su nombre CANÓNICO: en una librería
@@ -316,7 +656,11 @@ fn declara_tipo(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r, int cl
     s.tipo_nombre = canonico;
     s.visibilidad = nd.atributo(a, n, "visibility");
     var int t = sim.define_tipo(&r.tabla, s);
-    if (t < 0) { return; };
+    if (t < 0) {
+        // el primero gana; el SEM002 sale en 1b, en su lugar del orden
+        r.repetidos.put(n, true);
+        return;
+    };
     if (canonico != nombre) { r.tabla.tipos.put(canonico, t); };
     r.tabla.canonicos.put(canonico, t);
 }
@@ -327,6 +671,8 @@ fn declara_tipo(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r, int cl
    posición de la declaración. El primero que declara un nombre gana: otro
    genérico que reusa `T` comparte el mismo. -/
 fn declara_parametros(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    // (si el nombre ya era un tipo de verdad, es un SEM002: lo informa
+    // `choque_de_parametros`, en 1b)
     var vec.Vector<str> nombres = nd.lista(a, n, "type_params");
     var vec.Vector<int> sin_args = vec.dynamic<int>(1);
     var int i = 0;
@@ -336,6 +682,23 @@ fn declara_parametros(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) 
                                                tip.nominal(&r.ctx.u, nombre, &sin_args), false);
         s.visibilidad = "internal";
         sim.define_tipo(&r.tabla, s);
+        i = i + 1;
+    };
+}
+
+/- `SEM002` por cada parámetro de tipo de `n` cuyo nombre ya era un tipo de
+   verdad (struct o enum), en la posición de la declaración. Otro genérico
+   que ya declaró `T` no choca: lo comparten. -/
+fn choque_de_parametros(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var vec.Vector<str> nombres = nd.lista(a, n, "type_params");
+    var int i = 0;
+    while (i < nombres.len()) {
+        var str nombre = nombres.get(i);
+        if (r.tabla.tipos.contains(nombre)
+                and sim.simbolo(&r.tabla, r.tabla.tipos.get(nombre)).clase != sim.TYPE) {
+            reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                    f"el parámetro de tipo '{nombre}' choca con un tipo ya declarado en este archivo");
+        };
         i = i + 1;
     };
 }
@@ -363,9 +726,9 @@ fn clase_de_hook(str sin_guiones) -> int {
 fn recoge_funcion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     var bool es_hook = nd.atributo(a, n, "specifier") == "hook";
     var bool es_metodo = nd.atributo(a, n, "specifier") == "dunder";
-    // 'fn make<T>': sus parámetros se declaran ANTES de mirar la firma, que
-    // los nombra (un método usa los de su tipo)
-    if (not es_hook and not es_metodo) { declara_parametros(a, n, r); };
+    // 'fn make<T>': sus parámetros ya están declarados (1a), antes de mirar
+    // la firma, que los nombra (un método usa los de su tipo)
+    if (not es_hook and not es_metodo) { choque_de_parametros(a, n, r); };
     var int retorno = tipo_escrito(a, nd.hijo(a, n, "return_type"), r);
     anota(r, n, retorno);
     var vec.Vector<int> tipos = vec.dynamic<int>(4);
@@ -382,10 +745,35 @@ fn recoge_funcion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> v
                                            nd.linea(a, n), nd.col(a, n), retorno, false);
     s.visibilidad = nd.atributo(a, n, "visibility");
     if (es_hook) {
+        // (`_collect_hook`) del vocabulario fijo, con su firma, de un tipo de
+        // ESTA unidad y sin repetir; si no, no se registra
+        if (valida_hook(a, n, r) == "") { return; };
         s.clase = sim.HOOK;
         s.hook_kind = clase_de_hook(nd.atributo(a, n, "dunder"));
+        if (s.hook_kind == HOOK_MIN or s.hook_kind == HOOK_MAX) {
+            s.constante = literal_devuelto(a, n);
+        };
         if (tipos.len() > 0) { s.hook_owner = nombre_nucleo(r, tipos.get(0)); };
+        if (s.hook_kind == HOOK_CAST) {
+            // un PAR (origen, destino) repetido
+            if (busca_cast(r, tipos.get(0), retorno) >= 0) {
+                var str de = tip.escribe(&r.ctx.u, tipos.get(0));
+                var str hacia = tip.escribe(&r.ctx.u, retorno);
+                reporta(r, "SEM007", nd.linea(a, n), nd.col(a, n),
+                        f"ya existe un '__cast__' para '{de} -> {hacia}'");
+                return;
+            };
+            // la V0 los emite en la tabla de conversiones (`casts`), no en la
+            // de hooks: la V1 todavía no
+            no_emite(r, n, "un 'hook fn __cast__'");
+        } else if (sim.busca_hook(&r.tabla, s.hook_owner, s.hook_kind) >= 0) {
+            var str cual = nd.atributo(a, n, "dunder");
+            reporta(r, "SEM007", nd.linea(a, n), nd.col(a, n),
+                    f"ya existe un hook {cual} para '{s.hook_owner}'");
+            return;
+        };
         var int h = sim.guarda(&r.tabla, s);
+        r.simbolo_de.put(n, h);
         sim.pon_params(&r.tabla, h, &tipos);
         sim.define_hook(&r.tabla, h);
         return;
@@ -395,18 +783,31 @@ fn recoge_funcion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> v
         // dueño = el nominal canónico de su receptor. No es un valor
         s.clase = sim.DUNDER;
         if (tipos.len() > 0) { s.hook_owner = nombre_nucleo(r, tipos.get(0)); };
-        if (s.hook_owner == "") { return; };
+        if (s.hook_owner == "") {
+            reporta(r, "SEM022", nd.linea(a, n), nd.col(a, n),
+                    f"'{s.nombre}': un 'dunder fn' debe tomar 'T ptr' (T nominal) como primer "
+                    + "parámetro (el tipo dueño)");
+            return;
+        };
         var int d = sim.guarda(&r.tabla, s);
         sim.pon_params(&r.tabla, d, &tipos);
-        sim.define_dunder(&r.tabla, d);
+        r.simbolo_de.put(n, d);
+        if (not sim.define_dunder(&r.tabla, d)) {
+            reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                    f"el dunder '{s.nombre}' ya está declarado para '{s.hook_owner}'");
+        };
         return;
     };
     var int f = sim.define_valor(&r.tabla, s);
-    if (f >= 0) {
-        sim.pon_params(&r.tabla, f, &tipos);
-        var vec.Vector<str> tparams = nd.lista(a, n, "type_params");
-        sim.pon_tparams(&r.tabla, f, &tparams);
+    if (f < 0) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                f"la función '{s.nombre}' ya está declarada en este scope");
+        return;
     };
+    sim.pon_params(&r.tabla, f, &tipos);
+    var vec.Vector<str> tparams = nd.lista(a, n, "type_params");
+    sim.pon_tparams(&r.tabla, f, &tparams);
+    r.simbolo_de.put(n, f);
 }
 
 /- Una variable del módulo: un símbolo VAR (mutable si no es `const`). -/
@@ -416,23 +817,42 @@ fn recoge_global(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> vo
     var sim.Simbolo s = sim.simbolo_simple(nd.atributo(a, n, "name"), sim.VAR,
         nd.linea(a, n), nd.col(a, n), t, nd.atributo(a, n, "qualifier") != "const");
     s.visibilidad = nd.atributo(a, n, "visibility");
-    sim.define_valor(&r.tabla, s);
+    if (sim.define_valor(&r.tabla, s) < 0) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                f"'{s.nombre}' ya está declarado en este scope");
+    };
 }
 
 /- Un struct: su símbolo (en el espacio de tipos) y sus campos, que son
-   escribibles (`mutable`). -/
+   escribibles (`mutable`). Los `SEM002` en el orden de la V0: los campos
+   repetidos (el primero queda), un parámetro de tipo que choca, y el
+   nombre del struct si ya era de otro tipo (que conserva sus campos). -/
 fn recoge_struct(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
-    var int s = sim.busca_tipo(&r.tabla, nd.atributo(a, n, "name"));
+    var str nombre = nd.atributo(a, n, "name");
+    var int s = -1;
+    if (not r.repetidos.contains(n)) { s = sim.busca_tipo(&r.tabla, nombre); };
     var vec.Vector<int> campos = nd.hijos(a, n, "fields");
     var vec.Vector<int> miembros = vec.dynamic<int>(campos.len() + 1);
+    var vec.Vector<str> vistos = vec.dynamic<str>(campos.len() + 1);
     var int i = 0;
     while (i < campos.len()) {
         var int f = campos.get(i);
+        var str campo = nd.atributo(a, f, "name");
         var int t = tipo_escrito(a, nd.hijo(a, f, "type"), r);
         anota(r, f, t);
-        miembros.push(sim.guarda(&r.tabla, sim.simbolo_simple(nd.atributo(a, f, "name"),
-            sim.FIELD, nd.linea(a, f), nd.col(a, f), t, true)));
+        if (contiene(&vistos, campo)) {
+            reporta(r, "SEM002", nd.linea(a, f), nd.col(a, f),
+                    f"campo duplicado '{campo}' en struct '{nombre}'");
+        } else {
+            vistos.push(campo);
+            miembros.push(sim.guarda(&r.tabla, sim.simbolo_simple(campo,
+                sim.FIELD, nd.linea(a, f), nd.col(a, f), t, true)));
+        };
         i = i + 1;
+    };
+    choque_de_parametros(a, n, r);
+    if (r.repetidos.contains(n)) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n), f"el tipo '{nombre}' ya está declarado");
     };
     if (s >= 0) {
         sim.pon_miembros(&r.tabla, s, &miembros);
@@ -443,152 +863,384 @@ fn recoge_struct(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> vo
 
 /- Un enum: su símbolo (espacio de tipos) y sus variantes, que viven como
    miembros del enum Y como valores globales (`ROJO` a secas). El valor
-   escrito (`= 200`) se anota como expresión; el payload, tipo por tipo. -/
+   escrito (`= 200`) se anota como expresión; el payload, tipo por tipo.
+   Los `SEM002` en el orden de la V0, variante por variante: repetida en
+   este enum (se salta), o con un nombre que ya es un valor (otra variante,
+   una función: queda como miembro, no como valor); al final, el nombre del
+   enum si ya era de otro tipo (que conserva sus variantes). -/
 fn recoge_enum(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
-    var int e = sim.busca_tipo(&r.tabla, nd.atributo(a, n, "name"));
+    var str nombre = nd.atributo(a, n, "name");
+    var int e = sim.busca_tipo(&r.tabla, nombre);
     var int propio = sim.simbolo(&r.tabla, e).tipo;
     var str vis = sim.simbolo(&r.tabla, e).visibilidad;
     var vec.Vector<int> items = nd.hijos(a, n, "items");
     var vec.Vector<int> miembros = vec.dynamic<int>(items.len() + 1);
+    var vec.Vector<str> vistos = vec.dynamic<str>(items.len() + 1);
+    var str siguiente = "0";      // el entero que le toca a la próxima (`_valor_de_item`)
     var int i = 0;
     while (i < items.len()) {
         var int it = items.get(i);
-        var int valor = nd.hijo(a, it, "value");
-        if (valor >= 0) { expresion(a, valor, r); };
-        var vec.Vector<int> payload = nd.hijos(a, it, "payload");
-        var vec.Vector<int> tipos = vec.dynamic<int>(payload.len() + 1);
-        var int k = 0;
-        while (k < payload.len()) {
-            var int t = tipo_escrito(a, payload.get(k), r);
-            anota(r, payload.get(k), t);
-            tipos.push(t);
-            k = k + 1;
+        var str item = nd.atributo(a, it, "name");
+        if (contiene(&vistos, item)) {
+            reporta(r, "SEM002", nd.linea(a, it), nd.col(a, it),
+                    f"item duplicado '{item}' en enum '{nombre}'");
+        } else {
+            vistos.push(item);
+            var str valor = valor_de_item(a, it, siguiente);
+            if (valor != "") { siguiente = f"{entero_de(valor) + 1}"; };
+            miembros.push(recoge_variante(a, it, nombre, propio, vis, valor, r));
         };
-        var sim.Simbolo s = sim.simbolo_simple(nd.atributo(a, it, "name"), sim.ENUM_ITEM,
-                                               nd.linea(a, it), nd.col(a, it), propio, false);
-        s.visibilidad = vis;
-        var int v = sim.guarda(&r.tabla, s);
-        sim.pon_params(&r.tabla, v, &tipos);
-        if (not r.tabla.valores.contains(s.nombre)) { r.tabla.valores.put(s.nombre, v); };
-        miembros.push(v);
         i = i + 1;
     };
-    if (e >= 0) { sim.pon_miembros(&r.tabla, e, &miembros); };
+    if (r.repetidos.contains(n)) {
+        reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n), f"el tipo '{nombre}' ya está declarado");
+        return;
+    };
+    sim.pon_miembros(&r.tabla, e, &miembros);
+}
+
+/- Una variante de `enum_nombre` (de tipo `propio`): su símbolo, también
+   como valor global si el nombre está libre. -/
+fn recoge_variante(vec.Vector<ar.Nodo> ptr a, int it, str enum_nombre, int propio, str vis,
+                   str valor_entero, Analisis ptr mutable r) -> int {
+    var int valor = nd.hijo(a, it, "value");
+    if (valor >= 0) { expresion(a, valor, r); };
+    var vec.Vector<int> payload = nd.hijos(a, it, "payload");
+    var vec.Vector<int> tipos = vec.dynamic<int>(payload.len() + 1);
+    var int k = 0;
+    while (k < payload.len()) {
+        var int t = tipo_escrito(a, payload.get(k), r);
+        anota(r, payload.get(k), t);
+        tipos.push(t);
+        k = k + 1;
+    };
+    var sim.Simbolo s = sim.simbolo_simple(nd.atributo(a, it, "name"), sim.ENUM_ITEM,
+                                           nd.linea(a, it), nd.col(a, it), propio, false);
+    s.visibilidad = vis;
+    s.constante = valor_entero;
+    var int v = sim.guarda(&r.tabla, s);
+    sim.pon_params(&r.tabla, v, &tipos);
+    if (r.tabla.valores.contains(s.nombre)) {
+        reporta(r, "SEM002", s.linea, s.col, f"el item '{s.nombre}' de enum '{enum_nombre}' "
+                                             + "colisiona con otro símbolo del mismo scope");
+    } else {
+        r.tabla.valores.put(s.nombre, v);
+    };
+    return v;
+}
+
+/- ¿`v` tiene `x`? -/
+fn contiene(vec.Vector<str> ptr v, str x) -> bool {
+    var int i = 0;
+    while (i < v.len()) {
+        if (v.get(i) == x) { return true; };
+        i = i + 1;
+    };
+    return false;
 }
 
 // ------------------------------------------------------------------------ //
 // las librerías (linker_p/ y collect.define_import)
 // ------------------------------------------------------------------------ //
 
-/- Carga `lib` (como se escribió: `calc`, `geo.punto`) para este módulo:
-   su índice en `ctx.libs`, o -1. Un nombre punteado es un SUBMÓDULO: se
-   carga el paquete entero y se baja por el alias. -/
-fn carga(Analisis ptr mutable r, str lib) -> int {
+/- Carga `lib` (como se escribió: `calc`, `geo.punto`) para el import de
+   `linea:col` (`linker_p.load_library`): su índice en `ctx.libs`, o -1 con
+   el porqué en `errores` (y en `notas`, un `.srcx` usado como librería). Un
+   nombre punteado es un SUBMÓDULO de un paquete. -/
+fn carga(Analisis ptr mutable r, str lib, int linea, int col,
+         vec.Vector<dg.Diagnostico> ptr mutable errores, vec.Vector<dg.Diagnostico> ptr mutable notas)
+        -> int {
     var vec.Vector<str> partes = tramos(lib);
     var bool punteado = partes.len() > 1;
     var vec.Vector<str> rutas = enl.rutas_de_busqueda(r.ctx, r.fuente);
     var enl.Hallado h = enl.busca(partes.get(0), &rutas, punteado);
     if (h.clase == "") {
-        r.ctx.errores.push(f"{r.fuente}: no se encontró '{partes.get(0)}'");
+        var str que = ".libsrx, paquete o .srcx";
+        if (punteado) { que = "paquete"; };
+        var str probadas = text.join(&rutas, ", ");
+        var str raiz_nombre = partes.get(0);
+        errores.push(dg.nuevo("SEM009", linea, col,
+            f"no se encontró '{raiz_nombre}' ({que}) (rutas probadas: {probadas})"));
         return -1;
+    };
+    if (h.clase == "srcx") {
+        var str base = rt.nombre_de(h.ruta);
+        notas.push(dg.en(dg.nuevo("NOTE001", linea, col,
+            f"se está usando un .srcx como librería ('{base}'); se recomienda usar .libsrx"), h.ruta));
     };
     if (punteado and h.clase == "package" and r.ctx.cargando.contains(h.ruta)) {
         // un submódulo que importa a un HERMANO mientras el paquete se
-        // carga: solo ese submódulo (linker_p._hermano)
-        return hermano(r.ctx, partes.get(0), partes.get(1), h.ruta);
+        // carga: solo ese submódulo (`_hermano`)
+        return hermano(r.ctx, lib, &partes, h.ruta, linea, col, errores, notas);
     };
-    var int raiz = carga_hallado(r.ctx, h);
-    if (raiz < 0 or not punteado) { return raiz; };
-    var enl.Libreria paquete = enl.lib(r.ctx, raiz);
+    var int raiz = carga_hallado(r.ctx, h, partes.get(0), linea, col, errores, notas);
+    if (raiz < 0) { return -1; };
+    if (not punteado) {
+        // el paquete ENTERO: también sus submódulos rotos
+        reporta_fallidos(r.ctx, raiz, "", linea, col, errores);
+        return raiz;
+    };
+    return desciende(r.ctx, lib, &partes, raiz, linea, col, errores);
+}
+
+/- `paquete.sub` -> el submódulo, por su alias (`_descend`). -/
+fn desciende(enl.Contexto ptr mutable ctx, str lib, vec.Vector<str> ptr partes, int raiz, int linea,
+             int col, vec.Vector<dg.Diagnostico> ptr mutable errores) -> int {
+    if (partes.len() > 2) {
+        errores.push(dg.nuevo("SEM010", linea, col,
+            f"'{lib}': subpaquetes anidados no soportados todavía (máximo '<paquete>.<submódulo>')"));
+        return -1;
+    };
+    var enl.Libreria paquete = enl.lib(ctx, raiz);
+    var str buscado = partes.get(1);
+    var str disponibles = "";
     var int k = 0;
     while (k < paquete.n_subs) {
-        var int s = enl.de_lista(r.ctx, paquete.subs_desde, k);
-        if (enl.lib(r.ctx, s).alias == partes.get(1)) { return s; };
+        var int s = enl.de_lista(ctx, paquete.subs_desde, k);
+        if (enl.lib(ctx, s).alias == buscado) { return s; };
+        if (disponibles != "") { disponibles = disponibles + ", "; };
+        disponibles = disponibles + enl.lib(ctx, s).alias;
         k = k + 1;
     };
-    r.ctx.errores.push(f"el paquete '{partes.get(0)}' no tiene un submódulo '{partes.get(1)}'");
+    if (tiene_fallido(ctx, raiz, buscado)) {
+        // existe pero no compiló: sus errores, no un "no tiene"
+        reporta_fallidos(ctx, raiz, buscado, linea, col, errores);
+        return -1;
+    };
+    if (disponibles == "") { disponibles = "ninguno"; };
+    var str base = partes.get(0);
+    errores.push(dg.nuevo("SEM011", linea, col,
+        f"el paquete '{base}' no tiene un submódulo '{buscado}' (disponibles: {disponibles})"));
     return -1;
 }
 
-/- Una librería ya ubicada, una sola vez por ruta (la caché). -/
-fn carga_hallado(enl.Contexto ptr mutable ctx, enl.Hallado h) -> int {
-    if (ctx.por_ruta.contains(h.ruta)) { return ctx.por_ruta.get(h.ruta); };
+/- ¿El paquete `paquete` tiene un submódulo `nombre` que no cargó? -/
+fn tiene_fallido(enl.Contexto ptr ctx, int paquete, str nombre) -> bool {
+    var int i = 0;
+    while (i < ctx.fallos.len()) {
+        if (ctx.fallo_paquete.get(i) == paquete and ctx.fallo_nombre.get(i) == nombre) { return true; };
+        i = i + 1;
+    };
+    return false;
+}
+
+/- Dice (UNA vez) los errores de los submódulos de `paquete` que no
+   cargaron —de `nombre`, o de todos con ""—; su `SEM010` va en la línea del
+   import que los pide (`_reporta_fallido`). -/
+fn reporta_fallidos(enl.Contexto ptr mutable ctx, int paquete, str nombre, int linea, int col,
+                    vec.Vector<dg.Diagnostico> ptr mutable errores) -> void {
+    var int i = 0;
+    while (i < ctx.fallos.len()) {
+        if (ctx.fallo_paquete.get(i) == paquete and not ctx.fallo_dicho.get(i)
+                and (nombre == "" or ctx.fallo_nombre.get(i) == nombre)) {
+            var dg.Diagnostico d = ctx.fallos.get(i);
+            if (d.codigo == "SEM010" and d.archivo == "") { d = dg.reubicado(d, linea, col); };
+            if (d.codigo != "") { errores.push(d); };
+            ctx.fallo_dicho[i] = true;
+        };
+        i = i + 1;
+    };
+}
+
+/- Una librería ya ubicada, una sola vez por ruta (`_load_cached`): de la
+   caché (su error, si no cargó, ya se dijo), o cargada ahora. El alias se
+   valida DESPUÉS de cachear: el archivo es válido, es este import el que lo
+   llama de otra forma. -/
+fn carga_hallado(enl.Contexto ptr mutable ctx, enl.Hallado h, str lib, int linea, int col,
+                 vec.Vector<dg.Diagnostico> ptr mutable errores,
+                 vec.Vector<dg.Diagnostico> ptr mutable notas) -> int {
+    if (ctx.por_ruta.contains(h.ruta)) {
+        return valida_alias(ctx, ctx.por_ruta.get(h.ruta), lib, linea, col, errores);
+    };
+    if (ctx.fallidas.contains(h.ruta)) { return -1; };
     if (ctx.cargando.contains(h.ruta)) {
-        ctx.errores.push(f"import circular: '{h.ruta}' ya se está cargando");
+        errores.push(dg.nuevo("SEM010", linea, col, f"import circular de librerías detectado al cargar '{lib}'"));
         return -1;
     };
     ctx.cargando.put(h.ruta, true);
     var int l = -1;
-    if (h.clase == "package") { l = carga_paquete(ctx, h.ruta, h.padre); }
-    else { l = carga_archivo(ctx, h.ruta); };
+    if (h.clase == "package") { l = carga_paquete(ctx, lib, h.ruta, h.padre, linea, col, errores, notas); }
+    else { l = carga_archivo(ctx, lib, h.ruta, false, linea, col, errores, notas); };
     ctx.cargando.remove(h.ruta);
-    if (l >= 0) { ctx.por_ruta.put(h.ruta, l); };
-    return l;
+    if (l < 0) {
+        ctx.fallidas.put(h.ruta, true);
+        return -1;
+    };
+    ctx.por_ruta.put(h.ruta, l);
+    return valida_alias(ctx, l, lib, linea, col, errores);
 }
 
-/- El submódulo `nombre` de la carpeta-paquete `carpeta` (que se está
-   cargando), solo él. -/
-fn hermano(enl.Contexto ptr mutable ctx, str paquete, str nombre, str carpeta) -> int {
+/- El alias del `#export` tiene que ser el nombre importado (salvo
+   mayúsculas): `SEM010` si no (`validated_alias`). -/
+fn valida_alias(enl.Contexto ptr ctx, int l, str lib, int linea, int col,
+                vec.Vector<dg.Diagnostico> ptr mutable errores) -> int {
+    var enl.Libreria info = enl.lib(ctx, l);
+    if (info.alias == lib or enl.minusculas(info.alias) == enl.minusculas(lib)) { return l; };
+    var str base = rt.nombre_de(info.ruta);
+    var str que = f"'{base}'";
+    if (info.es_paquete) { que = f"el paquete '{base}/'"; };
+    var str alias = info.alias;
+    errores.push(dg.nuevo("SEM010", linea, col,
+        f"{que} exporta '{alias}', no '{lib}' (el alias de '#export' debe coincidir con el nombre del import)"));
+    return -1;
+}
+
+/- El submódulo `partes[1]` de la carpeta-paquete `carpeta`, que se está
+   cargando: solo él (`_hermano`). -/
+fn hermano(enl.Contexto ptr mutable ctx, str lib, vec.Vector<str> ptr partes, str carpeta, int linea,
+           int col, vec.Vector<dg.Diagnostico> ptr mutable errores,
+           vec.Vector<dg.Diagnostico> ptr mutable notas) -> int {
+    var str paquete = partes.get(0);
+    var str nombre = partes.get(1);
+    if (partes.len() > 2) {
+        errores.push(dg.nuevo("SEM010", linea, col,
+            f"'{lib}': subpaquetes anidados no soportados todavía (máximo '<paquete>.<submódulo>')"));
+        return -1;
+    };
     var str ruta = rt.absoluta(rt.une(carpeta, nombre + enl.EXT_LIB));
-    if (not rt.es_archivo(ruta)) { return -1; };
-    var int s = -1;
-    if (ctx.por_ruta.contains(ruta)) {
-        s = ctx.por_ruta.get(ruta);
-    } else {
-        ctx.cargando.put(ruta, true);
-        s = carga_archivo(ctx, ruta);
-        ctx.cargando.remove(ruta);
-        if (s < 0) { return -1; };
-        ctx.por_ruta.put(ruta, s);
+    if (not rt.es_archivo(ruta)) {
+        ruta = rt.absoluta(rt.une(carpeta, enl.minusculas(nombre) + enl.EXT_LIB));
+    };
+    if (not rt.es_archivo(ruta)) {
+        errores.push(dg.nuevo("SEM011", linea, col,
+            f"el paquete '{paquete}' no tiene un submódulo '{nombre}'"));
+        return -1;
+    };
+    if (ctx.por_ruta.contains(ruta)) { return valida_alias(ctx, ctx.por_ruta.get(ruta), nombre, linea, col, errores); };
+    if (ctx.fallidas.contains(ruta)) { return -1; };
+    if (ctx.cargando.contains(ruta)) {
+        errores.push(dg.nuevo("SEM010", linea, col,
+            f"import circular entre submódulos de '{paquete}': '{lib}' ya se está cargando"));
+        return -1;
+    };
+    ctx.cargando.put(ruta, true);
+    var int s = carga_archivo(ctx, nombre, ruta, false, linea, col, errores, notas);
+    ctx.cargando.remove(ruta);
+    if (s < 0) {
+        ctx.fallidas.put(ruta, true);
+        return -1;
     };
     var enl.Libreria l = enl.lib(ctx, s);
     l.unidad = paquete + "." + l.alias;
     ctx.libs[s] = l;
-    return s;
+    ctx.por_ruta.put(ruta, s);
+    return valida_alias(ctx, s, nombre, linea, col, errores);
 }
 
-/- Lee y RECOLECTA el archivo de librería `ruta` (su `collect`, con su
-   unidad), y guarda lo que exporta. -/
-fn carga_archivo(enl.Contexto ptr mutable ctx, str ruta) -> int {
+/- Lee y RECOLECTA el archivo de librería `ruta` (`parse_and_collect`): -1
+   si no es una librería usable. Sus errores léxicos y de sintaxis van con SU
+   archivo y un `SEM010` en el import; un `#export` que falta o no es el que
+   corresponde, `SEM010` con su archivo; los errores de su `collect` (que
+   carga a su vez sus imports), con su archivo, una sola vez (la caché). -/
+fn carga_archivo(enl.Contexto ptr mutable ctx, str lib, str ruta, bool padre_de_paquete, int linea,
+                 int col, vec.Vector<dg.Diagnostico> ptr mutable errores,
+                 vec.Vector<dg.Diagnostico> ptr mutable notas) -> int {
     var enl.Arbol arbol = enl.lee(ruta);
+    var str base = rt.nombre_de(ruta);
     if (arbol.errores.len() > 0) {
-        ctx.errores.push(f"la librería '{ruta}' no compila: {arbol.errores.get(0)}");
+        var int i = 0;
+        while (i < arbol.errores.len()) {
+            errores.push(dg.en(arbol.errores.get(i), ruta));
+            i = i + 1;
+        };
+        var int cuantos = arbol.errores.len();
+        errores.push(dg.nuevo("SEM010", linea, col,
+            f"la librería '{lib}' ({base}) no compila: {cuantos} error(es) léxico(s)/sintáctico(s), "
+            + "cada uno con su posición en ese archivo"));
         return -1;
     };
     var vec.Vector<int> items = nd.hijos(&arbol.p.arbol, arbol.raiz, "items");
-    if (items.len() == 0) { return -1; };
-    var int export = items.get(items.len() - 1);
-    if (nd.clase(&arbol.p.arbol, export) != "ExportDirective") {
-        ctx.errores.push(f"'{ruta}' no termina en '#export'");
+    var int export = -1;
+    if (items.len() > 0 and nd.clase(&arbol.p.arbol, items.get(items.len() - 1)) == "ExportDirective") {
+        export = items.get(items.len() - 1);
+    };
+    if (export < 0) {
+        errores.push(dg.en(dg.nuevo("SEM010", linea, col,
+            f"'{base}' no termina en '#export [as] <alias>' (obligatorio en toda librería)"), ruta));
+        return -1;
+    };
+    var bool es_paquete = nd.atributo(&arbol.p.arbol, export, "package") == "true";
+    if (padre_de_paquete and not es_paquete) {
+        errores.push(dg.en(dg.nuevo("SEM010", linea, col,
+            f"'{base}' es el padre de un paquete pero no termina en '#export package as <alias>'"), ruta));
+        return -1;
+    };
+    if (not padre_de_paquete and es_paquete) {
+        errores.push(dg.en(dg.nuevo("SEM010", linea, col,
+            f"'{base}' declara '#export package' pero no es el padre de un paquete"), ruta));
         return -1;
     };
     var str alias = nd.atributo(&arbol.p.arbol, export, "alias");
     var Analisis sub = nuevo(&arbol.p.arbol, ctx, ruta, alias);
     recoge(&arbol.p.arbol, arbol.raiz, &sub);
+    var int i = 0;
+    while (i < sub.diagnosticos.len()) {
+        errores.push(dg.en(sub.diagnosticos.get(i), ruta));
+        i = i + 1;
+    };
+    i = 0;
+    while (i < sub.notas.len()) {
+        notas.push(dg.en(sub.notas.get(i), ruta));
+        i = i + 1;
+    };
+    // los cuerpos GENÉRICOS: qué copia cada uno viaja en su símbolo, y el
+    // consumidor lo necesita para rechazar 'Vector<R>.get' (SEM038). Sus
+    // diagnósticos se descartan: salen al emitir la unidad
+    if (sub.diagnosticos.len() == 0) { resuelve_genericos(&arbol.p.arbol, arbol.raiz, &sub); };
     var vec.Vector<int> vacio = vec.dynamic<int>(1);
     return exporta(ctx, &sub.tabla, alias, ruta, ruta, &vacio);
 }
 
-/- Una carpeta-paquete: su padre y un submódulo por cada otro `.libsrx`
-   (en orden). El paquete exporta lo del padre, cada submódulo como un
-   miembro IMPORT, y los hooks de todos (`packages.load_package`). -/
-fn carga_paquete(enl.Contexto ptr mutable ctx, str carpeta, str padre) -> int {
-    var int p = carga_archivo(ctx, padre);
+/- Una carpeta-paquete (`load_package`): su padre y un submódulo por cada
+   otro `.libsrx` (en orden). Un submódulo que no carga NO hace fallar el
+   paquete: sus errores se guardan y se dicen cuando un import lo pide. -/
+fn carga_paquete(enl.Contexto ptr mutable ctx, str lib, str carpeta, str padre, int linea, int col,
+                 vec.Vector<dg.Diagnostico> ptr mutable errores,
+                 vec.Vector<dg.Diagnostico> ptr mutable notas) -> int {
+    var int p = carga_archivo(ctx, lib, padre, true, linea, col, errores, notas);
     if (p < 0) { return -1; };
     var enl.Libreria info = enl.lib(ctx, p);
     var vec.Vector<int> subs = vec.dynamic<int>(4);
     var vec.Vector<str> archivos = enl.submodulos(carpeta, padre);
+    // los que no cargaron: (nombre, error) hasta saber el índice del paquete
+    var vec.Vector<str> fallo_nombre = vec.dynamic<str>(1);
+    var vec.Vector<dg.Diagnostico> fallo = vec.dynamic<dg.Diagnostico>(1);
     var int i = 0;
     while (i < archivos.len()) {
         var str ruta = archivos.get(i);
+        var str nombre = rt.nombre_de(ruta);
+        nombre = text.slice(nombre, 0, len(nombre) - len(enl.EXT_LIB));
         var int s = -1;
         if (ctx.por_ruta.contains(ruta)) {
             s = ctx.por_ruta.get(ruta);
+        } else if (ctx.fallidas.contains(ruta)) {
+            fallo_nombre.push(nombre);
+            fallo.push(dg.nuevo("", 0, 0, ""));      // no cargó; su error ya se dijo
         } else {
+            var vec.Vector<dg.Diagnostico> propios = vec.dynamic<dg.Diagnostico>(2);
             ctx.cargando.put(ruta, true);
-            s = carga_archivo(ctx, ruta);
+            s = carga_archivo(ctx, nombre, ruta, false, linea, col, &propios, notas);
             ctx.cargando.remove(ruta);
-            if (s >= 0) { ctx.por_ruta.put(ruta, s); };
+            if (s < 0) {
+                ctx.fallidas.put(ruta, true);
+                var int k = 0;
+                while (k < propios.len()) {
+                    fallo_nombre.push(nombre);
+                    fallo.push(propios.get(k));
+                    k = k + 1;
+                };
+                if (propios.len() == 0) {
+                    fallo_nombre.push(nombre);
+                    fallo.push(dg.nuevo("", 0, 0, ""));
+                };
+            } else {
+                var int k = 0;
+                while (k < propios.len()) {
+                    errores.push(propios.get(k));
+                    k = k + 1;
+                };
+                ctx.por_ruta.put(ruta, s);
+            };
         };
         if (s >= 0) {
             var enl.Libreria l = enl.lib(ctx, s);
@@ -598,7 +1250,16 @@ fn carga_paquete(enl.Contexto ptr mutable ctx, str carpeta, str padre) -> int {
         };
         i = i + 1;
     };
-    return empaqueta(ctx, p, carpeta, padre, &subs);
+    var int paquete = empaqueta(ctx, p, carpeta, padre, &subs);
+    i = 0;
+    while (i < fallo.len()) {
+        ctx.fallos.push(fallo.get(i));
+        ctx.fallo_paquete.push(paquete);
+        ctx.fallo_nombre.push(fallo_nombre.get(i));
+        ctx.fallo_dicho.push(fallo.get(i).codigo == "");
+        i = i + 1;
+    };
+    return paquete;
 }
 
 /- Copia a `ctx.exportes` lo que exporta la tabla recolectada `t` (sin lo
@@ -633,7 +1294,32 @@ fn exporta(enl.Contexto ptr mutable ctx, sim.Tabla ptr t, str alias, str ruta, s
         exporta_simbolo(ctx, t, t.dunders.get(i), &copiados, &hooks);
         i = i + 1;
     };
-    return registra_libreria(ctx, alias, ruta, archivo, false, &valores, &tipos, &hooks, subs);
+    // los nombres 'internal' no se exportan, pero se recuerdan: el error de
+    // pedirlos dice POR QUÉ no están (`library.internos`)
+    var vec.Vector<str> internos = vec.dynamic<str>(2);
+    claves = t.valores.keys();
+    i = 0;
+    while (i < claves.len()) {
+        if (sim.simbolo(t, t.valores.get(claves.get(i))).visibilidad == "internal") { internos.push(claves.get(i)); };
+        i = i + 1;
+    };
+    claves = t.tipos.keys();
+    i = 0;
+    while (i < claves.len()) {
+        if (sim.simbolo(t, t.tipos.get(claves.get(i))).visibilidad == "internal") { internos.push(claves.get(i)); };
+        i = i + 1;
+    };
+    var int l = registra_libreria(ctx, alias, ruta, archivo, false, &valores, &tipos, &hooks, subs);
+    var enl.Libreria info = enl.lib(ctx, l);
+    info.internos_desde = ctx.internos.len();
+    info.n_internos = internos.len();
+    i = 0;
+    while (i < internos.len()) {
+        ctx.internos.push(internos.get(i));
+        i = i + 1;
+    };
+    ctx.libs[l] = info;
+    return l;
 }
 
 fn exporta_simbolo(enl.Contexto ptr mutable ctx, sim.Tabla ptr t, int s,
@@ -655,7 +1341,7 @@ fn registra_libreria(enl.Contexto ptr mutable ctx, str alias, str ruta, str arch
     ctx.libs.push(enl.Libreria{ alias: alias, unidad: alias, ruta: ruta, archivo: archivo,
         es_paquete: paquete, valores_desde: vd, n_valores: valores.len(), tipos_desde: td,
         n_tipos: tipos.len(), hooks_desde: hd, n_hooks: hooks.len(), subs_desde: sd,
-        n_subs: subs.len() });
+        n_subs: subs.len(), internos_desde: 0, n_internos: 0 });
     return ctx.libs.len() - 1;
 }
 
@@ -710,41 +1396,73 @@ fn mismo_paquete(str consumidor, str ruta) -> bool {
     return propia == carpeta or text.starts_with(propia, carpeta + rt.separador());
 }
 
-/- `#import lib [as x]` y `#from lib #import y [as z]` (`define_import`). -/
+/- `#import lib [as x]` y `#from lib #import y [as z]` (`define_import`).
+   Se carga en 1a; lo que diga se informa en 1b, en el lugar del import. Si
+   la librería no carga, el nombre existe igual como un import OPACO: sus
+   usos callan (el error ya se dijo una vez). -/
 fn importa(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     var str lib = nd.atributo(a, n, "lib");
-    var int l = carga(r, lib);
-    if (l < 0) { return; };
+    var vec.Vector<dg.Diagnostico> errores = vec.dynamic<dg.Diagnostico>(2);
+    var int l = carga(r, lib, nd.linea(a, n), nd.col(a, n), &errores, &r.notas);
+    var bool desde = nd.clase(a, n) == "FromDirective";
+    var str alias = nd.atributo(a, n, "alias");
+    var str nombre = alias;
+    if (nombre == "") {
+        if (desde) { nombre = nd.atributo(a, n, "name"); }
+        else {
+            var vec.Vector<str> partes = tramos(lib);
+            nombre = partes.get(partes.len() - 1);
+        };
+    };
+    if (l < 0) {
+        define_import(a, n, r, nombre, lib, -1, &errores);
+        pendiente(n, &errores, r);
+        return;
+    };
     r.lib_de.put(n, l);
     var enl.Libreria info = enl.lib(r.ctx, l);
     registra_unidad(r, l);
     r.unidad_de.put(n, info.unidad);
     var bool mismo = mismo_paquete(r.fuente, info.ruta);
-    var str alias = nd.atributo(a, n, "alias");
-    if (nd.clase(a, n) == "ImportDirective") {
-        var vec.Vector<str> partes = tramos(lib);
-        var str nombre = alias;
-        if (nombre == "") { nombre = partes.get(partes.len() - 1); };
+    if (not desde) {
         r.ligadura_de.put(n, nombre);
-        var vec.Vector<int> miembros = vec.dynamic<int>(8);
-        copia_visibles(r, info.valores_desde, info.n_valores, mismo, &miembros);
-        copia_visibles(r, info.tipos_desde, info.n_tipos, mismo, &miembros);
-        var vec.Vector<int> sin_args = vec.dynamic<int>(1);
-        var int imp = sim.guarda(&r.tabla, sim.simbolo_simple(nombre, sim.IMPORT,
-            nd.linea(a, n), nd.col(a, n), tip.nominal(&r.ctx.u, lib, &sin_args), false));
-        sim.pon_miembros(&r.tabla, imp, &miembros);
-        if (not r.tabla.valores.contains(nombre)) { r.tabla.valores.put(nombre, imp); };
+        var int imp = define_import(a, n, r, nombre, lib, l, &errores);
+        // lo que la librería tiene y este importador no ve, con su motivo
+        var int k = 0;
+        while (k < info.n_internos) {
+            r.ocultos.put(f"{imp}|{r.ctx.internos.get(info.internos_desde + k)}", "internal");
+            k = k + 1;
+        };
+        if (not mismo) { ocultos_privados(r, imp, info.valores_desde, info.n_valores);
+                         ocultos_privados(r, imp, info.tipos_desde, info.n_tipos); };
+        pendiente(n, &errores, r);
         return;
     };
     // '#from lib #import y': el símbolo importado ES el export (misma clase,
     // tipo, firma y miembros), con el nombre local y la posición de la
     // directiva
     var str buscado = nd.atributo(a, n, "name");
-    var str nombre = alias;
-    if (nombre == "") { nombre = buscado; };
     var int m = miembro_exportado(r.ctx, info.valores_desde, info.n_valores, buscado);
     if (m < 0) { m = miembro_exportado(r.ctx, info.tipos_desde, info.n_tipos, buscado); };
-    if (m < 0) { return; };
+    if (m >= 0 and sim.simbolo(&r.ctx.exportes, m).visibilidad == "private" and not mismo) {
+        errores.push(dg.nuevo("SEM019", nd.linea(a, n), nd.col(a, n),
+            f"'{buscado}' es 'private' de '{lib}': solo es visible dentro de su mismo paquete"));
+        pendiente(n, &errores, r);
+        return;
+    };
+    if (m < 0 and es_interno(r.ctx, info, buscado)) {
+        errores.push(dg.nuevo("SEM011", nd.linea(a, n), nd.col(a, n),
+            f"'{lib}' no exporta '{buscado}': existe, pero es 'internal' (exclusivo de su archivo)"));
+        pendiente(n, &errores, r);
+        return;
+    };
+    if (m < 0) {
+        errores.push(dg.nuevo("SEM011", nd.linea(a, n), nd.col(a, n), f"'{lib}' no exporta '{buscado}'"));
+        // (la V0 liga igual el nombre, como un import sin miembros)
+        define_import(a, n, r, nombre, lib, -1, &errores);
+        pendiente(n, &errores, r);
+        return;
+    };
     var int c = sim.copia(&r.ctx.exportes, m, &r.tabla);
     var sim.Simbolo s = sim.simbolo(&r.tabla, c);
     s.nombre = nombre;
@@ -759,16 +1477,129 @@ fn importa(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     if (s.clase == sim.STRUCT or s.clase == sim.ENUM) {
         // un TIPO va al espacio de tipos, como uno propio: por el nombre
         // local y por el canónico (`_registrar_tipo`)
-        if (not r.tabla.tipos.contains(nombre)) {
+        if (r.tabla.tipos.contains(nombre)) {
+            errores.push(dg.nuevo("SEM002", nd.linea(a, n), nd.col(a, n), f"'{nombre}' ya está declarado en este scope"));
+        } else {
             r.tabla.tipos.put(nombre, c);
             if (s.tipo_nombre != "" and s.tipo_nombre != nombre
                     and not r.tabla.tipos.contains(s.tipo_nombre)) {
                 r.tabla.tipos.put(s.tipo_nombre, c);
             };
         };
+        pendiente(n, &errores, r);
         return;
     };
-    if (not r.tabla.valores.contains(nombre)) { r.tabla.valores.put(nombre, c); };
+    if (r.tabla.valores.contains(nombre)) {
+        errores.push(dg.nuevo("SEM002", nd.linea(a, n), nd.col(a, n), f"'{nombre}' ya está declarado en este scope"));
+    } else {
+        r.tabla.valores.put(nombre, c);
+    };
+    pendiente(n, &errores, r);
+}
+
+/- El símbolo IMPORT `nombre` de la directiva `n`: con lo que la librería
+   `l` le deja ver, u OPACO (`l` = -1: no cargó, o el `#from` pedía algo que
+   no exporta). Reimportar la MISMA librería con el mismo nombre no es un
+   error; otra cosa con ese nombre, `SEM002`. -/
+fn define_import(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r, str nombre, str lib, int l,
+                 vec.Vector<dg.Diagnostico> ptr mutable errores) -> int {
+    var vec.Vector<int> miembros = vec.dynamic<int>(8);
+    if (l >= 0) {
+        var enl.Libreria info = enl.lib(r.ctx, l);
+        var bool mismo = mismo_paquete(r.fuente, info.ruta);
+        copia_visibles(r, info.valores_desde, info.n_valores, mismo, &miembros);
+        copia_visibles(r, info.tipos_desde, info.n_tipos, mismo, &miembros);
+    };
+    var vec.Vector<int> sin_args = vec.dynamic<int>(1);
+    var sim.Simbolo s = sim.simbolo_simple(nombre, sim.IMPORT, nd.linea(a, n), nd.col(a, n),
+                                           tip.nominal(&r.ctx.u, lib, &sin_args), false);
+    s.opaco = l < 0;
+    var int imp = sim.guarda(&r.tabla, s);
+    sim.pon_miembros(&r.tabla, imp, &miembros);
+    if (r.tabla.valores.contains(nombre)) {
+        var sim.Simbolo previo = sim.simbolo(&r.tabla, r.tabla.valores.get(nombre));
+        if (previo.clase != sim.IMPORT or previo.tipo != s.tipo) {
+            errores.push(dg.nuevo("SEM002", nd.linea(a, n), nd.col(a, n), f"'{nombre}' ya está declarado en este scope"));
+        };
+        return imp;
+    };
+    r.tabla.valores.put(nombre, imp);
+    return imp;
+}
+
+/- Los exports 'private' de un tramo, para el importador de otro paquete. -/
+fn ocultos_privados(Analisis ptr mutable r, int imp, int desde, int n) -> void {
+    var int k = 0;
+    while (k < n) {
+        var sim.Simbolo x = sim.simbolo(&r.ctx.exportes, enl.de_lista(r.ctx, desde, k));
+        if (x.visibilidad == "private") { r.ocultos.put(f"{imp}|{x.nombre}", "private"); };
+        k = k + 1;
+    };
+}
+
+/- ¿`nombre` es un 'internal' de la librería `info`? -/
+fn es_interno(enl.Contexto ptr ctx, enl.Libreria info, str nombre) -> bool {
+    var int k = 0;
+    while (k < info.n_internos) {
+        if (ctx.internos.get(info.internos_desde + k) == nombre) { return true; };
+        k = k + 1;
+    };
+    return false;
+}
+
+/- Guarda lo que dijo el import `n` para informarlo en 1b. -/
+fn pendiente(int n, vec.Vector<dg.Diagnostico> ptr errores, Analisis ptr mutable r) -> void {
+    var int i = 0;
+    while (i < errores.len()) {
+        r.pendientes.push(errores.get(i));
+        r.pendiente_de.push(n);
+        i = i + 1;
+    };
+}
+
+/- Informa lo que dijo el import `n`, en su lugar del orden. -/
+fn suelta_pendientes(int n, Analisis ptr mutable r) -> void {
+    var int i = 0;
+    while (i < r.pendientes.len()) {
+        if (r.pendiente_de.get(i) == n) { r.diagnosticos.push(r.pendientes.get(i)); };
+        i = i + 1;
+    };
+}
+
+/- El miembro `nombre` del import `imp`, o -1 diciendo por qué no está
+   (`_resolve_import_member`): `SEM011` (oculto o inexistente) en `n`. Un
+   import opaco calla. -/
+fn miembro_de_import(vec.Vector<ar.Nodo> ptr a, int n, int imp, str nombre, Analisis ptr mutable r) -> int {
+    var int m = sim.busca_miembro(&r.tabla, imp, nombre);
+    if (m >= 0 or sim.simbolo(&r.tabla, imp).opaco) { return m; };
+    var str base = sim.simbolo(&r.tabla, imp).nombre;
+    var str clave = f"{imp}|{nombre}";
+    if (r.ocultos.contains(clave) and r.ocultos.get(clave) == "internal") {
+        reporta(r, "SEM011", nd.linea(a, n), nd.col(a, n),
+                f"'{base}' no exporta '{nombre}': existe, pero es 'internal' (exclusivo de su archivo)");
+    } else if (r.ocultos.contains(clave)) {
+        reporta(r, "SEM011", nd.linea(a, n), nd.col(a, n),
+                f"'{base}' no exporta '{nombre}' fuera de su paquete: es 'private'");
+    } else {
+        reporta(r, "SEM011", nd.linea(a, n), nd.col(a, n), f"'{base}' no exporta '{nombre}'");
+    };
+    return -1;
+}
+
+/- ¿El nombre con puntos `nombre` pasa por un import OPACO
+   (`TypeLookup.OPAQUE`)? Entonces nada de lo que nombra se informa. -/
+fn ruta_opaca(Analisis ptr r, str nombre) -> bool {
+    var vec.Vector<str> partes = tramos(nombre);
+    if (partes.len() < 2 or sim.busca_local(&r.tabla, partes.get(0)) >= 0) { return false; };
+    var int base = sim.busca_valor(&r.tabla, partes.get(0));
+    var int i = 1;
+    while (base >= 0 and i < partes.len()) {
+        if (sim.simbolo(&r.tabla, base).clase != sim.IMPORT) { return false; };
+        if (sim.simbolo(&r.tabla, base).opaco) { return true; };
+        base = sim.busca_miembro(&r.tabla, base, partes.get(i));
+        i = i + 1;
+    };
+    return false;
 }
 
 /- El export `nombre` de un tramo de la librería, o -1. -/
@@ -849,9 +1680,18 @@ fn fusiona_hooks(int n, Analisis ptr mutable r) -> void {
     while (k < info.n_hooks) {
         var int e = enl.de_lista(r.ctx, info.hooks_desde, k);
         var sim.Simbolo h = sim.simbolo(&r.ctx.exportes, e);
-        if (h.clase != sim.DUNDER and (mismo or h.visibilidad != "private")
-                and sim.busca_hook(&r.tabla, h.hook_owner, h.hook_kind) < 0) {
+        // un '__cast__' va por su PAR (origen, destino), como la tabla de
+        // conversiones de la V0: por (dueño, clase) se perdían todos los que
+        // salen de un primitivo, que no tiene dueño
+        var bool nuevo = sim.busca_hook(&r.tabla, h.hook_owner, h.hook_kind) < 0;
+        if (h.hook_kind == HOOK_CAST and h.n_params > 0) {
+            nuevo = busca_cast(r, sim.param_de(&r.ctx.exportes, e, 0), h.tipo) < 0;
+        };
+        if (h.clase != sim.DUNDER and (mismo or h.visibilidad != "private") and nuevo) {
             sim.define_hook(&r.tabla, sim.copia(&r.ctx.exportes, e, &r.tabla));
+            if (h.hook_kind == HOOK_CAST) {
+                no_emite(r, n, "las conversiones ('__cast__') de una librería");
+            };
         };
         k = k + 1;
     };
@@ -893,19 +1733,108 @@ fn cadena_de_import(vec.Vector<ar.Nodo> ptr a, int obj, Analisis ptr r) -> int {
 
 fn resuelve(vec.Vector<ar.Nodo> ptr a, int raiz, Analisis ptr mutable r) -> void {
     var vec.Vector<int> items = nd.hijos(a, raiz, "items");
+    // las FIRMAS de todas las funciones se validan antes de ningún cuerpo
+    // (`bind_signature`, la primera vuelta de la V0): sus diagnósticos van
+    // primero
     var int i = 0;
     while (i < items.len()) {
-        var int n = items.get(i);
+        var int f = desenvuelve(a, items.get(i));
+        if (nd.clase(a, f) == "FunctionDecl") { valida_firma(a, f, r); };
+        i = i + 1;
+    };
+    i = 0;
+    while (i < items.len()) {
+        var int n = desenvuelve(a, items.get(i));
         var str c = nd.clase(a, n);
         if (c == "FunctionDecl") {
             resuelve_funcion(a, n, r);
+        } else if (c == "TypeDecl") {
+            // el nombre lo declaró 'recoge': falta el inicializador
+            inicializa_tipo(a, n, r);
+        } else if (c == "StructDecl") {
+            valida_campos(a, n, r);
+        } else if (c == "EnumDecl") {
+            valida_payloads(a, n, r);
         } else if (c == "VarDecl") {
-            // el tipo ya lo anotó 'recoge_global': falta el valor
+            // el tipo ya lo anotó 'recoge_global': falta validarlo y el valor
+            if (nd.atributo(a, n, "inferido") != "true") { valida_declarado(a, n, r); };
             var int valor = nd.hijo(a, n, "value");
             if (valor >= 0) {
-                expresion(a, valor, r);
+                var int vt = expresion(a, valor, r);
                 tiene_dueno(r, valor);
+                inicializa(a, n, r.tipo_de.get(n), valor, vt, r);
             };
+        };
+        i = i + 1;
+    };
+    // con TODOS los cuerpos vistos: qué copia cada genérico y qué instancia
+    // copiaría un valor con destructor (SEM038)
+    verifica_copias(r);
+}
+
+/- La firma de `n`: cada parámetro (en su posición) y el retorno (en la de
+   la función, y ahí `void` sí vale). Con o sin cuerpo: un prototipo con un
+   tipo que no existe es igual de erróneo. -/
+fn valida_firma(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var vec.Vector<int> params = nd.hijos(a, n, "params");
+    var int i = 0;
+    while (i < params.len()) {
+        valida_declarado(a, params.get(i), r);
+        i = i + 1;
+    };
+    var int retorno = nd.hijo(a, n, "return_type");
+    if (retorno >= 0) { valida_tipo(a, retorno, r, nd.linea(a, n), nd.col(a, n)); };
+}
+
+/- Los tipos de los campos de un struct (`bind_struct`), cada uno en su
+   posición. (El tamaño infinito, `SEM0..`, llega con la tanda de
+   memoria.) -/
+fn valida_campos(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var vec.Vector<int> campos = nd.hijos(a, n, "fields");
+    var int i = 0;
+    while (i < campos.len()) {
+        valida_declarado(a, campos.get(i), r);
+        i = i + 1;
+    };
+    // TAMAÑO FINITO (`infinite_size_path`): un struct que se contiene a sí
+    // mismo por valor, directa o indirectamente
+    var str nombre = nd.atributo(a, n, "name");
+    var vec.Vector<int> sin_args = vec.dynamic<int>(1);
+    var vec.Vector<int> abiertos = vec.dynamic<int>(4);
+    var str ciclo = camino_infinito(r, tip.nominal(&r.ctx.u, nombre, &sin_args), nombre, &abiertos);
+    if (ciclo != "") {
+        reporta(r, "SEM026", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' se contiene a si mismo por valor ({nombre}.{ciclo}): no tiene tamano "
+                + f"finito. Para una estructura recursiva usa un puntero ('{nombre} ptr')");
+    };
+}
+
+/- Los tipos del payload de cada variante (`bind_enum`), en la posición de
+   la variante; `void` no es un valor. -/
+fn valida_payloads(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var str nombre = nd.atributo(a, n, "name");
+    var vec.Vector<int> items = nd.hijos(a, n, "items");
+    var int i = 0;
+    while (i < items.len()) {
+        var int it = items.get(i);
+        var vec.Vector<int> payload = nd.hijos(a, it, "payload");
+        var int k = 0;
+        while (k < payload.len()) {
+            valida_tipo(a, payload.get(k), r, nd.linea(a, it), nd.col(a, it));
+            var str item = nd.atributo(a, it, "name");
+            var int pt = r.tipo_de.get(payload.get(k));
+            if (es_void(a, payload.get(k))) {
+                reporta(r, "SEM025", nd.linea(a, it), nd.col(a, it),
+                        f"'void' significa que no hay valor: no puede ser el valor {k + 1} "
+                        + f"de '{nombre}.{item}'");
+            } else if (pt > 0 and tip.clase_de(&r.ctx.u, pt) == tip.NOMINAL
+                       and hoja(tip.nombre_de(&r.ctx.u, pt)) == hoja(nombre)) {
+                // el payload se contiene a sí mismo por valor ('V(E)')
+                reporta(r, "SEM026", nd.linea(a, it), nd.col(a, it),
+                        f"'{nombre}' se contiene a si mismo por valor en '{item}': no tiene tamano "
+                        + f"finito. Usa un puntero ('{item}({nombre} ptr)')");
+            };
+            k = k + 1;
         };
         i = i + 1;
     };
@@ -916,8 +1845,26 @@ fn resuelve(vec.Vector<ar.Nodo> ptr a, int raiz, Analisis ptr mutable r) -> void
    final). -/
 fn resuelve_funcion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     var int cuerpo = nd.hijo(a, n, "body");
-    if (cuerpo < 0) { return; };      // un prototipo
+    if (cuerpo < 0) {
+        // un prototipo: no hay cuerpo que mirar, salvo las primitivas
+        // genéricas que COPIAN su T ('mem.copy' celda a celda)
+        var vec.Vector<str> ts = nd.lista(a, n, "type_params");
+        if (nd.atributo(a, n, "name") == "__copy__" and ts.len() > 0 and r.simbolo_de.contains(n)) {
+            var vec.Vector<int> sin_args = vec.dynamic<int>(1);
+            var int k = 0;
+            while (k < ts.len()) {
+                r.copia_fn.push(r.simbolo_de.get(n));
+                r.copia_tipo.push(tip.nominal(&r.ctx.u, ts.get(k), &sin_args));
+                k = k + 1;
+            };
+        };
+        return;
+    };
     r.en_hook = nd.atributo(a, n, "specifier") == "hook";
+    r.retorno = r.tipo_de.get(n);
+    r.en_funcion = true;
+    r.funcion = n;
+    r.locales_fn = dic.make<str, int>(8);
     var vec.Vector<int> params = nd.hijos(a, n, "params");
     r.genericos = genericos_de(a, n, &params, r);
     r.receptor = "";
@@ -928,13 +1875,24 @@ fn resuelve_funcion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) ->
     var int i = 0;
     while (i < params.len()) {
         var int p = params.get(i);
-        sim.define_local(&r.tabla, nd.atributo(a, p, "name"), sim.PARAM, r.tipo_de.get(p), true);
+        var str nombre = nd.atributo(a, p, "name");
+        if (en_este_bloque(r, nombre)) {
+            reporta(r, "SEM002", nd.linea(a, p), nd.col(a, p), f"parámetro duplicado '{nombre}'");
+        } else {
+            sim.define_local(&r.tabla, nombre, sim.PARAM, r.tipo_de.get(p), true);
+            r.locales_fn.put(nombre, r.tipo_de.get(p));
+        };
         i = i + 1;
     };
     sentencias(a, cuerpo, r);
+    capacidad_desbordada(a, cuerpo, r);
+    campos_sin_soltar(a, n, r);
     anota_drops(r, cuerpo);
     sim.cierra(&r.tabla);
     r.en_hook = false;
+    r.en_funcion = false;
+    r.funcion = -1;
+    r.retorno = 0;
     r.genericos = vec.dynamic<str>(2);
     r.receptor = "";
 }
@@ -964,6 +1922,18 @@ fn genericos_de(vec.Vector<ar.Nodo> ptr a, int n, vec.Vector<int> ptr params,
         k = k + 1;
     };
     return g;
+}
+
+/- ¿`nombre` ya es un local del bloque abierto más interno? (El cuerpo de
+   una función comparte el de sus parámetros.) Sombrear uno de afuera vale;
+   repetirlo en el mismo bloque es un `SEM002`. -/
+fn en_este_bloque(Analisis ptr r, str nombre) -> bool {
+    var int i = sim.inicio_del_bloque(&r.tabla);
+    while (i < r.tabla.locales.len()) {
+        if (sim.local(&r.tabla, i).nombre == nombre) { return true; };
+        i = i + 1;
+    };
+    return false;
 }
 
 fn sentencias(vec.Vector<ar.Nodo> ptr a, int bloque, Analisis ptr mutable r) -> void {
@@ -1023,6 +1993,7 @@ fn anota_drops(Analisis ptr mutable r, int n) -> void {
 fn bloque(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     sim.abre(&r.tabla);
     sentencias(a, n, r);
+    capacidad_desbordada(a, n, r);
     anota_drops(r, n);
     sim.cierra(&r.tabla);
 }
@@ -1040,31 +2011,61 @@ fn sentencia(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
             t = expresion(a, valor, r);
             tiene_dueno(r, valor);
         } else {
+            valida_declarado(a, n, r);
             t = tipo_escrito(a, nd.hijo(a, n, "type"), r);
             if (valor >= 0) {
-                expresion(a, valor, r);
+                var int vt = expresion(a, valor, r);
                 tiene_dueno(r, valor);
+                inicializa(a, n, t, valor, vt, r);
             };
         };
         anota(r, n, t);
-        sim.define_local(&r.tabla, nd.atributo(a, n, "name"), sim.VAR, t,
-                         nd.atributo(a, n, "qualifier") != "const");
+        var str nombre = nd.atributo(a, n, "name");
+        if (en_este_bloque(r, nombre)) {
+            reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                    f"'{nombre}' ya está declarado en este scope");
+            return;
+        };
+        sim.define_local(&r.tabla, nombre, sim.VAR, t, nd.atributo(a, n, "qualifier") != "const");
+        if (r.en_funcion) { r.locales_fn.put(nombre, t); };
+        return;
+    };
+    if (c == "TypeDecl") {
+        // un 'type' LOCAL (`_define_local_type`): vive en su bloque, como
+        // tipo y como valor de tipo 'type'; un local con ese nombre en el
+        // mismo bloque es un SEM002. El inicializador se mira igual
+        var str nombre = nd.atributo(a, n, "name");
+        if (en_este_bloque(r, nombre)) {
+            reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                    f"el tipo '{nombre}' ya está declarado en este scope");
+        } else {
+            sim.define_local(&r.tabla, nombre, sim.TYPE, tip.simple(&r.ctx.u, tip.META),
+                             nd.atributo(a, n, "qualifier") != "const");
+            if (r.en_funcion) { r.locales_fn.put(nombre, tip.simple(&r.ctx.u, tip.META)); };
+        };
+        inicializa_tipo(a, n, r);
         return;
     };
     if (c == "IfStmt") {
-        expresion(a, nd.hijo(a, n, "condition"), r);
+        condicion(a, nd.hijo(a, n, "condition"), "'if'", r);
         bloque(a, nd.hijo(a, n, "then_block"), r);
         var int otro = nd.hijo(a, n, "else_branch");
         if (otro >= 0) { sentencia(a, otro, r); };
         return;
     };
     if (c == "WhileStmt") {
-        expresion(a, nd.hijo(a, n, "condition"), r);
+        condicion(a, nd.hijo(a, n, "condition"), "'while'", r);
         bloque(a, nd.hijo(a, n, "body"), r);
         return;
     };
     if (c == "ReturnStmt") {
         var int valor = nd.hijo(a, n, "value");
+        if (valor < 0 and r.en_funcion and r.retorno > 0
+                and tip.clase_de(&r.ctx.u, r.retorno) != tip.VOID) {
+            var str esperado = tip.escribe(&r.ctx.u, r.retorno);
+            reporta(r, "AST012", nd.linea(a, n), nd.col(a, n),
+                    f"'return;' sin valor en una función que devuelve '{esperado}'");
+        };
         if (valor >= 0) {
             var int t = expresion(a, valor, r);
             tiene_dueno(r, valor);
@@ -1074,23 +2075,62 @@ fn sentencia(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
                     or (not es_puntero(r, t) and tip.menciona(&r.ctx.u, t, &r.genericos))) {
                 marca(r, n, TRANSFERS);
             };
+            no_cede_un_prestamo(a, valor, t, "return", r);
+            // devolver lo que es de otro (por un puntero, un elemento) entrega una COPIA
+            if (r.genericos.len() > 0 and tip.menciona(&r.ctx.u, t, &r.genericos) and not es_puntero(r, t)
+                    and prestamo_de(a, valor, r) != "") {
+                anota_copia(r, t);
+            };
+            direccion_local(a, valor, r);
+            // (fuera de una función no hay retorno que comparar)
+            var int esperado = 0;
+            if (r.en_funcion) { esperado = r.retorno; };
+            if (es_null(a, valor)) {
+                if (not tip.admite_null(&r.ctx.u, esperado)) {
+                    var str e = tip.escribe(&r.ctx.u, esperado);
+                    reporta(r, "AST012", nd.linea(a, n), nd.col(a, n),
+                            f"'return null;' en una función que devuelve '{e}' (no nullable)");
+                };
+            } else if (not acepta(a, r, esperado, valor, t)) {
+                var str e = tip.escribe(&r.ctx.u, esperado);
+                var str v = tip.escribe(&r.ctx.u, t);
+                reporta(r, "AST012", nd.linea(a, n), nd.col(a, n),
+                        f"se devuelve '{v}' pero la función declara '{e}'");
+            };
         };
         return;
     };
     if (c == "ExprStmt") { expresion(a, nd.hijo(a, n, "expr"), r); return; };
     if (c == "MatchStmt") {
-        expresion(a, nd.hijo(a, n, "subject"), r);
+        var int sujeto = expresion(a, nd.hijo(a, n, "subject"), r);
         var vec.Vector<int> ramas = nd.hijos(a, n, "cases");
         var int i = 0;
         while (i < ramas.len()) {
             rama(a, ramas.get(i), r);
             i = i + 1;
         };
+        exhaustivo(a, n, sujeto, &ramas, r);
         return;
     };
-    if (c == "MoveStmt") { expresion(a, nd.hijo(a, n, "target"), r); return; };
+    if (c == "MoveStmt") {
+        var int objetivo = nd.hijo(a, n, "target");
+        no_cede_un_prestamo(a, objetivo, expresion(a, objetivo, r), "move", r);
+        return;
+    };
     if (c == "FreeStmt") {
         var int t = expresion(a, nd.hijo(a, n, "target"), r);
+        // 'free' libera lo que hay DETRÁS de un puntero (`_stmt_free`)
+        var int x = t;
+        while (x > 0 and tip.clase_de(&r.ctx.u, x) == tip.NULLABLE) { x = tip.inner_de(&r.ctx.u, x); };
+        if (x > 0 and tip.clase_de(&r.ctx.u, x) != tip.POINTER) {
+            var str e = tip.escribe(&r.ctx.u, t);
+            var str escrito = texto_de(a, nd.hijo(a, n, "target"));
+            if (escrito == "") { escrito = "<lvalue>"; };
+            reporta(r, "SEM014", nd.linea(a, n), nd.col(a, n),
+                    f"'free' sobre un valor de tipo '{e}' (se requiere 'ptr T'): toma su direccion, "
+                    + f"'free &{escrito};'");
+            return;
+        };
         var str dueno = nombre_nucleo(r, t);
         if (dueno != "" and sim.busca_hook(&r.tabla, dueno, prop.FREE) >= 0) {
             referencia(r, n, dueno, prop.FREE);
@@ -1103,6 +2143,13 @@ fn sentencia(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
         // 'catch' que lo atrape: ya tiene dueño
         var int valor = nd.hijo(a, n, "value");
         var int t = expresion(a, valor, r);
+        // un destructor nunca lanza (`ThrowInDestructor`)
+        if (r.en_hook and r.funcion >= 0 and nd.atributo(a, r.funcion, "name") == "__free__") {
+            reporta(r, "SEM034", nd.linea(a, n), nd.col(a, n),
+                    "'throw' dentro de un __free__: un destructor nunca puede lanzar (si ya hay "
+                    + "un throw subiendo, habria dos a la vez)");
+        };
+        no_cede_un_prestamo(a, valor, t, "throw", r);
         if (local_con_dueno(a, valor, t, r)) { r.mueve.put(n, true); };
         tiene_dueno(r, valor);
         return;
@@ -1128,12 +2175,15 @@ fn sentencia(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
 fn atrapa(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     var int escrito = nd.hijo(a, n, "type");
     var int t = 0;
-    if (escrito >= 0) { t = tipo_escrito(a, escrito, r); }
-    else { t = tip.error_suelto(&r.ctx.u); };
+    if (escrito >= 0) {
+        valida_declarado(a, n, r);
+        t = tipo_escrito(a, escrito, r);
+    } else { t = tip.error_suelto(&r.ctx.u); };
     anota(r, n, t);
     var int cuerpo = nd.hijo(a, n, "block");
     sim.abre(&r.tabla);
     sim.define_local(&r.tabla, nd.atributo(a, n, "name"), sim.VAR, t, false);
+    if (r.en_funcion) { r.locales_fn.put(nd.atributo(a, n, "name"), t); };
     sentencias(a, cuerpo, r);
     anota_drops(r, cuerpo);
     sim.cierra(&r.tabla);
@@ -1174,12 +2224,27 @@ fn rama(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
     };
     sim.abre(&r.tabla);
     var vec.Vector<int> args = nd.hijos(a, patron, "args");
-    var int i = 0;
-    while (i < args.len() and i < sim.simbolo(&r.tabla, variante).n_params) {
-        var int t = sim.param_de(&r.tabla, variante, i);
-        anota(r, args.get(i), t);
-        sim.define_local(&r.tabla, nd.atributo(a, args.get(i), "name"), sim.VAR, t, false);
-        i = i + 1;
+    var sim.Simbolo v = sim.simbolo(&r.tabla, variante);
+    if (args.len() != v.n_params) {
+        // (`_ligar_payload`) no se liga nada, y el cuerpo se mira igual
+        reporta(r, "SEM008", nd.linea(a, patron), nd.col(a, patron),
+                f"la variante '{v.nombre}' lleva {v.n_params} valor(es) y el patrón liga {args.len()}");
+    } else {
+        var int i = 0;
+        while (i < args.len()) {
+            var int arg = args.get(i);
+            if (nd.clase(a, arg) != "Identifier") {
+                reporta(r, "SEM001", nd.linea(a, arg), nd.col(a, arg),
+                        f"un patrón de variante liga NOMBRES, no expresiones: escribe "
+                        + f"'case {v.nombre}(x)' y compara dentro");
+            } else {
+                var int t = sim.param_de(&r.tabla, variante, i);
+                anota(r, arg, t);
+                sim.define_prestado(&r.tabla, nd.atributo(a, arg, "name"), t);
+                if (r.en_funcion) { r.locales_fn.put(nd.atributo(a, arg, "name"), t); };
+            };
+            i = i + 1;
+        };
     };
     sentencia(a, cuerpo, r);
     sim.cierra(&r.tabla);
@@ -1244,22 +2309,52 @@ fn expresion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
 
 fn expresion_sin_temporal(vec.Vector<ar.Nodo> ptr a, int n, str c,
                           Analisis ptr mutable r) -> int {
-    if (c == "Literal") { return tip.de_literal(&r.ctx.u, nd.atributo(a, n, "literal_kind")); };
+    if (c == "Literal") {
+        // un entero que no cabe en 'int' es un error del programa, no un
+        // número que da la vuelta
+        if (nd.atributo(a, n, "literal_kind") == "int") {
+            var str v = nd.atributo(a, n, "value");
+            if (not cabe(v, INT_MIN, INT_MAX)) {
+                reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                        f"el literal {v} no cabe en 'int' (rango [{INT_MIN}, {INT_MAX}])");
+            };
+        };
+        return tip.de_literal(&r.ctx.u, nd.atributo(a, n, "literal_kind"));
+    };
+    if (c == "SizeofExpr") {
+        mide(a, n, r);
+        return tip.simple(&r.ctx.u, tip.INT);
+    };
     if (c == "Identifier") {
-        var int t = sim.tipo_de_nombre(&r.tabla, nd.atributo(a, n, "name"));
-        if (t < 0) { return 0; };
+        var str nombre = nd.atributo(a, n, "name");
+        var int t = sim.tipo_de_nombre(&r.tabla, nombre);
+        if (t < 0) {
+            reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n), f"'{nombre}' no está declarado");
+            return 0;
+        };
         return t;
     };
-    if (c == "BinaryOp") {
-        var int izq = expresion(a, nd.hijo(a, n, "left"), r);
-        var int der = expresion(a, nd.hijo(a, n, "right"), r);
-        if (es_de_bool(nd.atributo(a, n, "operator"))) { return tip.simple(&r.ctx.u, tip.BOOL); };
-        if (izq != 0) { return izq; };
-        return der;
-    };
+    if (c == "BinaryOp") { return binaria(a, n, r); };
     if (c == "UnaryOp") {
-        var int op = expresion(a, nd.hijo(a, n, "operand"), r);
-        if (nd.atributo(a, n, "operator") == "not") { return tip.simple(&r.ctx.u, tip.BOOL); };
+        var int operando = nd.hijo(a, n, "operand");
+        var int op = expresion(a, operando, r);
+        var str operador = nd.atributo(a, n, "operator");
+        if (operador == "not") {
+            operando_logico(a, operando, op, "not", r);
+            return tip.simple(&r.ctx.u, tip.BOOL);
+        };
+        if (operador == "~" and not tip.ignorado(&r.ctx.u, op)
+                and tip.clase_de(&r.ctx.u, op) != tip.INT and tip.clase_de(&r.ctx.u, op) != tip.BYTE) {
+            var str e = tip.escribe(&r.ctx.u, op);
+            reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                    f"'~' no se aplica a '{e}': los operadores de bits son de 'int' (y de 'byte')");
+            return 0;
+        };
+        if (operador == "-" and op > 0 and tip.clase_de(&r.ctx.u, op) == tip.BYTE) {
+            reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                    "'-' no se aplica a un 'byte' (no tiene signo): convierte con 'cast<int>(...)'");
+            return 0;
+        };
         return op;
     };
     if (c == "Assignment") { return asignacion(a, n, r); };
@@ -1267,18 +2362,89 @@ fn expresion_sin_temporal(vec.Vector<ar.Nodo> ptr a, int n, str c,
     if (c == "MemberAccess") { return miembro(a, n, r); };
     if (c == "StructLiteral") {
         // el nombre CANÓNICO viaja al HIR ('Par{...}' en 'calc' -> 'calc.Par')
-        var str canonico = canonico_escrito(r, nd.atributo(a, n, "type_name"));
+        var str escrito = nd.atributo(a, n, "type_name");
+        var str canonico = canonico_escrito(r, escrito);
         r.nombre_canonico.put(n, canonico);
         // 'Caja<int>{...}': los argumentos son parte del tipo, no del nombre
         var vec.Vector<int> args = tipos_escritos(a, n, "type_args", r);
         var int t = tip.nominal(&r.ctx.u, canonico, &args);
+        // (`_expr_struct_literal`) el tipo, como lo resuelve una anotación;
+        // con uno que no es un struct, los valores se miran igual
+        var int s = tipo_por_ruta_estricta(r, escrito);
+        if (ruta_opaca(r, escrito)) {
+            // de una librería que no cargó: los valores se miran, nada más
+            var vec.Vector<int> vs = nd.hijos(a, n, "values");
+            var int k = 0;
+            while (k < vs.len()) {
+                expresion(a, vs.get(k), r);
+                tiene_dueno(r, vs.get(k));
+                k = k + 1;
+            };
+            return t;
+        };
+        if (tipo_local(r, escrito)) {
+            reporta(r, "AST005", nd.linea(a, n), nd.col(a, n),
+                    f"'{escrito}' no es un struct: no puede instanciarse con llaves");
+            s = -1;
+        } else if (s < 0) {
+            reporta(r, "AST005", nd.linea(a, n), nd.col(a, n),
+                    f"el tipo '{escrito}' no está declarado (struct)");
+        } else if (sim.simbolo(&r.tabla, s).clase != sim.STRUCT) {
+            reporta(r, "AST005", nd.linea(a, n), nd.col(a, n),
+                    f"'{escrito}' no es un struct: no puede instanciarse con llaves");
+            s = -1;
+        } else {
+            var vec.Vector<int> hs = nd.hijos(a, n, "type_args");
+            var int k = 0;
+            while (k < hs.len()) {
+                valida_tipo(a, hs.get(k), r, nd.linea(a, n), nd.col(a, n));
+                k = k + 1;
+            };
+            aridad(r, sim.simbolo(&r.tabla, s).nombre, sim.simbolo(&r.tabla, s).n_tparams, hs.len(),
+                   nd.linea(a, n), nd.col(a, n));
+        };
         var vec.Vector<int> valores = nd.hijos(a, n, "values");
+        var vec.Vector<str> campos = nd.lista(a, n, "field_names");
+        var vec.Vector<str> vistos = vec.dynamic<str>(campos.len() + 1);
+        // el mapa del genérico (`bindings`): sin argumentos utilizables no se
+        // comparan los valores (la aridad ya se informó)
+        var vec.Vector<str> nombres = vec.dynamic<str>(1);
+        var vec.Vector<int> ligados = vec.dynamic<int>(1);
+        if (s >= 0 and sim.simbolo(&r.tabla, s).n_tparams > 0 and args.len() > 0) {
+            var vec.Vector<str> ps = sim.tparams_de(&r.tabla, s);
+            var int k = 0;
+            while (k < ps.len() and k < args.len()) {
+                nombres.push(ps.get(k));
+                ligados.push(args.get(k));
+                k = k + 1;
+            };
+        };
+        var bool comprueba = s >= 0 and (nombres.len() > 0 or sim.simbolo(&r.tabla, s).n_tparams == 0);
         var int i = 0;
         while (i < valores.len()) {
-            expresion(a, valores.get(i), r);
-            tiene_dueno(r, valores.get(i));   // es el campo del literal
+            var int valor = valores.get(i);
+            var int vt = expresion(a, valor, r);
+            tiene_dueno(r, valor);   // es el campo del literal
+            if (s >= 0 and i < campos.len()) {
+                var str campo = campos.get(i);
+                var int m = sim.busca_miembro(&r.tabla, s, campo);
+                if (contiene(&vistos, campo)) {
+                    reporta(r, "SEM002", nd.linea(a, n), nd.col(a, n),
+                            f"campo '{campo}' repetido en el literal de '{escrito}'");
+                } else if (m < 0) {
+                    reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+                            f"'{escrito}' no tiene un campo '{campo}'");
+                } else if (comprueba) {
+                    var int esperado = tip.sustituye(&r.ctx.u, sim.simbolo(&r.tabla, m).tipo,
+                                                     &nombres, &ligados);
+                    valor_de_campo(a, escrito, campo, valor, vt, esperado, r);
+                    campo_por_nombre(a, campo, valor, esperado, r);
+                };
+                vistos.push(campo);
+            };
             i = i + 1;
         };
+        if (s >= 0) { campos_faltantes(a, n, escrito, s, &vistos, r); };
         return t;
     };
     if (c == "AddrOf") {
@@ -1287,8 +2453,23 @@ fn expresion_sin_temporal(vec.Vector<ar.Nodo> ptr a, int n, str c,
         var int op = nd.hijo(a, n, "operand");
         var int t = expresion(a, op, r);
         var bool mut = true;
-        if (nd.clase(a, op) == "Identifier") {
-            mut = sim.es_mutable(&r.tabla, nd.atributo(a, op, "name"));
+        var str oc = nd.clase(a, op);
+        if (oc == "Identifier") {
+            // '&f' sobre una FUNCIÓN: no hay tipos función (`_expr_addrof`)
+            var str nombre = nd.atributo(a, op, "name");
+            var int s = sim.busca_valor(&r.tabla, nombre);
+            if (sim.busca_local(&r.tabla, nombre) < 0 and s >= 0
+                    and sim.simbolo(&r.tabla, s).clase == sim.FUNCTION) {
+                reporta(r, "SEM013", nd.linea(a, n), nd.col(a, n),
+                        f"'&' sobre la funcion '{nombre}': suriaX no tiene tipos funcion");
+                return 0;
+            };
+            mut = sim.es_mutable(&r.tabla, nombre);
+        } else if (oc != "MemberAccess" and oc != "Index") {
+            reporta(r, "SEM013", nd.linea(a, n), nd.col(a, n),
+                    f"'&' sobre una expresión temporal ({oc}): solo variables, campos o "
+                    + "índices tienen dirección");
+            return 0;
         };
         if (mut) { marca(r, n, MUT); };
         if (t == 0) { return 0; };
@@ -1297,17 +2478,42 @@ fn expresion_sin_temporal(vec.Vector<ar.Nodo> ptr a, int n, str c,
     if (c == "Index") {
         var int obj = expresion(a, nd.hijo(a, n, "obj"), r);
         expresion(a, nd.hijo(a, n, "index"), r);
-        return leido_de(r, obj);
+        var int leido = leido_de(r, obj);
+        // 'v[i]' con '__index__': una instancia del hook
+        var str dueno_i = nombre_nucleo(r, obj);
+        if (dueno_i != "" and obj > 0 and tip.clase_de(&r.ctx.u, obj) != tip.STR) {
+            var int hi = sim.busca_hook(&r.tabla, dueno_i, HOOK_INDEX);
+            if (hi >= 0) {
+                var Mapa mi = mapa_de(r, hi, obj);
+                instancia(a, n, hi, &mi, r);
+            };
+        };
+        if (leido == 0 and obj > 0 and no_indexable(tip.clase_de(&r.ctx.u, obj))) {
+            var str e = tip.escribe(&r.ctx.u, obj);
+            reporta(r, "SEM031", nd.linea(a, n), nd.col(a, n),
+                    f"'{e}' no se puede indexar; el indexado opera sobre punteros a memoria "
+                    + "reservada y sobre tipos que declaran '__index__'");
+        };
+        return leido;
     };
     if (c == "CastExpr") {
-        var int t = tipo_escrito(a, nd.hijo(a, n, "type"), r);
-        expresion(a, nd.hijo(a, n, "value"), r);
-        return t;
+        // el destino se valida ANTES del valor (`bind_cast`); uno nominal,
+        // sin sus argumentos
+        var int destino = nd.hijo(a, n, "type");
+        if (nd.clase(a, destino) == "NominalTypeExpr") {
+            valida_nominal(r, nd.atributo(a, destino, "name"), nd.linea(a, n), nd.col(a, n));
+        } else {
+            valida_tipo(a, destino, r, nd.linea(a, n), nd.col(a, n));
+        };
+        var int t = tipo_escrito(a, destino, r);
+        var int vt = expresion(a, nd.hijo(a, n, "value"), r);
+        return convierte(a, n, t, vt, r);
     };
     if (c == "MoveExpr") {
         var int op = nd.hijo(a, n, "operand");
         var int t = expresion(a, op, r);
         tiene_dueno(r, op);
+        no_cede_un_prestamo(a, op, t, "move", r);
         return t;
     };
     if (c == "InterpolatedString") {
@@ -1316,7 +2522,7 @@ fn expresion_sin_temporal(vec.Vector<ar.Nodo> ptr a, int n, str c,
         while (i < partes.len()) {
             var int p = partes.get(i);
             var str pc = nd.clase(a, p);
-            if (pc == "FormattedValue") { expresion(a, nd.hijo(a, p, "value"), r); }
+            if (pc == "FormattedValue") { formato(a, p, expresion(a, nd.hijo(a, p, "value"), r), r); }
             else if (pc != "") { expresion(a, p, r); };
             i = i + 1;
         };
@@ -1472,22 +2678,51 @@ fn miembro(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
     // un miembro de una librería ('calc.BASE', 'io.stdp.x'): su tipo
     var int imp = cadena_de_import(a, obj, r);
     if (imp >= 0) {
-        var int m = sim.busca_miembro(&r.tabla, imp, nombre);
+        var int m = miembro_de_import(a, n, imp, nombre, r);
         if (m >= 0) { return sim.simbolo(&r.tabla, m).tipo; };
         return 0;
     };
     if (nd.clase(a, obj) == "Identifier") {
         var str base = nd.atributo(a, obj, "name");
         var int t = sim.tipo_de_nombre(&r.tabla, base);
-        if (t >= 0) { return campo_de(r, t, nombre); };
-        var int tipo = sim.busca_tipo(&r.tabla, base);
-        if (tipo >= 0 and sim.simbolo(&r.tabla, tipo).clase == sim.ENUM) {
-            var int item = sim.busca_miembro(&r.tabla, tipo, nombre);
-            if (item >= 0) { return sim.simbolo(&r.tabla, item).tipo; };
+        if (t >= 0) { return campo_informado(a, n, r, t); };
+        // acceso estático a un TIPO: 'Color.ROJO' (`_resolve_type_member`)
+        var int tipo = tipo_por_ruta_estricta(r, base);
+        if (tipo < 0) {
+            reporta(r, "SEM001", nd.linea(a, obj), nd.col(a, obj), f"'{base}' no está declarado");
+            return 0;
+        };
+        var int clase = sim.simbolo(&r.tabla, tipo).clase;
+        if (clase != sim.ENUM and clase != sim.STRUCT) { return 0; };
+        var int m = sim.busca_miembro(&r.tabla, tipo, nombre);
+        if (m >= 0) { return sim.simbolo(&r.tabla, m).tipo; };
+        if (clase == sim.ENUM and nombre == "name") {
+            reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+                    f"'{base}' es el enum, no uno de sus items: el nombre se pide sobre "
+                    + f"el item ('{base}.ALGO.name')");
+        } else {
+            reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n), f"'{base}' no define '{nombre}'");
         };
         return 0;
     };
-    return campo_de(r, expresion(a, obj, r), nombre);
+    return campo_informado(a, n, r, expresion(a, obj, r));
+}
+
+/- El campo `n.member` sobre un valor de tipo `t` (`_resolve_field`): su
+   tipo, o 0. Un struct (o un enum) CON miembros que no tiene ese campo es
+   un `SEM001`; un tipo desconocido, primitivo o sin miembros no dice nada
+   (cero falsos positivos). -/
+fn campo_informado(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r, int t) -> int {
+    var str campo = nd.atributo(a, n, "member");
+    var str dueno = nombre_nucleo(r, t);
+    if (dueno == "") { return 0; };
+    var int s = sim.busca_tipo(&r.tabla, dueno);
+    if (s < 0 or sim.simbolo(&r.tabla, s).n_miembros == 0) { return 0; };
+    if (sim.busca_miembro(&r.tabla, s, campo) < 0) {
+        reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n), f"'{dueno}' no tiene un campo '{campo}'");
+        return 0;
+    };
+    return campo_de(r, t, campo);
 }
 
 /- La variante que nombra `obj` en `obj.name` (`ROJO` o `Color.ROJO`), o -1. -/
@@ -1517,39 +2752,84 @@ fn asignacion(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
     var int destino = nd.hijo(a, n, "target");
     var str c = nd.clase(a, destino);
     if (c == "Identifier") {
-        var int t = sim.tipo_de_nombre(&r.tabla, nd.atributo(a, destino, "name"));
-        if (t < 0) { return vt; };
-        dueno_nuevo(r, n, t);
+        var str nombre = nd.atributo(a, destino, "name");
+        var int t = sim.tipo_de_nombre(&r.tabla, nombre);
+        if (t < 0) {
+            reporta(r, "SEM001", nd.linea(a, destino), nd.col(a, destino),
+                    f"'{nombre}' no está declarado");
+            return vt;
+        };
+        if (not sim.es_mutable(&r.tabla, nombre)) {
+            reporta(r, "SEM003", nd.linea(a, n), nd.col(a, n),
+                    f"'{nombre}' es 'const' y no puede reasignarse");
+        };
+        escritura(a, n, f"'{nombre}'", t, valor, vt, r);
+        dueno_nuevo(a, r, n, t);
         return t;
     };
-    if (c == "MemberAccess") {
-        var int base = expresion(a, nd.hijo(a, destino, "obj"), r);
-        var int t = campo_de(r, base, nd.atributo(a, destino, "member"));
-        dueno_nuevo(r, n, t);
-        if (t > 0) { return t; };
-        return vt;
-    };
-    if (c == "Index") {
-        var int base = expresion(a, nd.hijo(a, destino, "obj"), r);
-        expresion(a, nd.hijo(a, destino, "index"), r);
-        // 'v[i] = x' con '__index_set__' es una llamada al hook: el hook
-        // decide qué pasa con el viejo. Sin hook, el elemento de un bloque
-        if (hook_de_escritura(r, base) < 0 and base > 0
-                and tip.clase_de(&r.ctx.u, base) == tip.POINTER) {
-            dueno_nuevo(r, n, tip.inner_de(&r.ctx.u, base));
+    if (c == "MemberAccess" or c == "Index") {
+        // escribir a través de un 'ptr' de solo lectura (`ReadOnlyPointerWrite`)
+        var int b = expresion(a, nd.hijo(a, destino, "obj"), r);
+        if (b > 0 and tip.clase_de(&r.ctx.u, b) == tip.POINTER and not tip.mut_de(&r.ctx.u, b)) {
+            var str e = tip.escribe(&r.ctx.u, b);
+            reporta(r, "SEM015", nd.linea(a, n), nd.col(a, n),
+                    f"escritura a través de '{e}' (solo lectura); declara el puntero como "
+                    + "'ptr mutable'");
         };
-        return vt;
+        if (c == "MemberAccess") {
+            var int t = campo_informado(a, destino, r, b);
+            var str campo = nd.atributo(a, destino, "member");
+            escritura(a, n, f"'{campo}'", t, valor, vt, r);
+            dueno_nuevo(a, r, n, t);
+            if (t > 0) { return t; };
+            return vt;
+        };
+        return escribe_elemento(a, n, destino, b, valor, vt, r);
+    };
+    var int otro = expresion(a, destino, r);
+    if (otro > 0) { return otro; };
+    return vt;
+}
+
+/- `v[i] = x`: el índice se visita, el valor tiene que caber en el
+   elemento (`_tipo_del_elemento`: el tercer parámetro del `__index_set__`, o
+   lo apuntado por un `ptr`). -/
+fn escribe_elemento(vec.Vector<ar.Nodo> ptr a, int n, int destino, int base, int valor, int vt,
+                    Analisis ptr mutable r) -> int {
+    expresion(a, nd.hijo(a, destino, "index"), r);
+    escritura(a, n, "el elemento", elemento_de(r, base), valor, vt, r);
+    // 'v[i] = x' con '__index_set__' es una llamada al hook (una instancia):
+    // el hook decide qué pasa con el viejo. Sin hook, el elemento de un bloque
+    var int hs = hook_de_escritura(r, base);
+    if (hs >= 0) {
+        var Mapa ms = mapa_de(r, hs, base);
+        instancia(a, n, hs, &ms, r);
+    };
+    if (hook_de_escritura(r, base) < 0 and base > 0
+            and tip.clase_de(&r.ctx.u, base) == tip.POINTER) {
+        dueno_nuevo(a, r, n, tip.inner_de(&r.ctx.u, base));
     };
     return vt;
 }
 
 /- `_asignacion_de_dueno`: asignar sobre algo que posee destruye lo que
    había. Un puntero no posee lo que apunta. -/
-fn dueno_nuevo(Analisis ptr mutable r, int n, int destino) -> void {
+fn dueno_nuevo(vec.Vector<ar.Nodo> ptr a, Analisis ptr mutable r, int n, int destino) -> void {
     if (destino <= 0 or es_puntero(r, destino)) { return; };
-    if (tip.menciona(&r.ctx.u, destino, &r.genericos)
-            or prop.posee(&r.ctx.u, &r.tabla, destino)) {
+    var bool generico = tip.menciona(&r.ctx.u, destino, &r.genericos);
+    if (generico or prop.posee(&r.ctx.u, &r.tabla, destino)) {
         marca(r, n, DROPS_OLD);
+        // asignar un dueño por NOMBRE lo copia (en un genérico lo decide la
+        // instancia: SEM038, tanda 18c)
+        var int valor = nd.hijo(a, n, "value");
+        if (generico and es_lugar(a, valor, r)) { anota_copia(r, destino); };
+        if (not generico and es_lugar(a, valor, r)) {
+            var str e = tip.escribe(&r.ctx.u, destino);
+            var str nombre = texto_de(a, valor);
+            reporta(r, "SEM032", nd.linea(a, n), nd.col(a, n),
+                    f"se asigna '{nombre}', de tipo '{e}', que tiene destructor: asignarlo dejaria "
+                    + f"DOS duenos del mismo recurso. Transfierelo con 'move' ('= move {nombre}')");
+        };
     };
 }
 
@@ -1561,11 +2841,24 @@ fn llamada(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
     var str cc = nd.clase(a, callee);
     if (cc == "Identifier") {
         var str nombre = nd.atributo(a, callee, "name");
+        var int l = sim.busca_local(&r.tabla, nombre);
+        if (l >= 0) {
+            // un local no se llama (no hay valores función): su tipo, como la V0
+            argumentos(a, &args, r);
+            return sim.local(&r.tabla, l).tipo;
+        };
         var int s = sim.busca_valor(&r.tabla, nombre);
-        if (sim.busca_local(&r.tabla, nombre) >= 0) { s = -1; };
         if (s >= 0) { return llama_a(a, n, &args, s, r); };
         // sin función con ese nombre: un hook del tipo del argumento
-        // (`_call_hook_or_undefined`)
+        // (`_call_hook_or_undefined`), o un nombre que no existe. ('min' y
+        // 'max' pliegan el rango de un tipo: fuera del subconjunto)
+        if (nombre == "min" or nombre == "max") { return rango(a, n, nombre, &args, r); };
+        var int kind = hook_de_llamada(nombre);
+        if (kind == 0) {
+            reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n), f"'{nombre}' no está declarado");
+            argumentos(a, &args, r);
+            return 0;
+        };
         var int t = 0;
         if (args.len() > 0) { t = expresion(a, args.get(0), r); };
         var int i = 1;
@@ -1573,17 +2866,20 @@ fn llamada(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
             expresion(a, args.get(i), r);
             i = i + 1;
         };
-        var int kind = hook_de_llamada(nombre);
         if (kind == 0 or t <= 0) { return 0; };
         if (kind == HOOK_LEN and tip.clase_de(&r.ctx.u, t) == tip.STR) {
             referencia(r, n, "str", HOOK_LEN);
             return tip.simple(&r.ctx.u, tip.INT);
         };
-        if (kind == HOOK_HASH) { return hash_de(n, t, r); };
+        if (kind == HOOK_HASH) { return hash_de(a, n, t, r); };
         var str dueno = nombre_nucleo(r, t);
         if (dueno == "") { return 0; };
         var int h = sim.busca_hook(&r.tabla, dueno, kind);
-        if (h < 0) { return 0; };
+        if (h < 0) {
+            reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+                    f"'{nombre}' no está declarado y '{dueno}' no define '__{nombre}__'");
+            return 0;
+        };
         referencia(r, n, sim.simbolo(&r.tabla, h).hook_owner, kind);
         return sim.simbolo(&r.tabla, h).tipo;
     };
@@ -1591,7 +2887,7 @@ fn llamada(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
         // 'calc.suma(...)', 'io.stdp.println(...)': el miembro de la librería
         var int imp = cadena_de_import(a, nd.hijo(a, callee, "obj"), r);
         if (imp >= 0) {
-            var int m = sim.busca_miembro(&r.tabla, imp, nd.atributo(a, callee, "member"));
+            var int m = miembro_de_import(a, callee, imp, nd.atributo(a, callee, "member"), r);
             if (m < 0) {
                 argumentos(a, &args, r);
                 return 0;
@@ -1600,8 +2896,16 @@ fn llamada(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
         };
         var int v = variante_nombrada(a, callee, r);
         if (v >= 0) {
-            // el constructor de una variante: el payload pasa a ser del valor
-            argumentos(a, &args, r);
+            // el constructor de una variante (`_construir_variante`): se
+            // comprueba como cualquier llamada; el payload pasa a ser del valor
+            var vec.Vector<int> tipos = argumentos(a, &args, r);
+            var vec.Vector<int> payload = vec.dynamic<int>(4);
+            var int k = 0;
+            while (k < sim.simbolo(&r.tabla, v).n_params) {
+                payload.push(sim.param_de(&r.tabla, v, k));
+                k = k + 1;
+            };
+            revisa_argumentos(a, n, sim.simbolo(&r.tabla, v).nombre, &args, &tipos, &payload, r);
             var int i = 0;
             while (i < args.len()) {
                 tiene_dueno(r, args.get(i));
@@ -1611,6 +2915,7 @@ fn llamada(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
         };
         return metodo(a, n, callee, &args, r);
     };
+    expresion(a, callee, r);
     argumentos(a, &args, r);
     return 0;
 }
@@ -1631,10 +2936,17 @@ fn metodo(vec.Vector<ar.Nodo> ptr a, int n, int callee, vec.Vector<int> ptr args
         var sim.Simbolo s = sim.simbolo(&r.tabla, d);
         referencia(r, n, s.hook_owner, 0);
         var Mapa m = mapa_de(r, d, t);
+        instancia(a, n, d, &m, r);
         var vec.Vector<int> params = vec.dynamic<int>(s.n_params + 1);
         var int i = 1;
         while (i < s.n_params) {
             params.push(tip.sustituye(&r.ctx.u, sim.param_de(&r.tabla, d, i), &m.nombres, &m.args));
+            i = i + 1;
+        };
+        // los argumentos de un método (desde el 2: el 1 es el receptor)
+        i = 0;
+        while (i < args.len() and i < params.len()) {
+            argumento_por_nombre(a, f"{s.hook_owner}.{nombre}", i + 2, args.get(i), params.get(i), r);
             i = i + 1;
         };
         transfiere_argumentos(r, args, &params);
@@ -1665,7 +2977,7 @@ fn hook_de_llamada(str nombre) -> int {
    (el dueño es el nombre del primitivo); un tipo propio, con su
    `__hash__`; un parámetro de tipo o un enum sin payload, con un hook que
    resuelve cada motor con el tipo concreto (dueño = su nombre). -/
-fn hash_de(int n, int t, Analisis ptr mutable r) -> int {
+fn hash_de(vec.Vector<ar.Nodo> ptr a, int n, int t, Analisis ptr mutable r) -> int {
     var int x = t;
     while (x > 0 and tip.clase_de(&r.ctx.u, x) == tip.ERROR and tip.inner_de(&r.ctx.u, x) > 0) {
         x = tip.inner_de(&r.ctx.u, x);
@@ -1676,7 +2988,12 @@ fn hash_de(int n, int t, Analisis ptr mutable r) -> int {
     if (clase == tip.BOOL) { referencia(r, n, "bool", HOOK_HASH); return entero; };
     if (clase == tip.CHAR) { referencia(r, n, "char", HOOK_HASH); return entero; };
     if (clase == tip.STR) { referencia(r, n, "str", HOOK_HASH); return entero; };
-    if (clase == tip.FLOAT) { return entero; };
+    if (clase == tip.FLOAT) {
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                "un 'float' no tiene hash: NaN no es igual a si mismo, y un valor que no es "
+                + "igual a si mismo no puede ser clave");
+        return entero;
+    };
     var str dueno = nombre_nucleo(r, x);
     if (dueno == "") { return 0; };
     var int h = sim.busca_hook(&r.tabla, dueno, HOOK_HASH);
@@ -1695,6 +3012,8 @@ fn hash_de(int n, int t, Analisis ptr mutable r) -> int {
         referencia(r, n, dueno, HOOK_HASH);
         return entero;
     };
+    reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+            f"'hash' no está declarado y '{dueno}' no define '__hash__'");
     return 0;
 }
 
@@ -1719,11 +3038,25 @@ fn llama_a(vec.Vector<ar.Nodo> ptr a, int n, vec.Vector<int> ptr args, int s,
     var vec.Vector<int> tipos = argumentos(a, args, r);
     var vec.Vector<str> nombres = sim.tparams_de(&r.tabla, s);
     var vec.Vector<int> ligados = liga(a, n, s, &nombres, &tipos, r);
+    if (r.ligo) {
+        var Mapa ml = Mapa{ nombres: sim.tparams_de(&r.tabla, s), args: vec.dynamic<int>(4) };
+        var int k = 0;
+        while (k < ligados.len()) { ml.args.push(ligados.get(k)); k = k + 1; };
+        instancia(a, n, s, &ml, r);
+    };
     var vec.Vector<int> params = vec.dynamic<int>(sim.simbolo(&r.tabla, s).n_params + 1);
     var int i = 0;
     while (i < sim.simbolo(&r.tabla, s).n_params) {
         params.push(tip.sustituye(&r.ctx.u, sim.param_de(&r.tabla, s, i), &nombres, &ligados));
         i = i + 1;
+    };
+    // solo lo que TIENE firma se comprueba (`_check_call`): una función, una
+    // variante con payload; llamar a otra cosa da su tipo y nada más
+    var sim.Simbolo f = sim.simbolo(&r.tabla, s);
+    if (f.clase == sim.FUNCTION or (f.clase == sim.ENUM_ITEM and f.n_params > 0)) {
+        if (not revisa_argumentos(a, n, f.nombre, args, &tipos, &params, r)) {
+            return tip.sustituye(&r.ctx.u, f.tipo, &nombres, &ligados);
+        };
     };
     transfiere_argumentos(r, args, &params);
     return tip.sustituye(&r.ctx.u, sim.simbolo(&r.tabla, s).tipo, &nombres, &ligados);
@@ -1739,9 +3072,20 @@ fn llama_a(vec.Vector<ar.Nodo> ptr a, int n, vec.Vector<int> ptr args, int s,
 fn liga(vec.Vector<ar.Nodo> ptr a, int n, int s, vec.Vector<str> ptr nombres,
         vec.Vector<int> ptr tipos, Analisis ptr mutable r) -> vec.Vector<int> {
     var vec.Vector<int> ligados = vec.dynamic<int>(nombres.len() + 1);
+    r.ligo = false;
     if (nombres.len() == 0) { return ligados; };
     var vec.Vector<int> escritos = tipos_escritos(a, n, "type_args", r);
-    if (escritos.len() > 0) { return escritos; };
+    if (escritos.len() > 0) {
+        var vec.Vector<int> hs = nd.hijos(a, n, "type_args");
+        var int k = 0;
+        while (k < hs.len()) {
+            valida_tipo(a, hs.get(k), r, nd.linea(a, n), nd.col(a, n));
+            k = k + 1;
+        };
+        aridad(r, sim.simbolo(&r.tabla, s).nombre, nombres.len(), escritos.len(), nd.linea(a, n), nd.col(a, n));
+        r.ligo = true;
+        return escritos;
+    };
     var vec.Vector<int> sin_args = vec.dynamic<int>(1);
     var int k = 0;
     while (k < nombres.len()) {
@@ -1762,6 +3106,7 @@ fn liga(vec.Vector<ar.Nodo> ptr a, int n, int s, vec.Vector<str> ptr nombres,
                 if (nombres.get(k) == tip.nombre_de(&r.ctx.u, declarado) and not hecho.get(k)) {
                     ligados[k] = tipos.get(i);
                     hecho[k] = true;
+                    r.ligo = true;
                 };
                 k = k + 1;
             };
@@ -1798,6 +3143,1305 @@ fn argumentos(vec.Vector<ar.Nodo> ptr a, vec.Vector<int> ptr args, Analisis ptr 
         i = i + 1;
     };
     return tipos;
+}
+
+// ------------------------------------------------------------------------ //
+// el chequeo de tipos: las posiciones de escritura y los operadores
+// (`_acepta_valor`, `_check_call`, `_comparacion`... de la V0)
+// ------------------------------------------------------------------------ //
+
+const str INT_MIN = "-9223372036854775808";
+const str INT_MAX = "9223372036854775807";
+
+/- ¿`n` es el literal `null`? -/
+fn es_null(vec.Vector<ar.Nodo> ptr a, int n) -> bool {
+    return n >= 0 and nd.clase(a, n) == "Literal" and nd.atributo(a, n, "literal_kind") == "null";
+}
+
+/- El entero que escribe `n` en decimal (`_valor_literal`: un literal
+   entero, con el '-' opcional); "" si no es uno. -/
+fn literal_entero(vec.Vector<ar.Nodo> ptr a, int n) -> str {
+    if (n < 0) { return ""; };
+    var int x = n;
+    var bool negativo = false;
+    if (nd.clase(a, x) == "UnaryOp" and nd.atributo(a, x, "operator") == "-") {
+        negativo = true;
+        x = nd.hijo(a, x, "operand");
+    };
+    if (nd.clase(a, x) != "Literal" or nd.atributo(a, x, "literal_kind") != "int") { return ""; };
+    var str v = normal(nd.atributo(a, x, "value"));
+    if (not negativo or v == "0") { return v; };
+    if (v[0] == '-') { return text.slice(v, 1, len(v)); };
+    return "-" + v;
+}
+
+/- Un entero decimal sin "-0" ni ceros a la izquierda. -/
+fn normal(str v) -> str {
+    var bool negativo = len(v) > 0 and v[0] == '-';
+    var int i = 0;
+    if (negativo) { i = 1; };
+    while (i < len(v) - 1 and v[i] == '0') { i = i + 1; };
+    var str cifras = text.slice(v, i, len(v));
+    if (cifras == "0" or not negativo) { return cifras; };
+    return "-" + cifras;
+}
+
+/- -1, 0 o 1: `x` frente a `y`, dos enteros decimales de cualquier tamaño. -/
+fn compara(str x, str y) -> int {
+    var str a = normal(x);
+    var str b = normal(y);
+    var bool na = a[0] == '-';
+    var bool nb = b[0] == '-';
+    if (na and not nb) { return -1; };
+    if (nb and not na) { return 1; };
+    if (na) {
+        a = text.slice(a, 1, len(a));
+        b = text.slice(b, 1, len(b));
+    };
+    var int c = 0;
+    if (len(a) < len(b)) { c = -1; }
+    else if (len(a) > len(b)) { c = 1; }
+    else {
+        var int i = 0;
+        while (c == 0 and i < len(a)) {
+            if (a[i] < b[i]) { c = -1; } else if (a[i] > b[i]) { c = 1; };
+            i = i + 1;
+        };
+    };
+    if (na) { return 0 - c; };
+    return c;
+}
+
+/- ¿`bajo <= v <= alto`? -/
+fn cabe(str v, str bajo, str alto) -> bool {
+    return compara(v, bajo) >= 0 and compara(v, alto) <= 0;
+}
+
+/- El valor de un entero decimal que cabe en 'int'. -/
+fn entero_de(str v) -> int {
+    var bool negativo = len(v) > 0 and v[0] == '-';
+    var int i = 0;
+    if (negativo) { i = 1; };
+    var int x = 0;
+    while (i < len(v)) {
+        x = x * 10 - (cast<int>(v[i]) - 48);   // en negativo: el mínimo también cabe
+        i = i + 1;
+    };
+    if (negativo) { return x; };
+    return 0 - x;
+}
+
+/- El entero de una variante (`_valor_de_item`): el escrito, o el que le
+   toca; "" si lleva payload (deja de ser un entero). -/
+fn valor_de_item(vec.Vector<ar.Nodo> ptr a, int it, str siguiente) -> str {
+    if (nd.hijos(a, it, "payload").len() > 0) { return ""; };
+    var int v = nd.hijo(a, it, "value");
+    if (v >= 0 and nd.clase(a, v) == "Literal" and nd.atributo(a, v, "literal_kind") == "int") {
+        return normal(nd.atributo(a, v, "value"));
+    };
+    return siguiente;
+}
+
+/- Lo que devuelve un `{ return <literal>; }` (`_literal_devuelto`): el
+   rango de un `__min__`/`__max__`. "" si el cuerpo no es eso. -/
+fn literal_devuelto(vec.Vector<ar.Nodo> ptr a, int f) -> str {
+    var int cuerpo = nd.hijo(a, f, "body");
+    if (cuerpo < 0) { return ""; };
+    var vec.Vector<int> ss = nd.hijos(a, cuerpo, "statements");
+    if (ss.len() != 1 or nd.clase(a, ss.get(0)) != "ReturnStmt") { return ""; };
+    return literal_entero(a, nd.hijo(a, ss.get(0), "value"));
+}
+
+/- Marca `n` como algo que la V1 todavía no emite (el primero gana). -/
+fn no_emite(Analisis ptr mutable r, int n, str que) -> void {
+    if (not r.no_emitible.contains(n)) { r.no_emitible.put(n, que); };
+}
+
+/- ¿`t` es un enum (`_is_enum_type`, por el nombre como RUTA)? -/
+fn es_enum(Analisis ptr r, int t) -> bool {
+    if (t <= 0 or tip.clase_de(&r.ctx.u, t) != tip.NOMINAL) { return false; };
+    var int s = tipo_por_ruta_estricta(r, tip.nombre_de(&r.ctx.u, t));
+    return s >= 0 and sim.simbolo(&r.tabla, s).clase == sim.ENUM;
+}
+
+/- `_asignable`: `is_assignable`, y un enum cabe en un `int` (sus items son
+   enteros). -/
+fn asignable(Analisis ptr r, int t, int v) -> bool {
+    if (tip.asignable(&r.ctx.u, t, v)) { return true; };
+    return t > 0 and tip.clase_de(&r.ctx.u, t) == tip.INT and es_enum(r, v);
+}
+
+/- `_acepta_valor`: ¿el valor `expr` (de tipo `v`) cabe en `t`? También si
+   solo cabe tras la conversión implícita de un LITERAL (`_coercion_literal`),
+   que la V1 todavía no emite: queda marcada. -/
+fn acepta(vec.Vector<ar.Nodo> ptr a, Analisis ptr mutable r, int t, int expr, int v) -> bool {
+    if (asignable(r, t, v)) { return true; };
+    return coercion(a, r, t, expr, v);
+}
+
+/- Un literal entero donde se espera un `byte` o un nominal con `__cast__`
+   desde su tipo y rango publicado: si no cabe, AST006 con el rango; cabe
+   o no, se convierte (y no hay otro error). false si no aplica. -/
+fn coercion(vec.Vector<ar.Nodo> ptr a, Analisis ptr mutable r, int t, int expr, int v) -> bool {
+    if (t <= 0) { return false; };
+    var str lit = literal_entero(a, expr);
+    if (tip.clase_de(&r.ctx.u, t) == tip.BYTE) {
+        if (lit == "") { return false; };
+        if (not cabe(lit, "0", "255")) {
+            reporta(r, "AST006", nd.linea(a, expr), nd.col(a, expr),
+                    f"el literal {lit} no cabe en 'byte' (rango [0, 255]); para truncarlo, "
+                    + "'cast<byte>(...)'");
+        };
+        no_emite(r, expr, "un literal convertido implícitamente a 'byte' (escribe 'cast<byte>(...)')");
+        return true;
+    };
+    if (tip.clase_de(&r.ctx.u, t) != tip.NOMINAL or lit == "") { return false; };
+    if (busca_cast(r, v, t) < 0) { return false; };
+    var str dueno = tip.nombre_de(&r.ctx.u, t);
+    var int bajo = sim.busca_hook(&r.tabla, dueno, HOOK_MIN);
+    var int alto = sim.busca_hook(&r.tabla, dueno, HOOK_MAX);
+    if (bajo < 0 or alto < 0) { return false; };
+    var str min = sim.simbolo(&r.tabla, bajo).constante;
+    var str max = sim.simbolo(&r.tabla, alto).constante;
+    if (min == "" or max == "") { return false; };
+    if (not cabe(lit, min, max)) {
+        var str e = tip.escribe(&r.ctx.u, t);
+        reporta(r, "AST006", nd.linea(a, expr), nd.col(a, expr),
+                f"el literal {lit} no cabe en '{e}' (rango [{min}, {max}])");
+    };
+    no_emite(r, expr, f"un literal convertido implícitamente a '{dueno}' (escribe 'cast<{dueno}>(...)')");
+    return true;
+}
+
+/- El `__cast__` de `origen` a `destino` (la tabla de conversiones), o -1. -/
+fn busca_cast(Analisis ptr r, int origen, int destino) -> int {
+    if (origen <= 0 or destino <= 0) { return -1; };
+    var int k = 0;
+    while (k < r.tabla.hooks.len()) {
+        var int h = r.tabla.hooks.get(k);
+        var sim.Simbolo s = sim.simbolo(&r.tabla, h);
+        if (s.hook_kind == HOOK_CAST and s.n_params > 0 and s.tipo == destino
+                and sim.param_de(&r.tabla, h, 0) == origen) {
+            return h;
+        };
+        k = k + 1;
+    };
+    return -1;
+}
+
+/- El inicializador de una variable (`_check_var_init`): cabe en su tipo. -/
+fn inicializa(vec.Vector<ar.Nodo> ptr a, int n, int t, int valor, int vt,
+              Analisis ptr mutable r) -> void {
+    if (nd.atributo(a, n, "inferido") == "true") { return; };
+    var str nombre = nd.atributo(a, n, "name");
+    // ligar por NOMBRE algo con destructor deja dos dueños (`_sin_copia_de_dueno`);
+    // dentro de un genérico, si lo es lo decide la instancia
+    if (es_lugar(a, valor, r) and r.genericos.len() > 0 and tip.menciona(&r.ctx.u, t, &r.genericos)
+            and not es_puntero(r, t)) {
+        anota_copia(r, t);
+    };
+    if (es_lugar(a, valor, r) and not (r.genericos.len() > 0 and tip.menciona(&r.ctx.u, t, &r.genericos)
+                                       and not es_puntero(r, t))
+            and prop.posee(&r.ctx.u, &r.tabla, t)) {
+        var str e = tip.escribe(&r.ctx.u, t);
+        reporta(r, "SEM032", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' recibiria un valor de '{e}', que tiene destructor: ligarlo dejaria DOS "
+                + f"duenos del mismo recurso. Transfierelo con 'move' o toma un puntero");
+    };
+    var str e = tip.escribe(&r.ctx.u, t);
+    if (es_null(a, valor)) {
+        if (not tip.admite_null(&r.ctx.u, t)) {
+            reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                    f"'null' no es asignable a '{e}' (no es nullable)");
+        };
+        return;
+    };
+    if (not acepta(a, r, t, valor, vt)) {
+        var str v = tip.escribe(&r.ctx.u, vt);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"no se puede inicializar '{nombre}' ({e}) con un valor de tipo '{v}'");
+    };
+}
+
+/- `type T = <expr>;` (`_stmt_type_decl`): el valor tiene que ser un tipo. -/
+fn inicializa_tipo(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var int valor = nd.hijo(a, n, "value");
+    if (valor < 0) { return; };
+    var int vt = expresion(a, valor, r);
+    if (vt > 0 and tip.clase_de(&r.ctx.u, vt) != tip.META) {
+        var str nombre = nd.atributo(a, n, "name");
+        var str v = tip.escribe(&r.ctx.u, vt);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"el inicializador de 'type {nombre}' debe producir un tipo, no '{v}'");
+    };
+}
+
+/- Escribir `valor` (de tipo `vt`) en `que`, de tipo `destino`
+   (`_check_escritura` y la rama del nombre de `_expr_assignment`). -/
+fn escritura(vec.Vector<ar.Nodo> ptr a, int n, str que, int destino, int valor, int vt,
+             Analisis ptr mutable r) -> void {
+    if (destino <= 0) { return; };
+    var str e = tip.escribe(&r.ctx.u, destino);
+    if (es_null(a, valor)) {
+        if (not tip.admite_null(&r.ctx.u, destino)) {
+            reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                    f"'null' no es asignable a {que} ('{e}': no es nullable)");
+        };
+        return;
+    };
+    if (not acepta(a, r, destino, valor, vt)) {
+        var str v = tip.escribe(&r.ctx.u, vt);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"no se puede asignar '{v}' a {que} ('{e}')");
+    };
+}
+
+/- El tipo que admite `v[i] = x` (`_tipo_del_elemento`). -/
+fn elemento_de(Analisis ptr mutable r, int t) -> int {
+    var int h = hook_de_escritura(r, t);
+    if (h < 0) {
+        if (t > 0 and tip.clase_de(&r.ctx.u, t) == tip.POINTER) { return tip.inner_de(&r.ctx.u, t); };
+        return 0;
+    };
+    var Mapa m = mapa_de(r, h, t);
+    return tip.sustituye(&r.ctx.u, sim.param_de(&r.tabla, h, 2), &m.nombres, &m.args);
+}
+
+/- El valor de un campo en un literal (`_check_field_value`), en la
+   posición del valor. -/
+fn valor_de_campo(vec.Vector<ar.Nodo> ptr a, str escrito, str campo, int valor, int vt,
+                  int esperado, Analisis ptr mutable r) -> void {
+    var str e = tip.escribe(&r.ctx.u, esperado);
+    if (es_null(a, valor)) {
+        if (not tip.admite_null(&r.ctx.u, esperado)) {
+            reporta(r, "AST006", nd.linea(a, valor), nd.col(a, valor),
+                    f"campo '{campo}' de '{escrito}': 'null' no es asignable a '{e}' (no es nullable)");
+        };
+        return;
+    };
+    if (not acepta(a, r, esperado, valor, vt)) {
+        var str v = tip.escribe(&r.ctx.u, vt);
+        reporta(r, "AST006", nd.linea(a, valor), nd.col(a, valor),
+                f"campo '{campo}' de '{escrito}': se esperaba '{e}', se encontró '{v}'");
+    };
+}
+
+/- Un literal nombra TODOS los campos del struct `s` (`SEM028`). -/
+fn campos_faltantes(vec.Vector<ar.Nodo> ptr a, int n, str escrito, int s,
+                    vec.Vector<str> ptr vistos, Analisis ptr mutable r) -> void {
+    var str faltan = "";
+    var int k = 0;
+    while (k < sim.simbolo(&r.tabla, s).n_miembros) {
+        var str campo = sim.simbolo(&r.tabla, sim.miembro_de(&r.tabla, s, k)).nombre;
+        if (not contiene(vistos, campo)) {
+            if (faltan != "") { faltan = faltan + ", "; };
+            faltan = faltan + f"'{campo}'";
+        };
+        k = k + 1;
+    };
+    if (faltan != "") {
+        reporta(r, "SEM028", nd.linea(a, n), nd.col(a, n),
+                f"el literal de '{escrito}' no da valor a {faltan}: un struct se construye con "
+                + "todos sus campos (no hay valores por defecto)");
+    };
+}
+
+/- Los argumentos contra los parámetros (ya sustituidos) de `nombre`
+   (`_check_call`): la aridad (`SEM008`, en la llamada) y el tipo de cada
+   uno (`AST006`, en el argumento). false si la aridad no coincide. -/
+fn revisa_argumentos(vec.Vector<ar.Nodo> ptr a, int n, str nombre, vec.Vector<int> ptr args,
+                     vec.Vector<int> ptr tipos, vec.Vector<int> ptr params,
+                     Analisis ptr mutable r) -> bool {
+    if (args.len() != params.len()) {
+        reporta(r, "SEM008", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' espera {params.len()} argumento(s), recibe {args.len()}");
+        return false;
+    };
+    var int i = 0;
+    while (i < args.len()) {
+        var int arg = args.get(i);
+        var int p = params.get(i);
+        var str e = tip.escribe(&r.ctx.u, p);
+        if (es_null(a, arg)) {
+            if (not tip.admite_null(&r.ctx.u, p)) {
+                reporta(r, "AST006", nd.linea(a, arg), nd.col(a, arg),
+                        f"argumento {i + 1} de '{nombre}': 'null' no es asignable a '{e}' (no es nullable)");
+            };
+        } else if (not acepta(a, r, p, arg, tipos.get(i))) {
+            var str v = tip.escribe(&r.ctx.u, tipos.get(i));
+            reporta(r, "AST006", nd.linea(a, arg), nd.col(a, arg),
+                    f"argumento {i + 1} de '{nombre}': se esperaba '{e}', se encontró '{v}'");
+        } else {
+            argumento_por_nombre(a, nombre, i + 1, arg, p, r);
+        };
+        i = i + 1;
+    };
+    return true;
+}
+
+/- La condición de un `if`/`while` es `bool` (`_condicion`): sin veracidad. -/
+fn condicion(vec.Vector<ar.Nodo> ptr a, int expr, str donde, Analisis ptr mutable r) -> void {
+    var int t = expresion(a, expr, r);
+    if (tip.ignorado(&r.ctx.u, t) or tip.clase_de(&r.ctx.u, t) == tip.BOOL) { return; };
+    var str e = tip.escribe(&r.ctx.u, t);
+    reporta(r, "AST006", nd.linea(a, expr), nd.col(a, expr),
+            f"la condicion de {donde} es de tipo '{e}', y tiene que ser 'bool': en suriaX un "
+            + "valor no es verdadero por no ser cero. Escribe la comparacion ('x != 0')");
+}
+
+/- El operando de `and`/`or`/`not` es `bool` (`_operando_logico`). -/
+fn operando_logico(vec.Vector<ar.Nodo> ptr a, int expr, int t, str op, Analisis ptr mutable r)
+        -> void {
+    if (tip.ignorado(&r.ctx.u, t) or tip.clase_de(&r.ctx.u, t) == tip.BOOL) { return; };
+    var str e = tip.escribe(&r.ctx.u, t);
+    reporta(r, "AST006", nd.linea(a, expr), nd.col(a, expr),
+            f"el operando de '{op}' es de tipo '{e}', y tiene que ser 'bool': en suriaX un "
+            + "valor no es verdadero por no ser cero");
+}
+
+/- `izq op der` (`_expr_binary`). -/
+fn binaria(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> int {
+    var int ni = nd.hijo(a, n, "left");
+    var int nr = nd.hijo(a, n, "right");
+    var int izq = expresion(a, ni, r);
+    var int der = expresion(a, nr, r);
+    var str op = nd.atributo(a, n, "operator");
+    // un literal junto a un 'byte' es un 'byte' si cabe (`_literal_como_byte`)
+    if (izq > 0 and der > 0) {
+        if (tip.clase_de(&r.ctx.u, izq) == tip.BYTE and tip.clase_de(&r.ctx.u, der) == tip.INT) {
+            if (coercion(a, r, izq, nr, der)) { der = izq; };
+        } else if (tip.clase_de(&r.ctx.u, der) == tip.BYTE and tip.clase_de(&r.ctx.u, izq) == tip.INT) {
+            if (coercion(a, r, der, ni, izq)) { izq = der; };
+        };
+    };
+    if (op == "and" or op == "or") {
+        operando_logico(a, ni, izq, op, r);
+        operando_logico(a, nr, der, op, r);
+        return tip.simple(&r.ctx.u, tip.BOOL);
+    };
+    if (es_de_bool(op)) {
+        comparacion(a, n, op, izq, der, r);
+        return tip.simple(&r.ctx.u, tip.BOOL);
+    };
+    // aritmética: tipado fuerte, solo si los DOS lados se conocen
+    if (not tip.ignorado(&r.ctx.u, izq) and not tip.ignorado(&r.ctx.u, der) and izq != der) {
+        var str ei = tip.escribe(&r.ctx.u, izq);
+        var str ed = tip.escribe(&r.ctx.u, der);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"operación '{op}' entre tipos incompatibles ('{ei}' y '{ed}')");
+        return 0;
+    };
+    if (not tip.ignorado(&r.ctx.u, izq) and not tip.aritmetico(&r.ctx.u, izq, op)) {
+        var str ei = tip.escribe(&r.ctx.u, izq);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"el operador '{op}' no se aplica a '{ei}'");
+        return 0;
+    };
+    if ((op == "/" or op == "%") and nd.clase(a, nr) == "Literal"
+            and nd.atributo(a, nr, "literal_kind") == "int" and normal(nd.atributo(a, nr, "value")) == "0") {
+        reporta(r, "SEM035", nd.linea(a, n), nd.col(a, n),
+                f"'{op} 0': división entre un cero literal, que no tiene resultado");
+    };
+    if (izq > 0) { return izq; };
+    return der;
+}
+
+/- Una comparación entre dos valores del MISMO tipo (`_comparacion`);
+   ordenar, solo números, caracteres y cadenas, y nunca un `T?`. -/
+fn comparacion(vec.Vector<ar.Nodo> ptr a, int n, str op, int izq, int der,
+               Analisis ptr mutable r) -> void {
+    if (tip.ignorado(&r.ctx.u, izq) or tip.ignorado(&r.ctx.u, der)) { return; };
+    var int ci = tip.comparable(&r.ctx.u, izq);
+    var int cd = tip.comparable(&r.ctx.u, der);
+    var str ei = tip.escribe(&r.ctx.u, izq);
+    if (ci != cd) {
+        var str ed = tip.escribe(&r.ctx.u, der);
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"comparación '{op}' entre tipos distintos ('{ei}' y '{ed}'): no hay "
+                + "conversiones implícitas; convierte uno con 'cast<T>(...)'");
+        return;
+    };
+    if (op != "<" and op != "<=" and op != ">" and op != ">=") { return; };
+    var int k = tip.clase_de(&r.ctx.u, ci);
+    if (k != tip.INT and k != tip.FLOAT and k != tip.CHAR and k != tip.STR and k != tip.BYTE) {
+        reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                f"'{op}' no ordena valores de tipo '{ei}': solo se ordenan números, caracteres "
+                + "y cadenas");
+        return;
+    };
+    var vec.Vector<int> lados = vec.dynamic<int>(2);
+    lados.push(izq);
+    lados.push(der);
+    var int i = 0;
+    while (i < 2) {
+        var int x = lados.get(i);
+        while (tip.clase_de(&r.ctx.u, x) == tip.ERROR and tip.inner_de(&r.ctx.u, x) > 0) {
+            x = tip.inner_de(&r.ctx.u, x);
+        };
+        if (tip.clase_de(&r.ctx.u, x) == tip.NULLABLE) {
+            var str ex = tip.escribe(&r.ctx.u, x);
+            reporta(r, "AST006", nd.linea(a, n), nd.col(a, n),
+                    f"'{op}' no ordena un '{ex}': puede valer null, y null no es menor ni mayor "
+                    + "que nada");
+            return;
+        };
+        i = i + 1;
+    };
+}
+
+/- ¿Un valor de esta clase de tipo NUNCA se indexa (`_NO_INDEXABLES`)? -/
+fn no_indexable(int k) -> bool {
+    return k == tip.VOID or k == tip.BOOL or k == tip.INT or k == tip.FLOAT or k == tip.CHAR
+        or k == tip.STR or k == tip.META or k == tip.BYTE;
+}
+
+/- `cast<t>(valor)`, con `vt` el tipo del valor (`_expr_cast`): la
+   identidad, un par NATIVO, un enum sin payload con `int`, o un `__cast__`
+   declarado (que la V1 todavía no emite); si no, `SEM016` y sin tipo. -/
+fn convierte(vec.Vector<ar.Nodo> ptr a, int n, int t, int vt, Analisis ptr mutable r) -> int {
+    if (t <= 0 or tip.ignorado(&r.ctx.u, vt) or t == vt) { return t; };
+    if (cast_nativo(tip.clase_de(&r.ctx.u, vt), tip.clase_de(&r.ctx.u, t))) { return t; };
+    if (cast_de_enum(a, n, vt, t, r)) { return t; };
+    if (busca_cast(r, vt, t) >= 0) {
+        no_emite(r, n, "un 'cast' por un '__cast__' declarado");
+        return t;
+    };
+    var str ev = tip.escribe(&r.ctx.u, vt);
+    var str et = tip.escribe(&r.ctx.u, t);
+    reporta(r, "SEM016", nd.linea(a, n), nd.col(a, n),
+            f"no existe conversión de '{ev}' a '{et}'");
+    return 0;
+}
+
+/- `_NATIVE_CASTS`: los pares de primitivos que el lenguaje convierte. -/
+fn cast_nativo(int desde, int hacia) -> bool {
+    if (hacia == tip.STR) {
+        return desde == tip.INT or desde == tip.FLOAT or desde == tip.BOOL or desde == tip.CHAR
+            or desde == tip.BYTE;
+    };
+    if (desde == tip.INT) { return hacia == tip.FLOAT or hacia == tip.CHAR or hacia == tip.BYTE; };
+    if (hacia == tip.INT) {
+        return desde == tip.FLOAT or desde == tip.CHAR or desde == tip.BOOL or desde == tip.BYTE;
+    };
+    return false;
+}
+
+/- El enum SIN payload que es `t` (`_items_de_enum`), o -1. -/
+fn enum_entero(Analisis ptr r, int t) -> int {
+    if (t <= 0 or tip.clase_de(&r.ctx.u, t) != tip.NOMINAL or tip.nombre_de(&r.ctx.u, t) == "") {
+        return -1;
+    };
+    var int s = sim.busca_tipo(&r.tabla, tip.nombre_de(&r.ctx.u, t));
+    if (s < 0) { s = tipo_por_ruta_estricta(r, tip.nombre_de(&r.ctx.u, t)); };
+    if (s < 0 or sim.simbolo(&r.tabla, s).clase != sim.ENUM
+            or sim.simbolo(&r.tabla, s).n_miembros == 0 or not enum_simple(r, s)) {
+        return -1;
+    };
+    return s;
+}
+
+/- `cast<int>(Color.ROJO)` y `cast<Color>(2)` (`_cast_de_enum`): un literal
+   tiene que ser uno de los valores del enum (`SEM016`). -/
+fn cast_de_enum(vec.Vector<ar.Nodo> ptr a, int n, int origen, int destino,
+                Analisis ptr mutable r) -> bool {
+    var bool hacia_int = enum_entero(r, origen) >= 0 and tip.clase_de(&r.ctx.u, destino) == tip.INT;
+    var int e = enum_entero(r, destino);
+    var bool desde_int = e >= 0 and tip.clase_de(&r.ctx.u, origen) == tip.INT;
+    if (not hacia_int and not desde_int) { return false; };
+    var int valor = nd.hijo(a, n, "value");
+    if (desde_int and nd.clase(a, valor) == "Literal") {
+        var str v = normal(nd.atributo(a, valor, "value"));
+        var int k = 0;
+        var bool hallado = false;
+        while (k < sim.simbolo(&r.tabla, e).n_miembros) {
+            if (sim.simbolo(&r.tabla, sim.miembro_de(&r.tabla, e, k)).constante == v) { hallado = true; };
+            k = k + 1;
+        };
+        if (not hallado) {
+            var str ed = tip.escribe(&r.ctx.u, destino);
+            reporta(r, "SEM016", nd.linea(a, n), nd.col(a, n),
+                    f"{v} no es un valor de '{ed}': un enum solo tiene los valores que declara");
+        };
+    };
+    return true;
+}
+
+/- `{x:fmt}` / `{x!r}` (`_expr_formatted`): el formato tiene sentido para
+   el tipo, y la representación de algo con un puntero no se escribe. -/
+fn formato(vec.Vector<ar.Nodo> ptr a, int p, int t, Analisis ptr mutable r) -> void {
+    if (tip.ignorado(&r.ctx.u, t)) { return; };
+    var str spec = nd.atributo(a, p, "format_spec");
+    var bool rep = nd.atributo(a, p, "conversion") == "r";
+    // (0?)([1-9][0-9]*)?(\.[0-9]+)?([dxXbof]?), o nada si no encaja
+    var bool cero = false;
+    var bool precision = false;
+    var str clase = "";
+    var int i = 0;
+    var bool encaja = true;
+    if (i < len(spec) and spec[i] == '0') { cero = true; i = i + 1; };
+    if (i < len(spec) and spec[i] >= '1' and spec[i] <= '9') {
+        while (i < len(spec) and spec[i] >= '0' and spec[i] <= '9') { i = i + 1; };
+    };
+    if (i < len(spec) and spec[i] == '.') {
+        i = i + 1;
+        var int desde = i;
+        while (i < len(spec) and spec[i] >= '0' and spec[i] <= '9') { i = i + 1; };
+        if (i == desde) { encaja = false; };
+        precision = true;
+    };
+    if (i < len(spec) and (spec[i] == 'd' or spec[i] == 'x' or spec[i] == 'X' or spec[i] == 'b'
+                           or spec[i] == 'o' or spec[i] == 'f')) {
+        clase = cast<str>(spec[i]);
+        i = i + 1;
+    };
+    if (i != len(spec)) { encaja = false; };
+    if (not encaja) {
+        cero = false;
+        precision = false;
+        clase = "";
+    };
+    var int k = tip.clase_de(&r.ctx.u, t);
+    var bool entero = k == tip.INT or k == tip.BYTE;
+    var bool numerico = entero or k == tip.FLOAT;
+    var str motivo = "";
+    if ((clase == "d" or clase == "x" or clase == "X" or clase == "b" or clase == "o") and not entero) {
+        motivo = f"'{clase}' es un formato de enteros ('int', 'byte')";
+    } else if (clase == "f" and k != tip.FLOAT) {
+        motivo = "'f' es un formato de 'float'";
+    } else if (precision and clase != "f") {
+        motivo = "la precision ('.2') va con 'f', que es de 'float'";
+    } else if (cero and not numerico) {
+        motivo = "el relleno con ceros es de numeros";
+    } else if (rep and clase != "") {
+        motivo = "'!r' ya da un texto: con el va solo el ancho";
+    };
+    var str e = tip.escribe(&r.ctx.u, t);
+    if (motivo != "") {
+        reporta(r, "AST006", nd.linea(a, p), nd.col(a, p),
+                "'{...:" + spec + "}' sobre un '" + e + "': " + motivo);
+    };
+    var vec.Vector<int> vistos = vec.dynamic<int>(4);
+    if (rep and tiene_puntero(r, t, &vistos)) {
+        reporta(r, "AST006", nd.linea(a, p), nd.col(a, p),
+                f"'!r' de un '{e}', que lleva un puntero: la representacion podria no terminar");
+    };
+}
+
+/- ¿Un valor de tipo `t` lleva un puntero (`_tiene_puntero`)? -/
+fn tiene_puntero(Analisis ptr mutable r, int t, vec.Vector<int> ptr mutable vistos) -> bool {
+    if (t <= 0) { return false; };
+    var int i = 0;
+    while (i < vistos.len()) {
+        if (vistos.get(i) == t) { return false; };
+        i = i + 1;
+    };
+    vistos.push(t);
+    var int k = tip.clase_de(&r.ctx.u, t);
+    if (k == tip.POINTER) { return true; };
+    if (k == tip.NULLABLE or k == tip.ERROR) { return tiene_puntero(r, tip.inner_de(&r.ctx.u, t), vistos); };
+    var int s = prop.simbolo_nominal(&r.ctx.u, &r.tabla, t);
+    if (s < 0 or sim.simbolo(&r.tabla, s).n_miembros == 0) { return false; };
+    var int j = 0;
+    while (j < sim.simbolo(&r.tabla, s).n_miembros) {
+        var int m = sim.miembro_de(&r.tabla, s, j);
+        if (sim.simbolo(&r.tabla, s).clase == sim.STRUCT) {
+            var int c = prop.instancia_de(&r.ctx.u, &r.tabla, s, t, sim.simbolo(&r.tabla, m).tipo);
+            if (tiene_puntero(r, c, vistos)) { return true; };
+        } else if (sim.simbolo(&r.tabla, s).clase == sim.ENUM) {
+            var int q = 0;
+            while (q < sim.simbolo(&r.tabla, m).n_params) {
+                if (tiene_puntero(r, sim.param_de(&r.tabla, m, q), vistos)) { return true; };
+                q = q + 1;
+            };
+        };
+        j = j + 1;
+    };
+    return false;
+}
+
+/- `sizeof(X)` (`bind_sizeof`): X es un tipo, o un valor (el tamaño de su
+   tipo); si no es ninguno, el error de un tipo que no existe. -/
+fn mide(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var int x = nd.hijo(a, n, "type");
+    while (x >= 0 and (nd.clase(a, x) == "PointerTypeExpr" or nd.clase(a, x) == "NullableTypeExpr")) {
+        x = nd.hijo(a, x, "inner");
+    };
+    if (x < 0 or nd.clase(a, x) != "NominalTypeExpr") { return; };
+    var str nombre = nd.atributo(a, x, "name");
+    if (tipo_local(r, nombre) or tipo_por_ruta_estricta(r, nombre) >= 0) { return; };
+    if (sim.tipo_de_nombre(&r.tabla, nombre) > 0) { return; };
+    valida_nominal(r, nombre, nd.linea(a, n), nd.col(a, n));
+}
+
+/- `min(T)`/`max(T)` (`_call_rango`): el rango que el tipo publica. Se
+   pliega a una constante que la V1 todavía no emite (queda marcada). -/
+fn rango(vec.Vector<ar.Nodo> ptr a, int n, str nombre, vec.Vector<int> ptr args,
+         Analisis ptr mutable r) -> int {
+    no_emite(r, n, "'min'/'max' (el rango de un tipo)");
+    if (args.len() != 1 or texto_de(a, args.get(0)) == "") {
+        reporta(r, "SEM008", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' toma exactamente un nombre: un tipo o una variable");
+        argumentos(a, args, r);
+        return 0;
+    };
+    var str escrito = texto_de(a, args.get(0));
+    var str dueno = "";
+    var int s = tipo_por_ruta_estricta(r, escrito);
+    if (tipo_local(r, escrito)) {
+        dueno = escrito;
+    } else if (s >= 0) {
+        dueno = sim.simbolo(&r.tabla, s).tipo_nombre;
+        if (dueno == "") { dueno = escrito; };
+    } else if (tramos(escrito).len() == 1 and sim.tipo_de_nombre(&r.tabla, escrito) > 0) {
+        dueno = nombre_nucleo(r, sim.tipo_de_nombre(&r.tabla, escrito));
+    };
+    if (dueno == "") {
+        reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' necesita un tipo nominal: '{escrito}' no nombra ninguno");
+        return 0;
+    };
+    var int clase = HOOK_MIN;
+    if (nombre == "max") { clase = HOOK_MAX; };
+    var int h = sim.busca_hook(&r.tabla, dueno, clase);
+    if (h < 0 or sim.simbolo(&r.tabla, h).constante == "") {
+        reporta(r, "SEM001", nd.linea(a, n), nd.col(a, n),
+                f"'{dueno}' no declara '__{nombre}__': un tipo publica su rango con un hook");
+        return 0;
+    };
+    return tip.simple(&r.ctx.u, tip.INT);
+}
+
+// ------------------------------------------------------------------------ //
+// el 'match' que no cubre todas las variantes (un AVISO)
+// ------------------------------------------------------------------------ //
+
+/- `SEM030` (`_match_exhaustivo`): un `match` sobre un enum que deja
+   variantes sin rama. Solo donde se SABE: si el sujeto no es un enum
+   conocido o una rama no se lee como una variante concreta, calla. -/
+fn exhaustivo(vec.Vector<ar.Nodo> ptr a, int n, int sujeto, vec.Vector<int> ptr ramas,
+              Analisis ptr mutable r) -> void {
+    var int e = enum_del_sujeto(r, sujeto);
+    if (e < 0) { return; };
+    var vec.Vector<str> cubiertas = vec.dynamic<str>(ramas.len() + 1);
+    var int i = 0;
+    while (i < ramas.len()) {
+        var str v = variante_del_patron(a, nd.hijo(a, ramas.get(i), "pattern"), e, r);
+        if (v == "") { return; };   // una rama opaca: no se afirma nada
+        cubiertas.push(v);
+        i = i + 1;
+    };
+    var str faltan = "";
+    var int k = 0;
+    while (k < sim.simbolo(&r.tabla, e).n_miembros) {
+        var str v = sim.simbolo(&r.tabla, sim.miembro_de(&r.tabla, e, k)).nombre;
+        if (not contiene(&cubiertas, v)) {
+            if (faltan != "") { faltan = faltan + ", "; };
+            faltan = faltan + f"'{v}'";
+        };
+        k = k + 1;
+    };
+    if (faltan == "") { return; };
+    var str nombre = sim.simbolo(&r.tabla, e).nombre;
+    reporta(r, "SEM030", nd.linea(a, n), nd.col(a, n),
+            f"el 'match' sobre '{nombre}' no cubre {faltan}; anade una rama por cada una o "
+            + f"compara con '{nombre}' fuera del match");
+}
+
+/- El enum (con variantes) del tipo del sujeto (`_enum_de`), o -1. -/
+fn enum_del_sujeto(Analisis ptr r, int t) -> int {
+    if (t <= 0 or tip.clase_de(&r.ctx.u, t) != tip.NOMINAL or tip.nombre_de(&r.ctx.u, t) == "") {
+        return -1;
+    };
+    var int s = sim.busca_tipo(&r.tabla, tip.nombre_de(&r.ctx.u, t));
+    if (s < 0) { s = tipo_por_ruta_estricta(r, tip.nombre_de(&r.ctx.u, t)); };
+    if (s < 0 or sim.simbolo(&r.tabla, s).clase != sim.ENUM
+            or sim.simbolo(&r.tabla, s).n_miembros == 0) {
+        return -1;
+    };
+    return s;
+}
+
+/- La variante de `e` que cubre `patron` (`Color.ROJO`, `ROJO`,
+   `Nodo.Literal(n)`), o "" si no se puede identificar. Dos símbolos son
+   el mismo enum si tienen el mismo nombre CANÓNICO (la V0 compara la
+   identidad del objeto). -/
+fn variante_del_patron(vec.Vector<ar.Nodo> ptr a, int patron, int e, Analisis ptr r) -> str {
+    var int p = patron;
+    if (nd.clase(a, p) == "Call") { p = nd.hijo(a, p, "callee"); };
+    if (nd.clase(a, p) == "MemberAccess") {
+        var int otro = enum_por_ruta(a, nd.hijo(a, p, "obj"), r);
+        var str miembro = nd.atributo(a, p, "member");
+        if (otro >= 0 and sim.simbolo(&r.tabla, otro).tipo_nombre == sim.simbolo(&r.tabla, e).tipo_nombre
+                and sim.busca_miembro(&r.tabla, e, miembro) >= 0) {
+            return miembro;
+        };
+        return "";
+    };
+    if (nd.clase(a, p) == "Identifier") {
+        var str nombre = nd.atributo(a, p, "name");
+        if (sim.busca_miembro(&r.tabla, e, nombre) < 0) { return ""; };
+        // un nombre pelado puede ser la variante... o un local que la tapa
+        if (sim.busca_local(&r.tabla, nombre) >= 0) { return ""; };
+        var int s = sim.busca_valor(&r.tabla, nombre);
+        if (s >= 0 and sim.simbolo(&r.tabla, s).clase == sim.ENUM_ITEM) { return nombre; };
+    };
+    return "";
+}
+
+// ------------------------------------------------------------------------ //
+// la propiedad: copias de un dueño, préstamos, direcciones, tamaño, capacidad
+// ------------------------------------------------------------------------ //
+
+/- ¿`n` NOMBRA un valor que ya tiene dueño (`_es_lugar`): una variable, un
+   campo, un elemento? Una variante sin payload es una constante. -/
+fn es_lugar(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr r) -> bool {
+    if (n < 0) { return false; };
+    var str c = nd.clase(a, n);
+    if (c == "Identifier") {
+        var str nombre = nd.atributo(a, n, "name");
+        if (sim.busca_local(&r.tabla, nombre) >= 0) { return true; };
+        var int s = sim.busca_valor(&r.tabla, nombre);
+        return s < 0 or sim.simbolo(&r.tabla, s).clase != sim.ENUM_ITEM;
+    };
+    if (c == "MemberAccess") {
+        var int e = enum_por_ruta(a, nd.hijo(a, n, "obj"), r);
+        if (e >= 0 and sim.busca_miembro(&r.tabla, e, nd.atributo(a, n, "member")) >= 0) {
+            return false;
+        };
+        return true;
+    };
+    return c == "Index";
+}
+
+/- Pasar por NOMBRE algo con destructor a un parámetro por valor
+   (`_argumento_transferido`): `SEM032` en el argumento. -/
+fn argumento_por_nombre(vec.Vector<ar.Nodo> ptr a, str funcion, int indice, int arg, int p,
+                        Analisis ptr mutable r) -> void {
+    if (es_puntero(r, p)) { return; };
+    if (r.genericos.len() > 0 and tip.menciona(&r.ctx.u, p, &r.genericos)) {
+        if (es_lugar(a, arg, r)) { anota_copia(r, p); };
+        return;
+    };
+    if (not prop.posee(&r.ctx.u, &r.tabla, p) or not es_lugar(a, arg, r)) { return; };
+    var str e = tip.escribe(&r.ctx.u, p);
+    var str nombre = texto_de(a, arg);
+    reporta(r, "SEM032", nd.linea(a, arg), nd.col(a, arg),
+            f"argumento {indice} de '{funcion}': '{nombre}' es de tipo '{e}', que tiene destructor, "
+            + f"y el parametro lo recibe por valor. Transfierelo con 'move' ('move {nombre}') o "
+            + "declara el parametro como puntero");
+}
+
+/- `T{ campo: x }` con `x` un dueño por nombre (`_campo_de_dueno`). -/
+fn campo_por_nombre(vec.Vector<ar.Nodo> ptr a, str campo, int valor, int t,
+                    Analisis ptr mutable r) -> void {
+    if (t <= 0 or es_puntero(r, t) or not es_lugar(a, valor, r)) { return; };
+    if (r.genericos.len() > 0 and tip.menciona(&r.ctx.u, t, &r.genericos)) {
+        anota_copia(r, t);
+        return;
+    };
+    if (not prop.posee(&r.ctx.u, &r.tabla, t)) { return; };
+    var str e = tip.escribe(&r.ctx.u, t);
+    var str nombre = texto_de(a, valor);
+    reporta(r, "SEM032", nd.linea(a, valor), nd.col(a, valor),
+            f"el campo '{campo}' recibiria '{nombre}', de tipo '{e}', que tiene destructor: dejaria "
+            + f"DOS duenos del mismo recurso. Transfierelo con 'move' ('{campo}: move {nombre}')");
+}
+
+/- ¿`nombre` es lo que ligó un `case Nodo.A(x)` (el local visible)? -/
+fn es_del_patron(Analisis ptr r, str nombre) -> bool {
+    var int l = sim.busca_local(&r.tabla, nombre);
+    return l >= 0 and sim.local(&r.tabla, l).prestado;
+}
+
+/- El tramo PUNTERO de la ruta `n` (`_prestamo_de`), o "" si es propia de
+   punta a punta. Un elemento siempre es de otro; lo que liga un patrón, del
+   enum. -/
+fn prestamo_de(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr r) -> str {
+    var str c = nd.clase(a, n);
+    if (c == "Index") {
+        var str base = texto_de(a, nd.hijo(a, n, "obj"));
+        if (base == "") { return "?"; };
+        return base;
+    };
+    if (c == "Identifier") {
+        if (es_del_patron(r, nd.atributo(a, n, "name"))) { return nd.atributo(a, n, "name"); };
+        return "";
+    };
+    if (c != "MemberAccess") { return ""; };
+    var int tramo = nd.hijo(a, n, "obj");
+    while (nd.clase(a, tramo) == "MemberAccess") {
+        if (es_puntero(r, r.tipo_de.get(tramo))) {
+            var str t = texto_de(a, tramo);
+            if (t == "") { return "?"; };
+            return t;
+        };
+        tramo = nd.hijo(a, tramo, "obj");
+    };
+    if (nd.clase(a, tramo) != "Identifier") { return ""; };
+    var str nombre = nd.atributo(a, tramo, "name");
+    var int l = sim.busca_local(&r.tabla, nombre);
+    if (l >= 0) {
+        var sim.Local x = sim.local(&r.tabla, l);
+        if ((x.clase == sim.VAR or x.clase == sim.PARAM) and (es_puntero(r, x.tipo) or x.prestado)) {
+            return nombre;
+        };
+        return "";
+    };
+    var int s = sim.busca_valor(&r.tabla, nombre);
+    if (s >= 0 and sim.simbolo(&r.tabla, s).clase == sim.VAR and es_puntero(r, sim.simbolo(&r.tabla, s).tipo)) {
+        return nombre;
+    };
+    return "";
+}
+
+/- Ceder (`move`, `return`, `throw`) algo con destructor al que se llega por
+   un PRÉSTAMO (`_no_cede_un_prestamo`): `SEM036` en lo cedido. -/
+fn no_cede_un_prestamo(vec.Vector<ar.Nodo> ptr a, int n, int t, str como,
+                       Analisis ptr mutable r) -> void {
+    var str prestamo = prestamo_de(a, n, r);
+    if (prestamo == "" or not prop.posee(&r.ctx.u, &r.tabla, t)) { return; };
+    var str ruta = texto_de(a, n);
+    reporta(r, "SEM036", nd.linea(a, n), nd.col(a, n),
+            f"'{como} {ruta}': '{ruta}' es de otro, se llega a el a traves del puntero '{prestamo}' "
+            + "(un prestamo). Cederlo lo destruiria dos veces");
+}
+
+/- `return &x` con `x` un local o un parámetro por valor
+   (`_no_devuelve_una_direccion_local`): `SEM037` en el `&`. -/
+fn direccion_local(vec.Vector<ar.Nodo> ptr a, int valor, Analisis ptr mutable r) -> void {
+    if (nd.clase(a, valor) != "AddrOf" or not r.en_funcion) { return; };
+    var int base = nd.hijo(a, valor, "operand");
+    while (nd.clase(a, base) == "MemberAccess" or nd.clase(a, base) == "Index") {
+        base = nd.hijo(a, base, "obj");
+    };
+    if (nd.clase(a, base) != "Identifier") { return; };
+    var str nombre = nd.atributo(a, base, "name");
+    if (not r.locales_fn.contains(nombre) or es_puntero(r, r.locales_fn.get(nombre))) { return; };
+    reporta(r, "SEM037", nd.linea(a, valor), nd.col(a, valor),
+            f"se devuelve la direccion de '{nombre}', que muere al salir de la funcion: el llamador "
+            + "recibiria un puntero a algo que ya no existe");
+}
+
+/- `a.b.C` -> `C`. -/
+fn hoja(str nombre) -> str {
+    var vec.Vector<str> partes = tramos(nombre);
+    return partes.get(partes.len() - 1);
+}
+
+/- La ruta de CAMPOS por la que `t` se contiene a sí mismo hasta el struct
+   `objetivo` (`_camino_infinito`), o "". Solo baja por campos POR VALOR (un
+   puntero se refiere, no contiene); `abiertos` son los tipos del camino. -/
+fn camino_infinito(Analisis ptr mutable r, int t, str objetivo, vec.Vector<int> ptr mutable abiertos)
+        -> str {
+    if (t <= 0 or tip.nombre_de(&r.ctx.u, t) == "") { return ""; };
+    var int s = sim.busca_tipo(&r.tabla, tip.nombre_de(&r.ctx.u, t));
+    if (s < 0 or sim.simbolo(&r.tabla, s).clase != sim.STRUCT) { return ""; };
+    var int i = 0;
+    while (i < abiertos.len()) {
+        if (abiertos.get(i) == t) { return ""; };    // otro ciclo: lo informa el suyo
+        i = i + 1;
+    };
+    abiertos.push(t);
+    var str hallado = "";
+    var int k = 0;
+    while (hallado == "" and k < sim.simbolo(&r.tabla, s).n_miembros) {
+        var int m = sim.miembro_de(&r.tabla, s, k);
+        var str campo = sim.simbolo(&r.tabla, m).nombre;
+        var int ct = prop.instancia_de(&r.ctx.u, &r.tabla, s, t, sim.simbolo(&r.tabla, m).tipo);
+        while (ct > 0 and (tip.clase_de(&r.ctx.u, ct) == tip.NULLABLE or tip.clase_de(&r.ctx.u, ct) == tip.ERROR)
+               and tip.inner_de(&r.ctx.u, ct) > 0) {
+            ct = tip.inner_de(&r.ctx.u, ct);
+        };
+        if (ct > 0 and tip.clase_de(&r.ctx.u, ct) == tip.NOMINAL and tip.nombre_de(&r.ctx.u, ct) != "") {
+            if (tip.nombre_de(&r.ctx.u, ct) == objetivo) {
+                hallado = campo;
+            } else {
+                var str resto = camino_infinito(r, ct, objetivo, abiertos);
+                if (resto != "") { hallado = campo + "." + resto; };
+            };
+        };
+        k = k + 1;
+    };
+    abiertos.pop();
+    return hallado;
+}
+
+/- `int vec.Vector v[2];` y tres `v.push(...)` seguidos en el MISMO bloque
+   (`_capacidad_desbordada`): `SEM033` en el push que no cabe, una vez por
+   variable. Solo lo que no depende de la ejecución. -/
+fn capacidad_desbordada(vec.Vector<ar.Nodo> ptr a, int bloque, Analisis ptr mutable r) -> void {
+    var vec.Vector<str> nombres = vec.dynamic<str>(2);
+    var vec.Vector<int> capacidades = vec.dynamic<int>(2);
+    var vec.Vector<int> cuentas = vec.dynamic<int>(2);
+    var vec.Vector<int> ss = nd.hijos(a, bloque, "statements");
+    var int i = 0;
+    while (i < ss.len()) {
+        var int st = ss.get(i);
+        var str c = nd.clase(a, st);
+        if (c == "VarDecl") {
+            var str nombre = nd.atributo(a, st, "name");
+            var int k = indice_de(&nombres, nombre);
+            var int cap = nd.hijo(a, st, "capacity");
+            if (cap >= 0 and nd.clase(a, cap) == "Literal" and nd.atributo(a, cap, "literal_kind") == "int") {
+                if (k < 0) {
+                    nombres.push(nombre);
+                    capacidades.push(entero_de(nd.atributo(a, cap, "value")));
+                    cuentas.push(0);
+                } else {
+                    capacidades[k] = entero_de(nd.atributo(a, cap, "value"));
+                    cuentas[k] = 0;
+                };
+            } else if (k >= 0) {
+                nombres[k] = "";      // ya no se sabe: se olvida
+            };
+        } else {
+            var str objetivo = push_sobre(a, st);
+            var int k = indice_de(&nombres, objetivo);
+            if (objetivo != "" and k >= 0) {
+                cuentas[k] = cuentas.get(k) + 1;
+                if (cuentas.get(k) > capacidades.get(k)) {
+                    reporta(r, "SEM033", nd.linea(a, st), nd.col(a, st),
+                            f"'{objetivo}' reservo {capacidades.get(k)} espacio(s) y este es el push "
+                            + f"numero {cuentas.get(k)}: esta fuera de los limites");
+                    nombres[k] = "";
+                };
+            };
+        };
+        i = i + 1;
+    };
+}
+
+/- El índice de `x` en `v`, o -1. -/
+fn indice_de(vec.Vector<str> ptr v, str x) -> int {
+    var int i = 0;
+    while (i < v.len()) {
+        if (v.get(i) == x) { return i; };
+        i = i + 1;
+    };
+    return -1;
+}
+
+/- La variable de un `v.push(x);` suelto (`_push_sobre`), o "". -/
+fn push_sobre(vec.Vector<ar.Nodo> ptr a, int st) -> str {
+    if (nd.clase(a, st) != "ExprStmt") { return ""; };
+    var int llamada = nd.hijo(a, st, "expr");
+    if (nd.clase(a, llamada) != "Call") { return ""; };
+    var int callee = nd.hijo(a, llamada, "callee");
+    if (nd.clase(a, callee) != "MemberAccess" or nd.atributo(a, callee, "member") != "push") { return ""; };
+    var int obj = nd.hijo(a, callee, "obj");
+    if (nd.clase(a, obj) != "Identifier") { return ""; };
+    return nd.atributo(a, obj, "name");
+}
+
+// ------------------------------------------------------------------------ //
+// hooks: el vocabulario fijo y su firma (`hooks.validate_hook`)
+// ------------------------------------------------------------------------ //
+
+/- El dueño ESCRITO de un `hook fn` válido, o "" informando por qué no lo
+   es: `SEM018` si no es del vocabulario, `SEM006` si su firma no es la del
+   hook (o su dueño es de otra unidad: un hook huérfano). -/
+fn valida_hook(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> str {
+    var str nombre = nd.atributo(a, n, "name");
+    var int k = clase_de_hook(nd.atributo(a, n, "dunder"));
+    if (k == 0) {
+        reporta(r, "SEM018", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' no es un hook reconocido; para un metodo especial libre usa "
+                + "'dunder fn' en vez de 'hook fn'");
+        return "";
+    };
+    var vec.Vector<int> params = nd.hijos(a, n, "params");
+    var int exactos = 1;
+    if (k == HOOK_INDEX or k == 9) { exactos = 2; };    // __index__, __eq__
+    if (k == HOOK_INDEX_SET) { exactos = 3; };
+    if (params.len() != exactos) {
+        reporta(r, "SEM006", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' debe declarar exactamente {exactos} parámetro(s), tiene {params.len()}");
+        return "";
+    };
+    var str dueno = "";
+    if (k == HOOK_CAST) {
+        // el lado NOMINAL de la firma: el retorno primero
+        dueno = objetivo_nominal(a, nd.hijo(a, n, "return_type"), true);
+        if (dueno == "") { dueno = objetivo_nominal(a, nd.hijo(a, params.get(0), "type"), true); };
+        if (dueno == "") {
+            reporta(r, "SEM006", nd.linea(a, n), nd.col(a, n),
+                    f"'{nombre}' debe involucrar un tipo nominal en su firma (retorno o primer "
+                    + "parámetro) para asociarse a él");
+            return "";
+        };
+    } else {
+        dueno = objetivo_nominal(a, nd.hijo(a, params.get(0), "type"), false);
+        if (dueno == "") {
+            reporta(r, "SEM006", nd.linea(a, n), nd.col(a, n),
+                    f"el primer parámetro de '{nombre}' debe ser 'T ptr' (T nominal)");
+            return "";
+        };
+        var str esperado = retorno_de_hook(k);
+        var int ret = nd.hijo(a, n, "return_type");
+        if (esperado != "" and not (ret >= 0 and nd.clase(a, ret) == "PrimitiveTypeExpr"
+                                    and nd.atributo(a, ret, "name") == esperado)) {
+            reporta(r, "SEM006", nd.linea(a, n), nd.col(a, n), f"'{nombre}' debe devolver '{esperado}'");
+            return "";
+        };
+    };
+    if (tramos(dueno).len() > 1) {
+        reporta(r, "SEM006", nd.linea(a, n), nd.col(a, n),
+                f"'{nombre}' se declara para '{dueno}', que es de otra unidad. Los hooks de un tipo "
+                + "viven con el tipo");
+        return "";
+    };
+    return dueno;
+}
+
+/- El retorno PRIMITIVO que exige el hook de clase `k` ("" = libre). -/
+fn retorno_de_hook(int k) -> str {
+    if (k == 1 or k == HOOK_PRINT or k == HOOK_INDEX_SET) { return "void"; };   // free, print
+    if (k == 9) { return "bool"; };                                             // eq
+    if (k == HOOK_INDEX or k == HOOK_CAST) { return ""; };
+    return "int";                                  // sizeof, len, min, max, hash
+}
+
+/- `T ptr` (T nominal) -> "T"; con `plano`, también `T`; si no, "". -/
+fn objetivo_nominal(vec.Vector<ar.Nodo> ptr a, int t, bool plano) -> str {
+    if (t < 0) { return ""; };
+    if (plano and nd.clase(a, t) == "NominalTypeExpr") { return nd.atributo(a, t, "name"); };
+    if (nd.clase(a, t) == "PointerTypeExpr" and nd.clase(a, nd.hijo(a, t, "inner")) == "NominalTypeExpr") {
+        return nd.atributo(a, nd.hijo(a, t, "inner"), "name");
+    };
+    return "";
+}
+
+/- `NOTE002` (`_campos_sin_soltar`): un `__free__` que no suelta (`free`)
+   un campo que posee recursos. Una nota: se avisa, no se rechaza. -/
+fn campos_sin_soltar(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr mutable r) -> void {
+    var vec.Vector<int> params = nd.hijos(a, n, "params");
+    if (nd.atributo(a, n, "dunder") != "free" or params.len() == 0) { return; };
+    var str dueno = nombre_nucleo(r, r.tipo_de.get(params.get(0)));
+    if (dueno == "") { return; };
+    var int s = tipo_por_ruta_estricta(r, dueno);
+    if (s < 0 or sim.simbolo(&r.tabla, s).n_miembros == 0) { return; };
+    var vec.Vector<str> soltados = vec.dynamic<str>(4);
+    nombres_liberados(a, nd.hijo(a, n, "body"), &soltados);
+    var int k = 0;
+    while (k < sim.simbolo(&r.tabla, s).n_miembros) {
+        var sim.Simbolo campo = sim.simbolo(&r.tabla, sim.miembro_de(&r.tabla, s, k));
+        if (campo.clase == sim.FIELD and prop.posee(&r.ctx.u, &r.tabla, campo.tipo)
+                and not contiene(&soltados, campo.nombre)) {
+            var str fn_nombre = nd.atributo(a, n, "name");
+            r.notas.push(dg.nuevo("NOTE002", nd.linea(a, n), nd.col(a, n),
+                f"'{fn_nombre}' de '{dueno}' no suelta el campo '{campo.nombre}', que posee recursos"));
+        };
+        k = k + 1;
+    };
+}
+
+/- Los campos que nombra algún `free` del bloque (`c.r` -> `r`), también en
+   bloques anidados, las ramas de un `if` y el cuerpo de un `while`. -/
+fn nombres_liberados(vec.Vector<ar.Nodo> ptr a, int bloque, vec.Vector<str> ptr mutable salida) -> void {
+    if (bloque < 0) { return; };
+    var vec.Vector<int> ss = nd.hijos(a, bloque, "statements");
+    var int i = 0;
+    while (i < ss.len()) {
+        var int st = ss.get(i);
+        var str c = nd.clase(a, st);
+        if (c == "FreeStmt") {
+            var int objetivo = nd.hijo(a, st, "target");
+            if (nd.clase(a, objetivo) == "AddrOf") { objetivo = nd.hijo(a, objetivo, "operand"); };
+            var str escrito = texto_de(a, objetivo);
+            if (escrito != "") { salida.push(hoja(escrito)); };
+        } else if (c == "Block") {
+            nombres_liberados(a, st, salida);
+        } else if (c == "IfStmt") {
+            // el 'then', el 'else' y la cadena de 'else if'
+            var int rama = st;
+            while (rama >= 0 and nd.clase(a, rama) == "IfStmt") {
+                nombres_liberados(a, nd.hijo(a, rama, "then_block"), salida);
+                rama = nd.hijo(a, rama, "else_branch");
+            };
+            if (rama >= 0) { nombres_liberados(a, rama, salida); };
+        } else if (c == "WhileStmt") {
+            nombres_liberados(a, nd.hijo(a, st, "body"), salida);
+        };
+        i = i + 1;
+    };
+}
+
+// ------------------------------------------------------------------------ //
+// SEM038: un genérico que copia un dueño (`verificar_copias`)
+// ------------------------------------------------------------------------ //
+
+/- El cuerpo en curso COPIA un valor de tipo `t` (que nombra un parámetro de
+   tipo): si eso está mal lo decide cada instancia (`_anotar_copia`). -/
+fn anota_copia(Analisis ptr mutable r, int t) -> void {
+    if (r.funcion < 0 or t <= 0 or not r.simbolo_de.contains(r.funcion)) { return; };
+    r.copia_fn.push(r.simbolo_de.get(r.funcion));
+    r.copia_tipo.push(t);
+}
+
+/- Una llamada (en `n`) al genérico `llamado` con el mapa `m` (`_instancia`):
+   se decide al cerrar el módulo, el llamado puede estar más abajo. -/
+fn instancia(vec.Vector<ar.Nodo> ptr a, int n, int llamado, Mapa ptr m, Analisis ptr mutable r) -> void {
+    if (llamado < 0 or m.nombres.len() == 0) { return; };
+    var int llamador = -1;
+    if (r.funcion >= 0 and r.simbolo_de.contains(r.funcion)) { llamador = r.simbolo_de.get(r.funcion); };
+    r.inst_llamador.push(llamador);
+    r.inst_llamado.push(llamado);
+    r.inst_mapa_desde.push(r.inst_nombres.len());
+    var int k = 0;
+    while (k < m.nombres.len() and k < m.args.len()) {
+        r.inst_nombres.push(m.nombres.get(k));
+        r.inst_args.push(m.args.get(k));
+        k = k + 1;
+    };
+    r.inst_mapa_n.push(r.inst_nombres.len() - r.inst_mapa_desde.get(r.inst_mapa_desde.len() - 1));
+    r.inst_gen_desde.push(r.inst_genericos.len());
+    k = 0;
+    while (k < r.genericos.len()) { r.inst_genericos.push(r.genericos.get(k)); k = k + 1; };
+    r.inst_gen_n.push(r.genericos.len());
+    r.inst_linea.push(nd.linea(a, n));
+    r.inst_col.push(nd.col(a, n));
+}
+
+/- (`verificar_copias`) 1. las copias directas de cada cuerpo pasan a su
+   símbolo; 2. se PROPAGAN por las instancias entre genéricos (con tope: una
+   recursión polimórfica no terminaría); 3. cada instancia con tipos
+   CONCRETOS que copiaría un valor con destructor es `SEM038`, en la llamada. -/
+fn verifica_copias(Analisis ptr mutable r) -> void {
+    var vec.Vector<int> hechos = vec.dynamic<int>(4);
+    var int i = 0;
+    while (i < r.copia_fn.len()) {
+        var int f = r.copia_fn.get(i);
+        if (indice_int(&hechos, f) < 0) {
+            hechos.push(f);
+            var vec.Vector<int> tipos = vec.dynamic<int>(2);
+            var int k = i;
+            while (k < r.copia_fn.len()) {
+                if (r.copia_fn.get(k) == f and indice_int(&tipos, r.copia_tipo.get(k)) < 0) {
+                    tipos.push(r.copia_tipo.get(k));
+                };
+                k = k + 1;
+            };
+            sim.pon_copias(&r.tabla, f, &tipos);
+        };
+        i = i + 1;
+    };
+    var int ronda = 0;
+    var bool cambio = true;
+    while (cambio and ronda < 32) {
+        cambio = false;
+        i = 0;
+        while (i < r.inst_llamado.len()) {
+            var int llamador = r.inst_llamador.get(i);
+            var vec.Vector<str> gen = genericos_de_instancia(r, i);
+            var vec.Vector<int> del_llamado = sim.copias_de(&r.tabla, r.inst_llamado.get(i));
+            if (llamador >= 0 and gen.len() > 0 and del_llamado.len() > 0) {
+                var vec.Vector<int> suyas = sim.copias_de(&r.tabla, llamador);
+                var bool crece = false;
+                var int k = 0;
+                while (k < del_llamado.len()) {
+                    var int concreto = concreto_de_instancia(r, i, del_llamado.get(k));
+                    if (tip.menciona(&r.ctx.u, concreto, &gen) and indice_int(&suyas, concreto) < 0) {
+                        suyas.push(concreto);
+                        crece = true;
+                    };
+                    k = k + 1;
+                };
+                if (crece) {
+                    sim.pon_copias(&r.tabla, llamador, &suyas);
+                    cambio = true;
+                };
+            };
+            i = i + 1;
+        };
+        ronda = ronda + 1;
+    };
+    i = 0;
+    while (i < r.inst_llamado.len()) {
+        var int llamado = r.inst_llamado.get(i);
+        var vec.Vector<str> gen = genericos_de_instancia(r, i);
+        var vec.Vector<int> copias = sim.copias_de(&r.tabla, llamado);
+        var bool dicho = false;
+        var int k = 0;
+        while (not dicho and k < copias.len()) {
+            var int concreto = concreto_de_instancia(r, i, copias.get(k));
+            var bool de_la_instancia = gen.len() > 0 and tip.menciona(&r.ctx.u, concreto, &gen);
+            if (not de_la_instancia and not es_puntero(r, concreto)
+                    and prop.posee(&r.ctx.u, &r.tabla, concreto)) {
+                var str nombre = sim.simbolo(&r.tabla, llamado).nombre;
+                var str e = tip.escribe(&r.ctx.u, concreto);
+                reporta(r, "SEM038", r.inst_linea.get(i), r.inst_col.get(i),
+                        f"'{nombre}' copia un valor de tipo '{e}', y '{e}' tiene destructor: la copia y el "
+                        + "original serian dos duenos y se destruiria dos veces");
+                dicho = true;
+            };
+            k = k + 1;
+        };
+        i = i + 1;
+    };
+}
+
+/- Los parámetros de tipo que veía el llamador de la instancia `i`. -/
+fn genericos_de_instancia(Analisis ptr r, int i) -> vec.Vector<str> {
+    var vec.Vector<str> g = vec.dynamic<str>(2);
+    var int k = 0;
+    while (k < r.inst_gen_n.get(i)) {
+        g.push(r.inst_genericos.get(r.inst_gen_desde.get(i) + k));
+        k = k + 1;
+    };
+    return g;
+}
+
+/- `t` sustituido con el mapa de la instancia `i`. -/
+fn concreto_de_instancia(Analisis ptr mutable r, int i, int t) -> int {
+    var vec.Vector<str> nombres = vec.dynamic<str>(2);
+    var vec.Vector<int> args = vec.dynamic<int>(2);
+    var int k = 0;
+    while (k < r.inst_mapa_n.get(i)) {
+        nombres.push(r.inst_nombres.get(r.inst_mapa_desde.get(i) + k));
+        args.push(r.inst_args.get(r.inst_mapa_desde.get(i) + k));
+        k = k + 1;
+    };
+    return tip.sustituye(&r.ctx.u, t, &nombres, &args);
+}
+
+/- El índice de `x` en `v`, o -1. -/
+fn indice_int(vec.Vector<int> ptr v, int x) -> int {
+    var int i = 0;
+    while (i < v.len()) {
+        if (v.get(i) == x) { return i; };
+        i = i + 1;
+    };
+    return -1;
+}
+
+/- (`run_generics`) Solo los cuerpos GENÉRICOS de una librería recién
+   recolectada, para saber qué copia cada uno; lo que digan se descarta (sale
+   al emitir su unidad). -/
+fn resuelve_genericos(vec.Vector<ar.Nodo> ptr a, int raiz, Analisis ptr mutable r) -> void {
+    var int antes = r.diagnosticos.len();
+    var int antes_notas = r.notas.len();
+    var vec.Vector<int> items = nd.hijos(a, raiz, "items");
+    var int i = 0;
+    while (i < items.len()) {
+        var int n = desenvuelve(a, items.get(i));
+        if (nd.clase(a, n) == "FunctionDecl" and es_generica(a, n, r)) { resuelve_funcion(a, n, r); };
+        i = i + 1;
+    };
+    verifica_copias(r);
+    while (r.diagnosticos.len() > antes) { r.diagnosticos.pop(); };
+    while (r.notas.len() > antes_notas) { r.notas.pop(); };
+}
+
+/- ¿El cuerpo de `n` habla de un parámetro de tipo (`_es_generica`)? Los
+   suyos, los de su `@impl`, o los de un receptor genérico. -/
+fn es_generica(vec.Vector<ar.Nodo> ptr a, int n, Analisis ptr r) -> bool {
+    if (nd.lista(a, n, "type_params").len() > 0 or nd.lista(a, n, "impl_type_params").len() > 0) {
+        return true;
+    };
+    var vec.Vector<int> params = nd.hijos(a, n, "params");
+    if (params.len() == 0) { return false; };
+    var int nucleo = nucleo_de(r, r.tipo_de.get(params.get(0)));
+    return nucleo > 0 and tip.clase_de(&r.ctx.u, nucleo) == tip.NOMINAL and tip.n_args_de(&r.ctx.u, nucleo) > 0;
 }
 
 #export as resolver

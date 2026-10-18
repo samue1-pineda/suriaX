@@ -34,6 +34,8 @@ Cómo se dispara cada hook (el "consumidor nunca escribe ``__foo__``"):
     ``__cast__``   ``cast<T>(x)`` (T nominal)             ``type_resolver``
     ``__min__``    un LITERAL escrito donde se espera T   ``scope_resolver``
     ``__max__``    un LITERAL escrito donde se espera T   ``scope_resolver``
+    ``__eq__``     ``a == b`` / ``a != b``                el runtime (por tipo)
+    ``__cmp__``    ``a < b`` / ``<=`` / ``>`` / ``>=``    el runtime (por tipo)
     ============  =====================================  ==================
 
 ``print``/``len`` NO son keywords (filosofía libsrX: pocos tokens): son
@@ -66,6 +68,7 @@ class HookKind(Enum):
     MIN = auto()       # __min__:    fn __min__(T ptr x) -> int   (cota inferior)
     MAX = auto()       # __max__:    fn __max__(T ptr x) -> int   (cota superior)
     HASH = auto()      # __hash__:   fn __hash__(T ptr x) -> int  (hash(x))
+    CMP = auto()       # __cmp__:    fn __cmp__(T ptr a, T ptr b) -> int  (a < b ...)
     EXTENDED = auto()  # hook DECLARADO POR EL PROYECTO (HTIMS): su identidad
                        # es el NOMBRE, no este miembro. Ver semantic/extensions.py
 @dataclass(slots=True, frozen=True)
@@ -123,6 +126,12 @@ HOOK_SPECS: dict[str, HookSpec] = {
     # un 'collections.Dictionary'. Dos valores iguales tienen que dar el
     # mismo hash; al reves no hace falta.
     "hash":   HookSpec(HookKind.HASH,   owner_from_return=False, return_primitive="int",   exact_params=1),
+    # __cmp__: '<', '<=', '>', '>='. Dos receptores del MISMO tipo y un 'int'
+    # que dice de que lado cae 'a' (negativo: antes que 'b'; cero: empatan;
+    # positivo: despues). Un solo hook y no cuatro ('__lt__', '__le__'...)
+    # porque cuatro se pueden contradecir entre si y uno no: los cuatro
+    # operadores salen del mismo numero.
+    "cmp":    HookSpec(HookKind.CMP,    owner_from_return=False, return_primitive="int",   exact_params=2),
 }
 
 # compatibilidad con el vocabulario anterior (nombre -> HookKind)
@@ -202,6 +211,22 @@ def validate_hook(fn: ast.FunctionDecl, dunder_name: str,
     if owner is None:
         return None, f"el primer parámetro de '{fn.name}' debe ser 'T ptr' (T nominal)"
 
+    if spec.kind in (HookKind.CMP, HookKind.EQ) \
+            and _nominal_ptr_target(fn.params[1].type) != owner:
+        # los dos lados del orden (o de la igualdad) son del MISMO tipo:
+        # '__cmp__(P ptr a, Q ptr b)' diria como se ordena un P frente a un
+        # Q, y 'p < q' entre dos tipos distintos ya es un error de tipos (no
+        # hay conversiones implicitas). Aceptarlo seria registrar un hook que
+        # nada dispara. En '__eq__' era peor (A07): '__eq__(Q ptr a, int b)'
+        # compilaba, 'q1 == q2' le pasaba un Q como 'int b' y un valor salia
+        # distinto de su propia copia.
+        accion = ("se ordenan" if spec.kind is HookKind.CMP
+                  else "se comparan")
+        return None, (
+            f"el segundo parámetro de '{fn.name}' debe ser '{owner} ptr', "
+            f"igual que el primero: {accion} dos valores del mismo tipo"
+        )
+
     expected = spec.return_primitive
     # 'return_primitive=None' aquí (no owner_from_return, no CAST) significa
     # RETORNO LIBRE: '__index__' devuelve el elemento, de cualquier tipo.
@@ -234,25 +259,23 @@ def _validate_declared(fn: ast.FunctionDecl, firma) -> Tuple[Optional[str], Opti
             f"que promete la extensión '{firma.module}': {firma.describe()}"
         )
 
+    # 'resolve_type_expr' es estructural y no busca simbolos: con un arbol que
+    # salio del parser no falla. Si fallara seria un defecto del compilador, y
+    # se deja subir (ICE000 con su traza). Antes un 'except Exception' lo
+    # convertia en un tipo '<?>' dentro de un SEM006 que culpaba al programa.
     for i, (param, esperado) in enumerate(zip(fn.params, esperados), start=1):
-        try:
-            real = resolve_type_expr(param.type)
-        except Exception:
-            real = None
+        real = resolve_type_expr(param.type)
         if real != esperado:
-            visto = format_type(real) if real is not None else "<?>"
+            visto = format_type(real)
             return None, (
                 f"el parámetro {i} de '{fn.name}' es '{visto}' y la extensión "
                 f"'{firma.module}' lo declaró '{format_type(esperado)}' "
                 f"({firma.describe()})"
             )
 
-    try:
-        retorno = resolve_type_expr(fn.return_type) if fn.return_type is not None else None
-    except Exception:
-        retorno = None
+    retorno = resolve_type_expr(fn.return_type) if fn.return_type is not None else None
     if retorno != firma.returns:
-        visto = format_type(retorno) if retorno is not None else "<?>"
+        visto = format_type(retorno) if retorno is not None else "sin retorno"
         return None, (
             f"'{fn.name}' devuelve '{visto}' y la extensión '{firma.module}' "
             f"lo declaró '{format_type(firma.returns)}'"

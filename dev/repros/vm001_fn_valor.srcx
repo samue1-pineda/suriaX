@@ -1,0 +1,7 @@
+#from io #import stdp
+fn doble(int x) -> int { return x * 2; }
+fn main() -> int {
+    var fn(int) -> int f = doble;
+    stdp.println(f"{f(3)}");
+    return 0;
+}

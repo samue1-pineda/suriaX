@@ -1,0 +1,23 @@
+enum Color { ROJO, VERDE = 5 };
+struct { int v; } P;
+struct { P ptr p; } Q;
+fn f() -> int { return 1; }
+fn main() -> int {
+    var P p = P{ v: 1 };
+    var P ptr q = &p;
+    q.v = 2;
+    var int ptr r = &f;
+    var int ptr s = &(1 + 2);
+    var int a = 5;
+    var int b = a[0];
+    var str c = cast<str>(p);
+    var Color d = cast<Color>(3);
+    var Color e = cast<Color>(5);
+    var int g = cast<int>(Color.VERDE);
+    var P h = P{ };
+    var byte by = 300;
+    var byte bz = 7;
+    var int x = Color.ROJO;
+    var str ps = f"{q!r}";
+    return 0;
+}

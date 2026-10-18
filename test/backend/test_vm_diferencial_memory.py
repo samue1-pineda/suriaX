@@ -136,7 +136,7 @@ def test_un_nullable_de_un_escalar_es_una_celda():
 #import array.vector as vec
 struct { int? edad; float? peso; } Ficha;
 enum Op { Nada, Algo(int?), Doble(float?, char?) };
-var int? global_n;
+var int? global_n = null;
 var float? global_f = 2.5;
 fn toma(int? x) -> int? {
     if (x == null) { return null; };
@@ -152,7 +152,7 @@ fn main() -> int {
     var Ficha g = f;
     g.edad = 8;
     f.peso = 60.5;
-    var int? sin_valor;
+    var int? sin_valor = null;
     var float? x = 0.1;
     var float? y = 0.1;
     global_n = 12;

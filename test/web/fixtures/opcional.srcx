@@ -1,0 +1,25 @@
+// Fixture del target web: lo que desenvuelve un 'T?' ('case v', '??') y un
+// enum GENERICO. El target web no los ejecuta todavia y tiene que RECHAZARLOS
+// con su codigo y su posicion (lo prueba restrictions.test.ts).
+enum Res<T, E> { Ok(T), Err(E) };
+
+fn uno(int? x) -> int {
+    match (x) {
+        case null { return 0; }
+        case v { return v; }
+    };
+    return -1;
+}
+
+fn dos(int? x) -> int {
+    return x ?? 7;
+}
+
+fn tres() -> int {
+    var Res<int, int> r = Res<int, int>.Ok(4);
+    return 1;
+}
+
+fn main() -> int {
+    return uno(3) + dos(null) + tres();
+}

@@ -2199,6 +2199,21 @@ private:
             devolver(fs::exists(ruta_de(texto(0)), ec) ? 1 : 0);
             return true;
         }
+        if (nombre == "__crear_carpeta__" && inst.args.size() == 1) {
+            // 'mkdir -p': si ya existe, nada; un archivo con ese nombre, o
+            // una ruta que no se puede crear, es ErrorDeArchivo (el mismo
+            // mensaje que el interprete)
+            const std::string ruta = texto(0);
+            std::error_code ec;
+            const fs::path p = ruta_de(ruta);
+            if (ruta.empty()) return fallo("no se pudo crear la carpeta '" + ruta + "'");
+            fs::create_directories(p, ec);
+            if (ec || !fs::is_directory(p, ec)) {
+                return fallo("no se pudo crear la carpeta '" + ruta + "'");
+            }
+            devolver(0);
+            return true;
+        }
         if (nombre == "__entradas__" && inst.args.size() == 1) {
             const std::string ruta = texto(0);
             std::string problema;

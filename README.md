@@ -52,13 +52,13 @@ the project is currently a **Pre-Alpha Preview**. The exact number is the *Versi
 
 [**x**] HIR (protobuf wire format, written with the Python standard library only) and a tree-walk interpreter that runs it
 
-[**x**] bootstrap: the compiler written in suriaX (`src/`, the V1) compiles itself, and every unit it produces is byte-identical to the Python compiler's (the fixed point) — diagnostics are next
+[**x**] bootstrap: the compiler written in suriaX (`src/`, the V1) reached the fixed point in 0.4.0 — it compiled itself, and every unit it produced was byte-identical to the Python compiler's. Today the V1 lags behind the 0.4.1 language and the fixed point is broken until it catches up (see [c_errorstfix.md](c_errorstfix.md))
 
 [**/**] native backend in C++: HIR reader, MIR lowering (virtual registers + CFG), a register VM and ownership verification — no JIT and no native binaries yet
 
 [**/**] web target: a declared subset of the language compiled to WebAssembly
 
-[**/**] suriniX tooling: the `suri` command, a web playground that shows every compiler phase and the documentation site — the build system is still **planned**
+[**/**] suriniX tooling: the `suri` command, a web playground that shows every compiler phase, a language server (LSP), a debugger (DAP), a VS Code extension and the documentation site — the build system is still **planned**
 
 *For the  full list of tasks, see [ROADMAP.md](ROADMAP.md).*
 

@@ -235,3 +235,53 @@ fn main() -> int {
     return p.__doble__();
 }
 """))
+
+
+def test_un_enum_a_traves_de_un_puntero_en_los_dos_motores():
+    """Regresión (H8): un enum sin payload es un ENTERO, y a través de un
+    puntero se lee como un 'int'. Antes: '&e' daba el valor en la VM ('p[0]'
+    fallaba solo ahí), el receptor 'T ptr self' de un método llegaba como el
+    valor en los dos motores ('self[0]' fallaba) y un 'match' sobre un
+    puntero a un escalar comparaba el puntero y no entraba en ninguna rama."""
+    _comparar(_en_linea("""#from io #import stdp
+enum TType { PLUS, MINUS, MULTIPLY };
+struct { int v; } Caja;
+@impl Caja { fn lee(Caja ptr self) -> int { return self.v; } }
+@impl TType {
+    fn simbolo(TType ptr self) -> str {
+        match (self) {
+            case TType.PLUS: { return "+"; }
+            case TType.MINUS: { return "-"; }
+            case TType.MULTIPLY: { return "*"; }
+        }
+        return "?";
+    }
+    fn crudo(TType ptr self) -> int { return cast<int>(self[0]); }
+    fn avanza(TType ptr mutable self) -> void { self[0] = TType.MULTIPLY; }
+    fn por_valor(TType self) -> int { return cast<int>(self); }
+}
+fn libre(TType ptr p) -> int { return cast<int>(p[0]); }
+fn cual(int ptr p) -> str {
+    match (p) {
+        case 1: { return "uno"; }
+        case 2: { return "dos"; }
+    }
+    return "otro";
+}
+fn main() -> int {
+    var TType t = TType.MINUS;
+    stdp.println(t.simbolo());
+    stdp.println(f"{libre(&t)}");
+    stdp.println(f"{t.crudo()}");
+    t.avanza();
+    stdp.println(t.simbolo());
+    stdp.println(f"{t.por_valor()}");
+    var int n = 2;
+    stdp.println(cual(&n));
+    // un receptor que YA es un puntero no se vuelve a prestar
+    var Caja c = Caja{ v: 7 };
+    var Caja ptr pc = &c;
+    stdp.println(f"{pc.lee()}");
+    return 0;
+}
+"""), esperado=["-", "1", "1", "*", "2", "dos", "7"])

@@ -46,7 +46,7 @@ def test_valido_try_catch_y_throw():
 
 
 def test_valido_bloque_test():
-    assert_ok('test "caso" { var int a = 1; };')
+    assert_ok('test "caso" { var int a = 1; expect (a == 1); };')
 
 
 def test_valido_enum_es_asignable_a_int():

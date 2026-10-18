@@ -1,0 +1,4 @@
+fn mira(int? ptr p) -> void {
+    match (p) { case null { } case v { } };
+}
+fn main() -> int { return 0; }

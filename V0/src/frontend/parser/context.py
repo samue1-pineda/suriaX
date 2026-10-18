@@ -15,7 +15,8 @@ from typing import Any, List
 class ParserContext:
     __slots__ = ("loop_depth", "region_depth", "pending_decorators", "errors",
                  "no_struct_literal", "finally_loops", "with_receivers",
-                 "with_count")
+                 "with_count", "in_test", "expects", "in_call_args",
+                 "args_hint", "lambda_hides_loop", "lambda_hides_test")
 
     def __init__(self) -> None:
         self.loop_depth = 0
@@ -40,6 +41,24 @@ class ParserContext:
         # guardianes sin nombre van, para darles uno que nadie puede escribir
         self.with_receivers: List[Any] = []
         self.with_count = 0
+        # dentro del CUERPO de un 'test' (donde vale 'expect') y cuantos
+        # 'expect' lleva: una prueba sin ninguno no comprueba nada (PAR029)
+        self.in_test = False
+        self.expects = 0
+        # leyendo DIRECTAMENTE los argumentos de una llamada (sin otro
+        # delimitador por medio): ahi 'a < b, c > (d)' tambien podria ser
+        # dos comparaciones; y la explicacion de esa ambiguedad, si aparecio
+        # entre los argumentos que se estan leyendo (la recibe la llamada de
+        # fuera, ver 'expressions/nud._parse_arg_list')
+        self.in_call_args = False
+        self.args_hint = ""
+        # dentro de una LAMBDA que esta, a su vez, dentro de un bucle o de un
+        # 'test': la lambda es una funcion aparte y los corta, asi que un
+        # 'break'/'continue'/'expect' de su cuerpo no llega a ellos. Solo
+        # cambia el MENSAJE del PAR013, que antes decia "fuera de un bucle"
+        # con el 'break' escrito dentro de un 'while' (A03).
+        self.lambda_hides_loop = False
+        self.lambda_hides_test = False
 
     def in_finally(self) -> bool:
         return bool(self.finally_loops)

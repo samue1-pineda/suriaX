@@ -206,4 +206,100 @@ public fn menciona(Universo ptr u, int t, vec.Vector<str> ptr nombres) -> bool {
     return menciona(u, x.inner, nombres);
 }
 
+// ------------------------------------------------------------------------ //
+// compatibilidad (type_service): lo que decide un AST006
+// ------------------------------------------------------------------------ //
+
+/- ¿`t` no dice nada del valor? Sin tipo (0, el `None` de la V0) o `error`
+   sin envolver (`type_service.es_desconocido`). -/
+public fn ignorado(Universo ptr u, int t) -> bool {
+    return t <= 0 or es_desconocido(u, t);
+}
+
+/- ¿Un valor de tipo `v` cabe en un destino de tipo `t` (`is_assignable`)?
+   Con un lado desconocido, sí (cero falsos positivos). Como los tipos están
+   internados, "el mismo tipo" (también el nominal con sus argumentos,
+   invariantes) es el mismo índice. -/
+public fn asignable(Universo ptr u, int t, int v) -> bool {
+    if (ignorado(u, t) or ignorado(u, v)) { return true; };
+    if (t == v) { return true; };
+    // T? = T y T? = U? (envolver no pierde nada)
+    if (clase_de(u, t) == NULLABLE) {
+        var int iv = v;
+        if (clase_de(u, v) == NULLABLE) { iv = inner_de(u, v); };
+        return asignable(u, inner_de(u, t), iv);
+    };
+    // 'error T' es transparente en la ruta de éxito
+    var int tv = v;
+    if (clase_de(u, v) == ERROR) { tv = inner_de(u, v); };
+    var int tt = t;
+    if (clase_de(u, t) == ERROR) { tt = inner_de(u, t); };
+    if ((clase_de(u, v) == ERROR or clase_de(u, t) == ERROR) and tv > 0 and tt > 0 and tv == tt) {
+        return true;
+    };
+    // soltar el permiso de escritura: 'ptr mutable T' -> 'ptr T'
+    return clase_de(u, t) == POINTER and clase_de(u, v) == POINTER
+        and mut_de(u, v) and not mut_de(u, t) and inner_de(u, t) == inner_de(u, v);
+}
+
+/- ¿`null` cabe en `t` (`unify_literal_null`)? Uno desconocido, también. -/
+public fn admite_null(Universo ptr u, int t) -> bool {
+    return t <= 0 or clase_de(u, t) == NULLABLE;
+}
+
+/- El tipo que decide si dos valores se comparan (`_comparable`): sin el `?`
+   ni el `error` que lo envuelven y sin la mutabilidad de un puntero. -/
+public fn comparable(Universo ptr mutable u, int t) -> int {
+    var int x = t;
+    while ((clase_de(u, x) == NULLABLE or clase_de(u, x) == ERROR) and inner_de(u, x) > 0) {
+        x = inner_de(u, x);
+    };
+    if (clase_de(u, x) == POINTER and inner_de(u, x) > 0) {
+        return puntero(u, comparable(u, inner_de(u, x)), false);
+    };
+    return x;
+}
+
+/- ¿El operador aritmético o de bits `op` se aplica a `t` (`_aritmetico`)?
+   Un `byte` solo se enmascara (`&`, `|`, `^`); los de bits son de `int`. -/
+public fn aritmetico(Universo ptr u, int t, str op) -> bool {
+    var bool bits = op == "&" or op == "|" or op == "^" or op == "<<" or op == ">>";
+    if (clase_de(u, t) == BYTE) { return op == "&" or op == "|" or op == "^"; };
+    if (bits) { return clase_de(u, t) == INT; };
+    if (clase_de(u, t) == INT or clase_de(u, t) == FLOAT) { return true; };
+    return op == "+" and clase_de(u, t) == STR;
+}
+
+/- `t` escrito como en un mensaje (`int ptr`, `Caja<int>`, `str?`). -/
+public fn escribe(Universo ptr u, int t) -> str {
+    if (t <= 0) { return "?"; };
+    var Tipo x = u.tipos.get(t);
+    if (x.clase == VOID) { return "void"; };
+    if (x.clase == BOOL) { return "bool"; };
+    if (x.clase == INT) { return "int"; };
+    if (x.clase == FLOAT) { return "float"; };
+    if (x.clase == CHAR) { return "char"; };
+    if (x.clase == STR) { return "str"; };
+    if (x.clase == BYTE) { return "byte"; };
+    if (x.clase == META) { return "type"; };
+    if (x.clase == POINTER) {
+        if (x.mut) { return escribe(u, x.inner) + " ptr mutable"; };
+        return escribe(u, x.inner) + " ptr";
+    };
+    if (x.clase == NULLABLE) { return escribe(u, x.inner) + "?"; };
+    if (x.clase == ERROR) {
+        if (x.inner == 0) { return "error"; };
+        return "error " + escribe(u, x.inner);
+    };
+    if (x.n_args == 0) { return x.nombre; };
+    var str s = x.nombre + "<";
+    var int k = 0;
+    while (k < x.n_args) {
+        if (k > 0) { s = s + ", "; };
+        s = s + escribe(u, arg_de(u, t, k));
+        k = k + 1;
+    };
+    return s + ">";
+}
+
 #export as tipos

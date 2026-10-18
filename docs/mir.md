@@ -45,7 +45,7 @@ Definido en [`mir.hpp`](../backend/include/suriax/mir/mir.hpp), bajado por
 | **Memoria cruda** | Reservar y liberar bloques NO son instrucciones: son prototipos del host (`__reserve__`, `__copy__`, `__release__`, `__take__`, `__move__` de `lib/mem`), como `__write__`. Indexar un bloque sí lo es (`GetIndex`/`SetIndex`). Un bloque de `byte` es COMPACTO (un byte por celda, no 8): `__reserve__` lo pide con `imm = 1`, y es el `uint8_t*` que ve un `#extern cpp`. |
 | **Texto** | `ToStr` escribe un valor según su modo (los 3 bits bajos: 0 int/byte, 1 float, 2 bool, 3 char, 4 cadena, 5 enum suma, 6 enum sin payload, 7 struct con sus campos). `Formatear` es lo mismo con el formato de un f-string (`{x!r:08b}`), ya partido en `Program::formatos`: el mismo algoritmo que el intérprete, no el `printf` de C. |
 | **Genéricos** | Se **monomorfizan**: cada función genérica se baja una vez por juego de tipos concretos (`Vector<C>.push` y `Vector<int>.push` son dos funciones), como en C++ y Rust. `T` se deduce unificando la firma con los tipos que el HIR anota en los argumentos y el resultado (`FunctionDecl.type_params` y `StructDecl.type_params` dicen cuáles son parámetros). Es lo que deja saber al compilar si un `T` es un objeto que hay que copiar y liberar. |
-| **Lo que no baja** | Se anota con su posición (`Program::unsupported`) y la función queda sin cuerpo en vez de a medias: un cuerpo incompleto ejecutaría otro programa. Hoy no queda nada que el intérprete ejecute y el MIR no baje. `&b[i]` de un elemento que es un objeto es su handle (el préstamo de `Vector.at`); el de un escalar necesitaría un puntero interior y es `RT011` en los dos motores. |
+| **Lo que no baja** | Se anota con su posición (`Program::unsupported`) y la función queda sin cuerpo en vez de a medias: un cuerpo incompleto ejecutaría otro programa. Lo que añadió la 0.4.1 y el MIR todavía no baja se rechaza con su código, `VM001`–`VM005` (funciones como valores, `T?` desenvuelto y enums genéricos, lo que despacha una cota, lambdas, `print` de un primitivo; ver [c_errorstfix.md](../c_errorstfix.md), sección 1). `&b[i]` de un elemento que es un objeto es su handle (el préstamo de `Vector.at`); el de un escalar necesitaría un puntero interior y es `RT011` en los dos motores. |
 
 ## Memoria: cada objeto muere con su dueño
 
@@ -91,7 +91,8 @@ La VM no tiene recolector de objetos: el MIR le dice cuándo muere cada uno.
     donde se espera un `T?` se **encaja** (ligar, asignar, pasar, devolver,
     un campo, un payload) y `==` compara lo que guardan (`EqCaja`).
 - **Globales.** Una global dueña de un objeto se libera cuando `main`
-  vuelve, sin su `__free__` (el intérprete tampoco lo corre al salir).
+  vuelve, sin su `__free__` (el intérprete sí lo corre desde la 0.4.1; la
+  diferencia está en [c_errorstfix.md](../c_errorstfix.md), sección 1).
 - **Campos en celda.** `&p.x` sobre un campo escalar: antes de bajar nada se
   marcan, para todo el programa, los campos a los que se les toma la
   dirección; ese campo guarda una celda en todas las instancias de su struct
@@ -150,7 +151,8 @@ sabe ejecutar, y necesita algo con qué comparar sus resultados.
 ## Pendiente
 
 - [ ] **JIT** y artefactos nativos.
-- [ ] Bajar `&` sobre un escalar (exige promover el local a una caja).
+- [x] Bajar `&` sobre un escalar: un local, un parámetro o una global, y un
+      campo escalar (`&p.x`), viven en una celda (ver "Celdas" arriba).
 - [ ] Préstamos entre bloques en la verificación.
 - [x] Enlazar el C++ de `#extern cpp` a la VM (`externo.cpp`; sus límites, en
       [c_errorstfix.md](../c_errorstfix.md)).

@@ -1,0 +1,49 @@
+/- sistema.tiempo: la hora, medir cuánto tarda algo y esperar.
+
+     #from io #import stdp
+     #import sistema.tiempo as tiempo
+
+     fn main() -> int {
+         var int inicio = tiempo.reloj();
+         // ... trabajo ...
+         var int ms = (tiempo.reloj() - inicio) / 1000000;
+         stdp.println(f"tardó {ms} ms");
+         return 0;
+     }
+
+ Son DOS relojes porque responden a dos preguntas distintas:
+
+ - 'ahora()': qué hora es, en milisegundos desde el 1 de enero de 1970
+   (UTC). Es la que se guarda o se compara con la fecha de un archivo
+   ('archivos.modificado'). Puede saltar si alguien cambia la hora del
+   sistema.
+ - 'reloj()': nanosegundos desde un punto cualquiera, que nunca va hacia
+   atrás. Solo sirve para restar dos lecturas: es el que se usa para medir.
+-/
+
+#import excepciones as exc
+
+// llamadas al host
+internal fn __ahora_ms__() -> int;
+internal fn __reloj_ns__() -> int;
+internal fn __dormir_ms__(int ms) -> void;
+
+// Milisegundos desde el 1 de enero de 1970 (UTC).
+public fn ahora() -> int {
+    return __ahora_ms__();
+}
+
+// Nanosegundos de un reloj que nunca va hacia atrás: para medir, restando.
+public fn reloj() -> int {
+    return __reloj_ns__();
+}
+
+// Espera 'ms' milisegundos.
+public fn dormir(int ms) -> void {
+    if (ms < 0) {
+        throw exc.ValorInvalido{ mensaje: f"no se puede dormir {ms} ms: el tiempo no va hacia atrás" };
+    };
+    __dormir_ms__(ms);
+}
+
+#export as tiempo

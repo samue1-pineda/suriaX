@@ -55,6 +55,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
 
 from . import type_service
 from .context import SemanticContext
+from .extensions import format_type
 from .hooks import HookKind
 from .symbol_table import Symbol
 
@@ -78,10 +79,15 @@ class TypeBinder:
     el punto donde su anotación empieza a importar.
     """
 
-    __slots__ = ("ctx", "seen")
+    __slots__ = ("ctx", "seen", "bound_check")
 
     def __init__(self, ctx: SemanticContext) -> None:
         self.ctx = ctx
+        # quien comprueba las COTAS de un generico instanciado en una
+        # anotacion ('Arbol<Punto, int>' con 'Arbol<K: Ord, V>'). Lo pone
+        # scope_resolver, que sabe que cotas tiene cada parametro de la
+        # declaracion en curso; sin el (otros usos del binder) no se mira.
+        self.bound_check = None
         # nombre escrito -> Symbol del tipo (ya validado). Se cachea el
         # SIMBOLO, no solo el hecho de existir, porque los usuarios del
         # nombre cualificado ('dt.int8') necesitan el nombre CANONICO del
@@ -175,7 +181,7 @@ class TypeBinder:
             return Type(TypeKind.NOMINAL, name=canonical, args=t.args)
         if t.inner is None:
             return t
-        return Type(t.kind, name=t.name, mut=t.mut,
+        return Type(t.kind, name=t.name, mut=t.mut, args=t.args,
                     inner=TypeBinder._recanonicalizar(t.inner, canonical))
 
     @staticmethod
@@ -213,6 +219,8 @@ class TypeBinder:
         args = tuple(self._check_type(a, node.ln, node.col) or a
                      for a in t.args)
         self._check_arity(symbol, args, node.ln, node.col)
+        self._no_void_argument(symbol.name, args, node.ln, node.col)
+        self._check_bounds(symbol, args, node.ln, node.col)
         canonical = type_service.canonical_name(symbol, t.name)
         if canonical != t.name or args != t.args:
             # el nombre CANONICO es el que viaja al HIR y el que usan la tabla
@@ -238,6 +246,7 @@ class TypeBinder:
         args = tuple(self._check_type(resolve_type_expr(a), node.ln, node.col)
                      or resolve_type_expr(a) for a in node.type_args)
         self._check_arity(symbol, args, node.ln, node.col)
+        self._no_void_argument(symbol.name, args, node.ln, node.col)
         return args
 
     def bind_cast(self, node: ast.CastExpr) -> None:
@@ -303,6 +312,9 @@ class TypeBinder:
         ):
             wrappers.append(core)
             core = core.inner
+        if core is not None and core.kind is TypeKind.FUNCTION:
+            return self._rewrap(
+                self._check_function(core, ln, col), core, t, wrappers)
         if core is None or core.kind is not TypeKind.NOMINAL:
             return t
 
@@ -315,6 +327,8 @@ class TypeBinder:
         # quedar como 'Vector<Point>' o no unificaria con nada).
         args = tuple(self._check_type(a, ln, col) or a for a in core.args)
         self._check_arity(symbol, args, ln, col)
+        self._no_void_argument(symbol.name, args, ln, col)
+        self._check_bounds(symbol, args, ln, col)
 
         canonical = type_service.canonical_name(symbol, core.name)
         if canonical == core.name and args == core.args:
@@ -325,6 +339,68 @@ class TypeBinder:
             rebuilt = Type(wrapper.kind, name=wrapper.name, inner=rebuilt,
                            mut=wrapper.mut)
         return rebuilt
+
+    def _check_function(self, t: Type, ln: int, col: int) -> Type:
+        """Un tipo funcion: cada parametro y el retorno se validan y
+        canonicalizan como cualquier anotacion (``fn(point.Point) -> int``
+        tiene que unificar con el ``fn(Point) -> int`` de una funcion de la
+        libreria).
+
+        ``void`` vale como retorno y no como parametro, por lo mismo que en
+        una firma: un parametro es un VALOR que se recibe."""
+        params = []
+        for p in t.args:
+            if p.kind is TypeKind.VOID:
+                self.ctx.error(SemanticError.InvalidValueTypeError(
+                    "'void' significa \"no hay valor\": no puede ser el tipo "
+                    f"de un parametro de '{format_type(t)}'. Una funcion sin "
+                    "parametros se escribe 'fn() -> ...'",
+                    line=ln, column=col,
+                ))
+            params.append(self._check_type(p, ln, col) or p)
+        ret = self._check_type(t.inner, ln, col) or t.inner
+        if ret is t.inner and all(x is y for x, y in zip(params, t.args)):
+            return t
+        return Type(TypeKind.FUNCTION, inner=ret, args=tuple(params))
+
+    @staticmethod
+    def _rewrap(rebuilt: Type, original: Type, t: Type,
+                           wrappers) -> Type:
+        """Reconstruye la cadena ``ptr``/``?``/``error`` alrededor de un
+        nucleo que cambio (``(fn(dt.int8) -> int)?``)."""
+        if rebuilt is original:
+            return t
+        for wrapper in reversed(wrappers):
+            rebuilt = Type(wrapper.kind, name=wrapper.name, inner=rebuilt,
+                         mut=wrapper.mut)
+        return rebuilt
+
+    def _no_void_argument(self, name: str, args, ln: int, col: int) -> None:
+        """``Vector<void>``: un argumento de tipo ``void`` es SEM025.
+
+        Un parametro de tipo nombra el tipo de VALORES (``T x``, ``T ptr
+        datos``), y ``void`` significa "no hay valor": ``Vector<void>``
+        compilaba y no significaba nada. Es la misma regla que ``void`` en
+        una variable, un parametro o un campo. ``void ptr`` u otro tipo que
+        solo lo envuelve no entra aqui."""
+        for index, arg in enumerate(args, start=1):
+            if arg is not None and arg.kind is TypeKind.VOID:
+                self.ctx.error(SemanticError.InvalidValueTypeError(
+                    f"'void' significa \"no hay valor\": no puede ser el "
+                    f"argumento de tipo {index} de '{name}', que nombra el tipo "
+                    "de unos valores",
+                    line=ln, column=col,
+                ))
+
+    def _check_bounds(self, symbol, args, ln: int, col: int) -> None:
+        """Las COTAS de un tipo generico usado con estos argumentos
+        (``struct ... Arbol<K: Ord, V>`` exige que todo ``Arbol<X, ...>``
+        tenga ``X: Ord``). Solo si la aridad es la suya: si no, ``SEM027``
+        ya lo dijo y emparejar por posicion no significaria nada."""
+        if self.bound_check is None or not symbol.type_bounds \
+                or len(args) != len(symbol.type_params):
+            return
+        self.bound_check(symbol, args, ln, col)
 
     def _check_arity(self, symbol, args, ln: int, col: int) -> None:
         """El uso de un generico trae tantos argumentos como parametros declara.

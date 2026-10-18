@@ -1,0 +1,15 @@
+#from io #import stdp
+struct { int v; } N;
+hook fn __free__(N ptr n) -> void { }
+struct { N ptr p; } Ref;
+fn guarda(Ref ptr mutable r) -> void {
+    var N local = N{ v: 42 };
+    r.p = &local;
+}
+fn main() -> int {
+    var N x = N{ v: 1 };
+    var Ref r = Ref{ p: &x };
+    guarda(&r);
+    stdp.println(f"r.p.v = {r.p.v}");
+    return 0;
+}

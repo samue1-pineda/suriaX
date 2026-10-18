@@ -185,7 +185,7 @@ def test_un_opaco_vale_como_campo_y_por_valor():
 def test_un_opaco_vale_como_argumento_de_un_generico():
     """Sin esto, un contenedor no podría guardar un handle del sistema."""
     _sin_errores(_OPACO + "struct { T v; } Caja<T>;\n"
-                          "fn main() -> int { var Caja<H> c; return 0; };")
+                          "fn main() -> int { var Caja<H>? c = null; return 0; };")
 
 
 def test_un_opaco_recibe_hooks_como_cualquier_nominal():

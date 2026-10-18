@@ -26,6 +26,13 @@ from typing import Any, Dict, List, Optional
 
 from .dumps import _target_path
 
+
+def _mark(info: dict) -> str:
+    """``OK``, ``FALTA`` u ``OPCIONAL`` (una opcional que no está)."""
+    if info["ok"]:
+        return "OK "
+    return "OPCIONAL" if info.get("optional") else "FALTA"
+
 _SEP = "=" * 78
 
 
@@ -65,7 +72,7 @@ class DebugReport:
         if not report:
             return self
         lines = [
-            f"{name:<10} {'OK ' if info['ok'] else 'FALTA'}  {info['detail']}"
+            f"{name:<10} {_mark(info)}  {info['detail']}"
             for name, info in sorted(report.items())
         ]
         return self.section("DEPENDENCIAS", "\n".join(lines))

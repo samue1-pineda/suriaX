@@ -63,23 +63,82 @@ def type_key(t) -> Optional[TypeKey]:
             tuple(type_key(arg) for arg in t.args))
 
 
+def _shape(unit, type_id: int) -> Optional[Tuple[int, str]]:
+    """``(kind, nombre)`` del tipo ``type_id`` del pool de ``unit``, sin los
+    envoltorios ``ptr``/``?``; ``None`` si no hay tipo."""
+    types = unit.module.types
+    if not type_id or type_id >= len(types):
+        return None
+    return _shape_of(types[type_id])
+
+
+def _shape_of(t) -> Optional[Tuple[int, str]]:
+    """``(kind, nombre)`` de un ``Type`` sin ``ptr``/``?`` (7 y 8 en el
+    esquema); ``None`` si viene vacío."""
+    if t is None or t.kind == 0:
+        return None
+    while t.kind in (_TK_POINTER, _TK_NULLABLE) and t.HasField("inner"):
+        t = t.inner
+    return (t.kind, t.name)
+
+
+_TK_POINTER, _TK_NULLABLE = 7, 8   # espejo de TypeKind en hir.proto
+
+
+def _is_body_of(unit, decl, symbol) -> bool:
+    """¿``decl`` (de ``unit``) es el cuerpo del hook que describe ``symbol``?
+
+    La tabla de hooks del programa principal trae TAMBIÉN los de sus
+    librerías (la Semántica los fusiona), con la línea de SU archivo. Buscar
+    el cuerpo por (nombre, línea) en la unidad equivocada encontraba otro
+    hook que estaba, por casualidad, en la misma línea del programa, y lo
+    ejecutaba en lugar del de la librería. Se compara la FORMA de la firma
+    (el primer parámetro y el retorno, sin ``ptr``): solo se descarta lo que
+    se ve distinto, así que un tipo sin nombre comparable no cambia nada.
+    """
+    if symbol.param_types and decl.params:
+        mine = _shape(unit, decl.params[0].type_id)
+        theirs = _shape_of(symbol.param_types[0])
+        if mine is not None and theirs is not None and mine != theirs:
+            return False
+    if symbol.HasField("type"):
+        mine = _shape(unit, decl.return_type_id)
+        theirs = _shape_of(symbol.type)
+        if mine is not None and theirs is not None and mine != theirs:
+            return False
+    return True
+
+
 def index_hooks(units) -> Dict[HookKey, BoundFunction]:
     """Todos los ``HookEntry`` de todas las unidades -> índice combinado.
 
     El cuerpo de un hook vive en los ``items`` de SU unidad: se resuelve por
     (nombre, línea) del símbolo — dos ``__cast__`` comparten nombre pero no
-    posición. Primera unidad en registrar una clave gana (mismo orden
-    determinista que la fusión de la Semántica).
+    posición — y se comprueba que ese cuerpo sea del hook (``_is_body_of``):
+    la entrada de un hook de librería que llega en la tabla del programa no
+    se liga al hook del programa que esté en la misma línea, sino que espera
+    a la unidad de la librería. Primera unidad en registrar una clave gana
+    (mismo orden determinista que la fusión de la Semántica).
     """
     index: Dict[HookKey, BoundFunction] = {}
+    # lo que solo se encontro por (nombre, linea) con otra forma: se usa si
+    # ninguna unidad da uno mejor, como antes de comprobar la forma (asi la
+    # comprobacion nunca deja a un hook sin cuerpo)
+    fallback: Dict[HookKey, BoundFunction] = {}
     for unit in units:
         for entry in unit.module.symbols.hooks:
             key = hook_key(entry.owner_type, entry.kind, entry.hook_name)
             if key in index:
                 continue
             decl = unit.dunder_decls.get((entry.symbol.name, entry.symbol.ln))
-            if decl is not None:
+            if decl is None:
+                continue
+            if _is_body_of(unit, decl, entry.symbol):
                 index[key] = (unit, decl)
+            else:
+                fallback.setdefault(key, (unit, decl))
+    for key, bound in fallback.items():
+        index.setdefault(key, bound)
     return index
 
 
@@ -128,6 +187,7 @@ def index_casts(units) -> Dict[Tuple[TypeKey, TypeKey], BoundFunction]:
     ``param_types[0]``, destino = ``type``) — contrato del esquema.
     """
     index: Dict[Tuple[TypeKey, TypeKey], BoundFunction] = {}
+    fallback: Dict[Tuple[TypeKey, TypeKey], BoundFunction] = {}  # ver index_hooks
     for unit in units:
         for sym in unit.module.symbols.casts:
             if not sym.param_types:
@@ -136,8 +196,14 @@ def index_casts(units) -> Dict[Tuple[TypeKey, TypeKey], BoundFunction]:
             if key in index:
                 continue
             decl = unit.dunder_decls.get((sym.name, sym.ln))
-            if decl is not None:
+            if decl is None:
+                continue
+            if _is_body_of(unit, decl, sym):
                 index[key] = (unit, decl)
+            else:
+                fallback.setdefault(key, (unit, decl))
+    for key, bound in fallback.items():
+        index.setdefault(key, bound)
     return index
 
 

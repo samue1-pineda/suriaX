@@ -35,11 +35,16 @@ export type WireType = (typeof WireType)[keyof typeof WireType];
 /**
  * Profundidad máxima de mensajes anidados. Un `.phir` puede venir de un
  * archivo que el usuario soltó en el navegador: sin este tope, un buffer
- * hecho a mano con 100.000 mensajes anidados desborda la pila de JS. El
- * frontend jamás produce árboles ni remotamente tan profundos (el parser
- * ya corta antes con `ExpressionTooDeepError`).
+ * hecho a mano con 100.000 mensajes anidados desborda la pila de JS.
+ *
+ * El valor sale del límite del LENGUAJE: el parser rechaza (`PAR025`) lo que
+ * anide más de 500 niveles (`MAX_NESTING`, en `grammar/program.py`), y cada
+ * nivel del árbol son como mucho DOS mensajes en el HIR (el envoltorio y su
+ * variante): 1000 medidos en el peor caso. Si el frontend sube su límite,
+ * este sube con él — antes valía 200 "porque el frontend no produce árboles
+ * tan profundos", y sí los producía: una suma de 100 términos ya no se leía.
  */
-export const MAX_NESTING_DEPTH = 200;
+export const MAX_NESTING_DEPTH = 1024;
 
 /** Los bytes no son un mensaje protobuf válido (o se acabaron a media lectura). */
 export class WireError extends Error {
@@ -247,6 +252,22 @@ export class Reader {
     const value = this.#buf.subarray(this.#pos, end);
     this.#pos = end;
     return value;
+  }
+
+  /**
+   * Como {@link readBytes}, pero SIN avanzar: la vista del campo delimitado
+   * que viene a continuación. La usa el esquema 1 (`decode.ts`) para mirar
+   * el retorno de una lambda antes de leer su cuerpo, que en el wire va
+   * antes; el campo se lee después con {@link readMessage}, con el control
+   * de profundidad de siempre.
+   */
+  peekBytes(): Uint8Array {
+    const start = this.#pos;
+    try {
+      return this.readBytes();
+    } finally {
+      this.#pos = start;
+    }
   }
 
   /**

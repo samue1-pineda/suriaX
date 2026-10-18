@@ -1,0 +1,2 @@
+public fn b() -> int { return 2; }
+#export as bueno

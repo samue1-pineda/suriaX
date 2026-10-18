@@ -18,7 +18,7 @@ Cubre lo que la V1 ya implementa (lotes 14 a 17b): funciones, escalares,
 control de flujo, `struct`, `enum`, `match`, punteros, `move`/`free`, cadenas
 y f-strings, la propiedad (drops y temporales), el linker (sección 10), los
 genéricos (sección 11) y los métodos, las excepciones y el `with` (sección
-12).
+12). La sección 13 es el contrato de los diagnósticos.
 
 ---
 
@@ -124,6 +124,24 @@ La V0 anota `restype` solo en lo que **visita como expresión**
 - **`free e;`**: `FreeStmt.target` y `hook` si el tipo nominal de `e` tiene
   `__free__` (si no, sin `hook`).
 - **`return`**: `transfers = true` si el valor POSEE (sección 6).
+
+### 5.1 Cuánto anida un módulo
+
+El HIR guarda el árbol como mensajes dentro de mensajes, y quien lo lee
+recorre esa anidación con su propia pila. Para que ningún lector tenga que
+adivinar cuánta necesita, el **productor** la acota:
+
+- la V0 rechaza (`PAR025`) una declaración cuyo árbol anide más de **500**
+  niveles (`MAX_NESTING`, en `grammar/program.py`);
+- cada nivel del árbol son como mucho **dos** mensajes en el HIR (el
+  envoltorio `Expr`/`Stmt` y su variante). Medido en el peor caso —una
+  cadena de 496 operadores—: 1000 mensajes anidados;
+- un lector debe admitir al menos esos 1000. El del target web admite 1024
+  (`MAX_NESTING_DEPTH`, en `web/src/hir/wire.ts`) y una prueba compara los
+  dos números.
+
+La V1 no tiene este límite: su parser corre en suriaX y un anidamiento
+extremo agota su pila (`RT019`). Es una diferencia conocida con la V0.
 
 ## 6. La propiedad: drops y temporales
 
@@ -244,8 +262,8 @@ código de `V0/src/linker_p/`, `collect.define_import`, `type_service` y
   padre (`IO.phir`: solo su `export package`). Uno del que solo se importan
   submódulos (`#import geo.punto`) no lo emite.
 - Cada librería se ANALIZA OTRA VEZ como un programa propio (con su unidad) y
-  se emite con `source_file` = su ruta ABSOLUTA. El programa lleva la ruta
-  como se la pasaron al compilador.
+  se emite con `source_file` = su ruta PÚBLICA (10.7). El programa lleva la
+  ruta como se la pasaron al compilador.
 
 ### 10.2 Dónde se busca (`linker_p/resolver.py`)
 
@@ -325,10 +343,15 @@ código de `V0/src/linker_p/`, `collect.define_import`, `type_service` y
 
 ### 10.7 Las rutas
 
-La V0 escribe rutas ABSOLUTAS (`os.path.abspath`) en el `.phir` de cada
-librería. Para escribir las mismas, la V1 usa una librería de rutas del host
-(`sistema.rutas`), que calcula EXACTAMENTE lo que calcula `os.path` en cada
-sistema (decidido por el mantenedor: la librería completa en el host).
+El `source_file` de cada librería es su ruta PÚBLICA, REPRODUCIBLE (fase V2,
+decidido por el mantenedor; antes era la absoluta y el `.phir` cambiaba con la
+carpeta y la máquina): dentro de la stdlib, `<stdlib>/` + la ruta relativa a
+ella; dentro del proyecto, relativa a su raíz (la carpeta del
+`.suriaX_config.yaml`, o la del fuente); fuera de los dos, la absoluta. Siempre
+con `/`, y en Windows la comparación del prefijo no distingue mayúsculas. La
+stdlib se mira PRIMERO. V0: `linker_p.resolver.ruta_publica`; V1:
+`semantica.enlazador.ruta_publica`, sobre las rutas del host (`sistema.rutas`,
+que calcula lo mismo que `os.path`).
 
 ---
 
@@ -529,3 +552,103 @@ el de su valor, y el valor tiene dueño (`_check_var_init`).
   (excepciones) y el `VarDecl` `inferido`.
 - `hir/emisor.libsrx`: `ThrowStmt` (con el `move` implícito), `TryStmt` y
   `CatchClause`; los `type_params` de un método (`@impl` primero).
+
+## 13. Los diagnósticos (lote 18a)
+
+No es parte del HIR, pero es el otro contrato de la V1: con un programa con
+errores, la MISMA lista que `driver/inspect.emit_diagnostics` de la V0, en el
+mismo orden, con el mismo código, línea y columna (el texto es de cada una).
+Verificado con `test/bootstrap/test_diagnosticos_v1.py` (el corpus de las
+pruebas negativas y de gramática, y las sondas de
+`test/bootstrap/v1_diagnosticos/`) y con el código de `collect.py`,
+`scope_resolver.py`, `type_resolver.py` y `type_service.py`.
+
+### 13.1 El canal
+
+- Orden: los léxicos, los de sintaxis y —solo si el parseo fue limpio— los
+  semánticos (`collect`, después `scope_resolver`). No se ordenan: salen en
+  el orden en que se encuentran.
+- Severidad: todos detienen la compilación salvo `SEM030` (aviso) y
+  `NOTE001` (nota). Con uno que detiene no hay `.phir`; con solo avisos, el
+  `.phir` es el mismo que sin ellos.
+- Nunca se emiten: `AST001`-`AST004`, `AST007`-`AST011` (`AST008` incluido).
+  `SEM017` es el límite de recursión de Python: la V1 no lo reproduce.
+
+### 13.2 El orden de la Semántica
+
+- `collect`, en el orden de los items. Un struct: campos repetidos (en el
+  campo), parámetro de tipo que choca con un tipo de verdad (en el struct),
+  nombre repetido (en el struct). Un enum: variante repetida en el mismo enum
+  (en la variante, se salta), variante que choca con un valor (en la
+  variante, queda como miembro), nombre repetido (en el enum). Una función:
+  parámetro de tipo que choca, nombre repetido (en la función).
+- `scope_resolver`: PRIMERO las firmas de todas las funciones (cada
+  parámetro en su posición; el retorno en la de la función, donde `void`
+  vale); DESPUÉS, en el orden de los items, los cuerpos, los campos de cada
+  struct (en el campo), el payload de cada enum (en la variante) y las
+  globales (en la declaración).
+- La V1 resuelve los tipos ANTES (al recoger) y los VALIDA después, en el
+  punto de la V0 (`valida_tipo`, `valida_declarado`): validar y resolver
+  van separados para que el orden sea el de la V0.
+
+### 13.3 Las posiciones
+
+- Un tipo escrito se informa en la posición de quien lo escribe: la
+  declaración (variable, parámetro, campo, `catch`), la función (su
+  retorno), la variante (su payload), el literal de struct, el `cast`, la
+  llamada (sus argumentos de tipo).
+- `SEM001`: el identificador; el destino de una asignación; la llamada a un
+  nombre que no existe; el miembro (`p.z`, `Color.MORADO`); el literal de
+  struct (un campo que no tiene); el objeto de `noexiste.x`.
+- `AST006`: la declaración (inicializar), la asignación, el VALOR (campo de
+  un literal), el ARGUMENTO (llamada), la condición, el operando de un
+  lógico, el literal (rango), el operador (aritmética, comparación);
+  `AST012`: el `return`; `SEM008`: la llamada.
+- Un tipo que no existe NO desaparece: queda como un nominal con el nombre
+  escrito, y eso decide las cascadas (`AST005` y después `AST006`). Un tipo
+  desconocido (sin tipo, o `error` sin envolver) nunca da un `AST006`.
+
+### 13.4 Lo que la V0 inserta
+
+El chequeo de tipos de la V0 REESCRIBE el árbol en dos casos: la conversión
+implícita de un literal (`var byte b = 5;`, `var dt.int8 x = 5;`) y el
+`hook` de un `cast` por un `__cast__` declarado. La V1 da los mismos
+diagnósticos pero todavía no los emite: quedan marcados (`Analisis.no_emitible`)
+y la compilación se detiene diciéndolo, como todo lo que queda fuera del
+subconjunto.
+
+### 13.5 El final de la Semántica
+
+Después de recorrer todos los cuerpos, en este orden:
+
+1. `verificar_copias` (`SEM038`): qué copia cada cuerpo genérico (pasar,
+   ligar, asignar, devolver o poner en un campo un valor de un parámetro de
+   tipo), propagado por las llamadas entre genéricos (con tope), y cada
+   INSTANCIA con tipos concretos que copiaría un valor con destructor, en la
+   llamada. Las copias de un genérico de librería salen de resolver sus
+   cuerpos genéricos al cargarla (`run_generics`); lo que esa resolución dice
+   se descarta.
+2. `memory_check` (`SEM004`, `SEM005`, `SEM023`, `SEM024`): rutas estáticas
+   movidas o liberadas, función por función (la V1: `semantica/muertos.libsrx`).
+   El `throw r;` que cede con un `move` implícito cuenta como ese `move`.
+3. Las NOTAS (`NOTE001`, `NOTE002`), después de todos los errores.
+
+### 13.6 El linker
+
+- Lo que dice un `#import`/`#from` va en su lugar del orden de los items,
+  aunque la librería se cargue antes.
+- No encontrada: `SEM009`. No compila: sus errores léxicos/de sintaxis con
+  SU archivo y SU posición, y un `SEM010` en el import. Sin `#export`, o
+  con el `package` que no corresponde: `SEM010` con el archivo de la
+  librería y la posición del import. Alias distinto, ciclo, subpaquetes
+  anidados: `SEM010` en el import. Los errores del `collect` de la librería
+  (y de las que ella importa), con su archivo, UNA vez por compilación.
+- Un submódulo de paquete que no compila no hace fallar al paquete: sus
+  errores se dicen cuando un import lo pide (`pq.roto`, o `#import pq`).
+- `#from lib #import x`: privado y de otro paquete, `SEM019`; interno o
+  inexistente, `SEM011` (inexistente: el nombre se liga igual, opaco).
+- Una librería que no carga deja el nombre como import OPACO: sus usos
+  callan (ni `SEM011` ni `AST005`), pero un tipo escrito a través de él
+  queda con su nombre y puede dar un `AST006`.
+- `NOTE001` (un `.srcx` usado como librería): con el archivo del `.srcx` y
+  la posición del import.

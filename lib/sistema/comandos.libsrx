@@ -1,0 +1,58 @@
+/- sistema.comandos: ejecutar otro programa y recibir lo que hizo.
+
+     #from io #import stdp
+     #import array.vector as vec
+     #import sistema.comandos as cmd
+
+     fn main() -> int {
+         var vec.Vector<str> orden = vec.dynamic<str>(2);
+         orden.push("git");
+         orden.push("status");
+         var cmd.Resultado r = cmd.ejecutar(&orden);
+         stdp.println(f"salió con {r.codigo}");
+         stdp.print(r.salida);
+         return r.codigo;
+     }
+
+ - El primer elemento es el PROGRAMA y los demás sus argumentos, que le
+   llegan tal cual: no hay intérprete de órdenes de por medio, así que un
+   nombre con espacios o con ';' no se convierte en otra orden. Para una
+   orden del intérprete ('dir', una tubería) hay que pedirlo: en Windows
+   "cmd", "/c", ...; en Linux "sh", "-c", ...
+ - El programa se busca como lo buscaría la terminal (en el PATH). Si no
+   existe, o no se puede lanzar, lanza 'excepciones.ErrorDeArchivo'.
+ - Un programa que termina con un código distinto de 0 NO es una excepción:
+   está en 'codigo', y decidir qué hacer es del que lo llamó.
+ - 'salida' y 'errores' son lo que escribió, como texto UTF-8; lo que no
+   sea UTF-8 llega como el carácter de reemplazo (U+FFFD).
+ - Espera a que termine: no hay tiempo límite.
+-/
+
+#import array.vector as vec
+#import excepciones as exc
+
+// llamadas al host
+internal fn __ejecutar__(str ptr argumentos, int n, str entrada) -> int;
+internal fn __salida_ejecutada__() -> str;
+internal fn __errores_ejecutados__() -> str;
+
+// Lo que dejó un programa al terminar.
+public struct { int codigo; str salida; str errores; } Resultado;
+
+// Ejecuta 'orden' (el programa y sus argumentos) y espera a que termine.
+// Su entrada estándar está vacía.
+public fn ejecutar(vec.Vector<str> ptr orden) -> Resultado {
+    return ejecutar_con_entrada(orden, "");
+}
+
+// Igual, pero el programa recibe 'entrada' por su entrada estándar.
+public fn ejecutar_con_entrada(vec.Vector<str> ptr orden, str entrada) -> Resultado {
+    if (orden.len() == 0) {
+        throw exc.ValorInvalido{ mensaje: "no hay programa que ejecutar: la orden está vacía" };
+    };
+    var int codigo = __ejecutar__(orden.data(), orden.len(), entrada);
+    return Resultado{ codigo: codigo, salida: __salida_ejecutada__(),
+                      errores: __errores_ejecutados__() };
+}
+
+#export as comandos

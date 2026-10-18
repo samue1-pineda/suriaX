@@ -51,7 +51,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     import SemanticError  # type: ignore
 
 from . import cache
-from .cache import clear_cache
+from .cache import clear_cache, nueva_compilacion
 from .library import LoadedLibrary
 from .loader import (NOTE_SRCX_AS_LIB, parse_and_collect, reubicar,
                      validated_alias)
@@ -85,12 +85,23 @@ def load_library(
     paths = search_paths(source_path, config)
     # un nombre punteado ('IO.print') SOLO lo satisface un paquete: los
     # archivos planos homonimos se ignoran (no ganan por orden de busqueda).
-    found = find_library(root_name, paths, packages_only=dotted)
+    # el archivo que importa nunca es la librería que pide (ver
+    # 'find_library'): se salta y la búsqueda sigue
+    found = find_library(root_name, paths, packages_only=dotted,
+                         skip=source_path)
     if found is None:
         what = "paquete" if dotted else ".libsrx, paquete o .srcx"
+        propio = ""
+        if source_path and not dotted and os.path.splitext(
+                os.path.basename(source_path))[0].lower() == root_name.lower():
+            # si el único candidato era él mismo, decirlo: es la causa
+            propio = (f"; se omitió '{os.path.basename(source_path)}' porque "
+                      "es el archivo que importa, y un archivo no puede "
+                      "importarse a sí mismo (¿se llama igual que la "
+                      "librería que quiere usar?)")
         errors.append(SemanticError.LibraryNotFoundError(
             f"no se encontró '{root_name}' ({what}) "
-            f"(rutas probadas: {', '.join(paths)})",
+            f"(rutas probadas: {', '.join(paths)}){propio}",
             line=ln, column=col,
         ))
         return None
@@ -246,6 +257,6 @@ def _load_cached(lib: str, found: Found, config, errors, notes,
 
 
 __all__ = [
-    "LoadedLibrary", "load_library", "clear_cache", "search_paths",
+    "LoadedLibrary", "load_library", "clear_cache", "nueva_compilacion", "search_paths",
     "find_library", "NOTE_SRCX_AS_LIB",
 ]

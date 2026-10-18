@@ -1,0 +1,85 @@
+/- result: el RESULTADO de algo que puede fallar, como un valor.
+
+     #from io #import stdp
+     #import result as res
+
+     fn parse_age(int raw) -> res.Result<int, str> {
+         if (raw < 0) { return res.Result<int, str>.Err("negative age"); }
+         return res.Result<int, str>.Ok(raw);
+     }
+
+     fn main() -> int {
+         match (parse_age(-3)) {
+             case res.Result<int, str>.Ok(age) { stdp.println(f"age {age}"); }
+             case res.Result<int, str>.Err(why) { stdp.println(f"error: {why}"); }
+         };
+         var res.Result<int, str> r = parse_age(30);
+         stdp.println(f"{r.is_ok()} {r.unwrap_or(0)}");    // true 30
+         return 0;
+     }
+
+ 'Result<T, E>' es un enum genérico corriente (ver "Enums genéricos" en
+ type_system.rst): los argumentos se escriben SIEMPRE, al construir y en
+ cada 'case' ('res.Result<int, str>.Ok(5)'), no se deducen; se abre con
+ 'match', y lo que liga un patrón es el payload PRESTADO. En un f-string
+ se escribe 'Ok(5)' o 'Err(negative age)'.
+
+ ¿Y LAS EXCEPCIONES? Siguen siendo la forma de lo que NO se espera
+ (un índice fuera de rango, un archivo que desaparece). 'Result' es para
+ el fallo que es una respuesta normal y que quien llama tiene que mirar:
+ el tipo de retorno lo dice y el 'match' (SEM030 si falta una variante)
+ obliga a tratar los dos casos.
+
+ POR QUÉ UN PAQUETE PROPIO ('result' y no 'core'): hoy los enums genéricos
+ son del INTÉRPRETE, y la VM rechaza un programa que CARGUE uno, aunque no
+ lo use (VM002 en la declaración). Un 'core' acabaría importado por otras
+ librerías (lo que 'Dictionary.items()' necesita, 'Pair', viviría ahí) y
+ arrastraría esa restricción a todo programa con un diccionario, la V1
+ incluida. Con su propio paquete, solo la paga quien escribe
+ '#import result'.
+
+ AYUDAS: solo dos, los usos que se repiten. 'r.is_ok()' (y para "es un
+ error", 'not r.is_ok()') y 'r.unwrap_or(d)'. No hay 'unwrap' que lance: el
+ que quiera lanzar lo escribe en el 'case Err', con la excepción que le
+ diga algo a quien la atrape.
+
+ PROPIEDAD: la deciden 'T' y 'E' (un 'Result<R, str>' con 'R' que tiene
+ destructor destruye su 'R'). 'unwrap_or' COPIA el payload, así que con
+ un 'T' que tiene destructor es SEM038 en la llamada, como el '??' de un
+ 'T?': para esos, 'match', que presta.
+-/
+
+public enum Result<T, E> {
+    Ok(T),      // salió bien: el valor
+    Err(E),     // falló: por qué
+};
+
+@impl Result<T, E> {
+    // ¿Es un 'Ok'?
+    fn is_ok(Result<T, E> ptr self) -> bool {
+        match (self) {
+            case Result<T, E>.Ok(value) { return true; }
+            case Result<T, E>.Err(reason) { return false; }
+        };
+        return false;
+    }
+
+    // El valor de un 'Ok' (una COPIA), o 'default' si es un 'Err'. 'r' no
+    // cambia. Con un 'T' que tiene destructor es SEM038 en la llamada.
+    //
+    // La copia va a un local ANTES del 'return' a propósito: hoy, en un
+    // genérico, 'return value' con 'value' ligado por un 'case' sobre un
+    // sujeto puntero SACA el payload del 'Result' de quien llama (lo deja en
+    // 'null'), aunque 'T' sea un 'int'. Es un fallo del compilador (el
+    // 'return' de un 'T' se marca siempre como cesión, también cuando lo
+    // devuelto es un préstamo); con el local, la copia es explícita.
+    fn unwrap_or(Result<T, E> ptr self, T default) -> T {
+        match (self) {
+            case Result<T, E>.Ok(value) { return value; }
+            case Result<T, E>.Err(reason) { }
+        };
+        return default;
+    }
+}
+
+#export package as result

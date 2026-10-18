@@ -1,0 +1,17 @@
+// Un metodo de '@impl' con nombre llano y una 'fn' homonima del modulo: la
+// llamada 'distancia(5)' es la funcion (main devuelve 105), nunca el metodo.
+// La funcion va ANTES: un indice por nombre en el que el ultimo pisa al
+// anterior se quedaba con el metodo.
+// Se regenera con: python V0/main.py metodo_homonimo.srcx --emit-hir metodo_homonimo.phir
+
+fn distancia(int x) -> int { return x + 100; }
+
+struct { int x; } Punto;
+
+@impl Punto {
+    fn distancia(Punto ptr self) -> int { return self.x; }
+}
+
+fn main() -> int {
+    return distancia(5);
+}

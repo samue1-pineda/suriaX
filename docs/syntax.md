@@ -21,7 +21,8 @@ Visión legible de la sintaxis del lenguaje. La definición formal está en
 
 ```srcx
 // importación
-const IO = #import IO;
+#from io #import stdp
+#import mem
 
 // función
 fn suma(int a, int b) -> int {
@@ -35,9 +36,9 @@ int z = 3;
 
 // control de flujo
 if (x > 0) {
-    IO.printf("positivo");
+    stdp.println("positivo");
 } else {
-    IO.printf("negativo");
+    stdp.println("negativo");
 }
 
 while (y < x) {
@@ -45,9 +46,9 @@ while (y < x) {
 }
 
 // memoria: ownership + move-semantics
-int ptr p = reservar(1);
-int ptr q = move p;      // 'p' deja de ser utilizable
-free q;                  // destrucción anticipada; si no, al cerrar el ámbito
+int ptr mutable p = mem.reserve<int>(1);
+int ptr mutable q = move p;      // 'p' deja de ser utilizable
+mem.release<int>(q);             // un bloque crudo se devuelve a mano
 ```
 
 ## Secciones
@@ -55,8 +56,11 @@ free q;                  // destrucción anticipada; si no, al cerrar el ámbito
 - Declaraciones: funciones, `struct`, `enum`, `type` (metatipo: `const type int8;` declara un nominal opaco; ver [t_types.md](gramar/t_types.md)).
 - Visibilidad (prefijo opcional, default público): `public`/`private`/`internal`.
 - Métodos especiales: `hook fn __x__` (set fijo del compilador) / `dunder fn __x__` (libre).
-- Sentencias: `var`, `if`, `while`, `match`, `return`, `break`, `continue`.
-- Expresiones: aritméticas, comparación, lógicas, llamadas, acceso `.`.
+- Sentencias: `var`, `if`, `while`, `match`, `return`, `break`, `continue`,
+  `try`/`catch`/`throw`, `with`, y las pruebas `test "nombre" { expect (...); }`.
+- Expresiones: aritméticas, comparación, lógicas, llamadas, acceso `.`,
+  `cast<T>(x)`, el ternario `c ? a : b`, `??` sobre un `T?` y las lambdas
+  (`lambda (int x) -> int: x * 2`).
 - Memoria: `move`, `free`, `ptr`/`&`/`?`. Las arenas son un tipo de librería,
   no sintaxis (ver el modelo de memoria).
 - Directivas: `#import`, `#export`, `#from`, `#test`, `#extern cpp{}`.

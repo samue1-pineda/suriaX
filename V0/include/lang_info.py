@@ -55,13 +55,15 @@ _CATEGORY_TOKENS: Dict[str, frozenset] = {
     "literal": frozenset({TokenType.TRUE, TokenType.FALSE, TokenType.NULL}),
     "storage": frozenset({TokenType.CONST, TokenType.VAR, TokenType.MUTABLE}),
     "declaration": frozenset({TokenType.FUNCTION, TokenType.STRUCT, TokenType.ENUM,
-                              TokenType.TEST}),
+                              TokenType.TEST, TokenType.LAMBDA}),
     "control": frozenset({TokenType.IF, TokenType.ELSE, TokenType.WHILE,
                           TokenType.RETURN, TokenType.MATCH, TokenType.CASE,
                           TokenType.BREAK, TokenType.CONTINUE}),
     "error_handling": frozenset({TokenType.ERRORTYPE, TokenType.TRY,
                                  TokenType.CATCH, TokenType.THROW,
-                                 TokenType.FINALLY}),
+                                 TokenType.FINALLY,
+                                 # las pruebas: comprobar y limpiar al fallar
+                                 TokenType.EXPECT, TokenType.ERRFINALLY}),
     "memory": frozenset({TokenType.MOVE, TokenType.FREE, TokenType.POINTER,
                          TokenType.WITH}),
     "operator_word": frozenset({TokenType.AND, TokenType.OR, TokenType.NOT,
@@ -242,7 +244,9 @@ def build_language_info() -> dict:
 NUMBER_REGEX = {
     "int": r"0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|0[bB][01](?:_?[01])*"
            r"|0[oO][0-7](?:_?[0-7])*|[0-9](?:_?[0-9])*",
-    "float": r"[0-9](?:_?[0-9])*\.[0-9](?:_?[0-9])*",
+    # parte decimal, exponente o las dos: con exponente es siempre float
+    "float": r"[0-9](?:_?[0-9])*(?:\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?"
+             r"|[eE][+-]?[0-9](?:_?[0-9])*)",
 }
 
 
@@ -301,7 +305,7 @@ SNIPPETS = [
     {"prefix": "free", "description": "destructor (__free__)",
      "context": "top", "body": "hook fn __free__(${1:Punto} ptr ${2:x}) -> void {\n\t$0\n}"},
     {"prefix": "test", "description": "bloque de prueba",
-     "context": "top", "body": "test \"${1:nombre}\" {\n\t$0\n}"},
+     "context": "top", "body": "test \"${1:nombre}\" {\n\texpect (${2:true});$0\n}"},
     {"prefix": "import", "description": "importar una libreria",
      "context": "top", "body": "#import ${1:mem}"},
     {"prefix": "from", "description": "importar de una libreria",

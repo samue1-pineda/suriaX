@@ -92,6 +92,13 @@ export interface Policy {
   readonly allowAllUnits: boolean;
   /** Unidades cuya implementación aporta el host (no se traducen ni se revisan). */
   readonly trustedUnits: ReadonlyMap<string, TrustedUnit>;
+  /**
+   * Por qué se deniega un PAQUETE (clave: su nombre en minúsculas, `sistema`
+   * para `sistema.archivos`). Opcional: sin entrada, el diagnóstico solo dice
+   * qué está permitido. Con ella dice además si es "todavía no" o "nunca",
+   * que es lo que quien lo lee necesita para saber si esperar o cambiar.
+   */
+  readonly deniedReasons?: ReadonlyMap<string, string>;
 }
 
 /** Clave de comparación de una unidad/librería (los alias no distinguen caja). */
@@ -144,6 +151,56 @@ export const WEB_V1_POLICY: Policy = {
 };
 
 /**
+ * Librerías que el playground deja importar: las que el target web **sabe
+ * ejecutar hoy**. Unidad a unidad, sin comodines: una unidad nueva de un
+ * paquete permitido nace denegada, igual que una capacidad nueva.
+ */
+const PLAYGROUND_UNITS: readonly string[] = [
+  "IO", "IO.stdp", "IO.stdpf",
+  "math", "math.basic", "math.constants",
+  "excepciones",
+];
+
+const POINTERS_PENDING =
+  "su implementación usa punteros, que el target web todavía no representa; " +
+  "entrará cuando el target los soporte";
+
+/**
+ * **Perfil del playground.**
+ *
+ * El del target web (`web-v1`: ninguna capacidad habilitada) y, además, una
+ * lista blanca de librerías. `web-v1` deja importar cualquiera y rechaza por
+ * capacidad; en el playground eso daba, para un `#import text`, cuarenta
+ * diagnósticos `WEB002` dentro de una librería que el usuario no escribió.
+ * Aquí es uno, en su `#import`, que dice por qué.
+ *
+ * Dos clases de denegación, y el motivo las distingue:
+ *
+ *  - **nunca** (`sistema`): el playground no tiene archivos, procesos ni
+ *    rutas. No es una carencia del codegen, es lo que el playground es.
+ *  - **todavía no** (`text`, `array`, `collections`, `d_types`, `mem`): el
+ *    target no sabe bajarlas. Cuando sepa, se añaden a la lista.
+ */
+export const PLAYGROUND_POLICY: Policy = {
+  name: "playground",
+  allowed: new Set<Capability>(),
+  allowedUnits: new Set(PLAYGROUND_UNITS.map(unitKey)),
+  allowAllUnits: false,
+  trustedUnits: new Map(IO_UNITS.map((u) => [unitKey(u.alias), u])),
+  deniedReasons: new Map([
+    ["sistema",
+     "el playground no tiene archivos, procesos ni rutas: el programa no se " +
+     "ejecuta en una máquina con sistema de archivos"],
+    ["mem", "la memoria manual depende del runtime nativo, que no viaja al web"],
+    ["text", POINTERS_PENDING],
+    ["array", POINTERS_PENDING],
+    ["collections", POINTERS_PENDING],
+    ["d_types",
+     "sus tipos declaran '__sizeof__', que depende del layout nativo"],
+  ]),
+};
+
+/**
  * Perfil sin contención: TODO permitido. No es para producción — existe
  * para que los tests del deserializador y del DCE puedan trabajar con
  * programas completos sin que la política los corte antes.
@@ -155,6 +212,20 @@ export const UNRESTRICTED_POLICY: Policy = {
   allowAllUnits: true,
   trustedUnits: new Map(),
 };
+
+/**
+ * Los perfiles que se pueden pedir por nombre (`--policy <nombre>`). Quien
+ * invoca el target elige el perfil; el target no adivina dónde corre.
+ */
+export const POLICIES: ReadonlyMap<string, Policy> = new Map(
+  [WEB_V1_POLICY, PLAYGROUND_POLICY, UNRESTRICTED_POLICY].map((p) => [p.name, p]),
+);
+
+/** Por qué la política deniega esta unidad, si lo dice. */
+export function unitDeniedReason(policy: Policy, name: string): string | null {
+  const paquete = unitKey(name).split(".", 1)[0] ?? "";
+  return policy.deniedReasons?.get(paquete) ?? null;
+}
 
 /**
  * Deriva una política a partir de otra. La forma soportada de "habilitar
@@ -171,6 +242,7 @@ export function withCapabilities(
     allowedUnits: base.allowedUnits,
     allowAllUnits: base.allowAllUnits,
     trustedUnits: base.trustedUnits,
+    deniedReasons: base.deniedReasons,
   };
 }
 
@@ -188,6 +260,7 @@ export function withUnits(
     allowedUnits: new Set([...base.allowedUnits, ...units.map((u) => unitKey(u.alias))]),
     allowAllUnits: base.allowAllUnits,
     trustedUnits: trusted,
+    deniedReasons: base.deniedReasons,
   };
 }
 

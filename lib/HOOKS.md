@@ -8,7 +8,8 @@ propios contratos**, sin ser experto en compiladores.
 Hay tres herramientas, de la más simple a la más potente:
 
 1. **Hooks** — haz que tu tipo funcione con operaciones que ya existen
-   (`print(x)`, `len(x)`, `sizeof(T)`, `free x`, `cast<T>(x)`, `v[i]`, `a == b`).
+   (`print(x)`, `len(x)`, `sizeof(T)`, `free x`, `cast<T>(x)`, `v[i]`, `a == b`,
+   `a < b`).
 2. **Dunders** — dale a tu tipo sus **propios** métodos (`lista.__push__(3)`).
 3. **Traits** — define un **contrato** con nombre (`iterable`, `sumable`…) y
    pide que un tipo lo cumpla; el compilador lo verifica por ti.
@@ -27,7 +28,7 @@ sobre tu tipo. **No tocas el compilador**: basta declararlo en tu `.libsrx`.
 
 ### 1.1 Glosario: todos los hooks de hoy
 
-Estos once los trae el compilador y los dispara la **sintaxis** del lenguaje.
+Estos doce los trae el compilador y los dispara la **sintaxis** del lenguaje.
 Tu proyecto puede añadir los suyos (§5): esos se invocan por su nombre, como un
 método. Cada fila dice qué escribir, qué lo dispara, de qué tipo pasa a ser el
 hook y si ejecuta hoy.
@@ -45,6 +46,7 @@ hook y si ejecuta hoy.
 | `__min__` | `hook fn __min__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
 | `__max__` | `hook fn __max__(T ptr x) -> int` | un literal escrito donde se espera `T` | 1.er parámetro | ✅ |
 | `__hash__` | `hook fn __hash__(T ptr x) -> int` | `hash(x)` | 1.er parámetro | ✅ |
+| `__cmp__` | `hook fn __cmp__(T ptr a, T ptr b) -> int` | `a < b` · `a <= b` · `a > b` · `a >= b` | 1.er parámetro | ✅ (intérprete) |
 
 Qué significa cada uno, con algo más de detalle:
 
@@ -53,7 +55,8 @@ Qué significa cada uno, con algo más de detalle:
   `void` y recibir exactamente un receptor.
 - **`__hash__`** — un entero que resume el valor, para guardarlo en un
   `collections.Dictionary`. La regla es una sola: dos valores iguales (según
-  tu `__eq__`) tienen que dar el mismo hash; al revés no hace falta. Sobre
+  `==`: tu `__eq__` o, sin él, la igualdad campo a campo) tienen que dar el
+  mismo hash; al revés no hace falta. Sobre
   `int`, `bool`, `char` y `str`, `hash(x)` es nativo (no se declara); un
   `float` no tiene hash, porque NaN no es igual a sí mismo.
 - **`__len__`** — el "tamaño lógico" (elementos de una lista, caracteres de una
@@ -65,7 +68,9 @@ Qué significa cada uno, con algo más de detalle:
   el backend, no una librería (`SEM006`).
 - **`__free__`** — qué hacer al liberar. `free x;` exige que `x` sea `T ptr`
   (`SEM014`); si `T` declara este hook, se ejecuta **antes** de invalidar la
-  celda.
+  celda. También corre solo: al cerrarse el ámbito del dueño y, para una
+  variable **global**, al terminar el programa (en orden inverso de
+  declaración, tras volver de `main`; en el intérprete).
 - **`__cast__`** — la conversión explícita. Tiene la convención más particular:
   el dueño es el lado **nominal** de la firma, sea el retorno
   (`fn __cast__(int x) -> int8` pertenece a `int8`) o el parámetro
@@ -74,12 +79,35 @@ Qué significa cada uno, con algo más de detalle:
   se escribe `__cast__` a mano.
 - **`__index__`** — leer `x[i]` sobre un tipo con nombre. El segundo parámetro
   es el índice y el retorno es el **elemento** (tipo libre: tú decides). La
-  indexación cruda de punteros y bloques sigue funcionando sin hook.
+  indexación cruda de punteros y bloques sigue funcionando sin hook. Si
+  devuelve por valor, `x[i]` es una **copia**: escribir en ella (`x[i].n = 5`,
+  o llamar a un método que modifica su receptor, `x[i].push(v)`) es `SEM041`.
+  Para modificar el elemento en su sitio, el tipo ofrece un método que lo
+  preste mutable (`Vector.at_mut`, `Dictionary.at_mut`).
 - **`__index_set__`** — escribir `x[i] = v`. El receptor va `T ptr mutable`
   porque va a modificar el objeto, y devuelve `void`. Tres parámetros:
   receptor, índice y valor.
 - **`__eq__`** — comparar `a == b` entre dos valores del mismo tipo nominal.
-  Devuelve `bool`. Sin él, `==` entre nominales cae a la identidad.
+  Devuelve `bool`, y `a != b` es su negación. Sin él, `==` es igualdad de
+  **valor**: un struct se compara campo a campo (cada campo con su propia
+  igualdad, así que un campo con `__eq__` lo usa), un enum con datos por
+  variante y payload, y un **puntero por su dirección** —no por lo apuntado—.
+  Decláralo cuando "igual" no sea "mismos campos": un tipo que guarda un
+  bloque de `mem` (como `Vector`, que lo declara) o que ignora un campo.
+- **`__cmp__`** — el **orden** de tu tipo: `a < b`, `a <= b`, `a > b` y
+  `a >= b` salen de él. Devuelve un `int`: negativo si `a` va antes, `0` si
+  empatan, positivo si va después (`return a.clave - b.clave;`). Es uno y no
+  cuatro (`__lt__`, `__le__`…) porque cuatro hooks se pueden contradecir y uno
+  no. Los dos parámetros son del mismo tipo (`SEM006` si no). Sin él, ordenar
+  tu tipo es un error (`AST006`); los primitivos (`int`, `float`, `char`,
+  `str`, `byte`) y los enums **sin datos** se ordenan solos. Con él tu tipo
+  vale en un genérico que ordena (`menor<T>`, `Vector.sort`); sin él, esa
+  instancia es `SEM039`. Para ordenar por OTRO criterio sin tocar el tipo
+  (por una clave, al revés), `v.sort_by(f)` recibe una función con la misma
+  forma, `fn(T ptr, T ptr) -> int`, y no necesita `__cmp__`.
+- **Un enum sin datos no declara `__eq__`, `__cmp__` ni `__hash__`**
+  (`SEM006`): al ejecutar es un entero, y se compara, se ordena y se hashea
+  como uno, por el valor de su variante. El hook no se llamaría nunca.
 - **`__min__` / `__max__`** — el **rango** de un tipo numérico. Son los únicos
   hooks que el compilador **lee en compilación** en vez de ejecutar: mira el
   literal de su `return`, así que el cuerpo tiene que ser exactamente
@@ -133,11 +161,13 @@ hook fn __index_set__(Par ptr mutable p, int i, int v) -> void {
     if (i == 0) { p.a = v; } else { p.b = v; }
 }
 hook fn __eq__(Par ptr x, Par ptr y) -> bool { return x.a == y.a; }
+hook fn __cmp__(Par ptr x, Par ptr y) -> int { return x.a - y.a; }
 
 // var Par p = Par{ a: 1, b: 2 };
 //   p[0]        -> 1
 //   p[1] = 7;   -> muta p.b
 //   p == q      -> compara por 'a'
+//   p < q       -> ordena por 'a' (y un Vector<Par> ya se puede 'sort')
 ```
 
 Varios `__sizeof__` en el mismo archivo, uno por tipo:
@@ -220,6 +250,30 @@ lenguaje: el contrato es tuyo, la verificación la pone suriaX.
 > `self` dentro del trait significa "el tipo que hará `@impl`". Al verificar,
 > suriaX sustituye `self` por el tipo real (`Counter`) y compara firma a firma.
 
+Un trait también puede pedir **métodos de nombre llano** (los de un bloque
+`@impl Tipo { ... }`), y los parámetros del prototipo pueden llevar nombre:
+
+```srcx
+@trait struct { fn area(self ptr s) -> int; } shape;
+
+@impl(shape) struct { int r; } Circle;
+@impl Circle { fn area(Circle ptr self) -> int { return self.r * 3; } }
+
+fn twice<T: shape>(T ptr x) -> int { return x.area() * 2; }   // una COTA
+
+fn main() -> int {
+    var Circle c = Circle{ r: 1 };
+    return twice(&c) - 6;
+}
+```
+
+Con la cota `T: shape`, `x.area()` se comprueba en la definición, y quien
+llama a `twice` con un tipo que no declara `@impl(shape)` recibe `SEM021` en
+la llamada. Además de tus traits existen cuatro **conceptos nativos**, `Eq`,
+`Ord`, `Hash` y `Print`, que se cumplen solos (los primitivos que ya los
+tienen y los tipos que declaran `__eq__`, `__cmp__`, `__hash__` o
+`__print__`).
+
 ---
 
 ## 4. Primitivas del host (el prototipo sin cuerpo)
@@ -246,7 +300,7 @@ entrada/salida y todo lo que el lenguaje delega afuera — y **no requiere**
 
 | Quiero… | Uso | ¿Toca el compilador? |
 |---|---|---|
-| que `print(x)`/`len(x)`/`x[i]`/`a == b` funcione con mi tipo | un **hook** | No |
+| que `print(x)`/`len(x)`/`x[i]`/`a == b`/`a < b` funcione con mi tipo | un **hook** | No |
 | una primitiva del sistema (memoria, IO) | un `fn __x__();` **sin cuerpo** ligado al host | No |
 | métodos propios de mi tipo | un **dunder** | No |
 | un contrato reutilizable | un **trait** (`@trait` + `@impl`) | No |
@@ -304,6 +358,21 @@ o `a == b`. Detalles completos en [../htims/readme.md](../htims/readme.md).
   objeto, el puntero debe ser `T ptr mutable`, no `T ptr` (si no, el compilador
   lo marca con `SEM015`). `T ptr` es "solo lectura a través del puntero".
 - **`sizeof` necesita un tipo con nombre** (`SEM006`).
+- **En un genérico, el lenguaje despacha los hooks de `T`; tú no le pides
+  nada por su nombre.** Sobre un `T` sin cota siguen valiendo `==`
+  (`__eq__`), `<` (`__cmp__`, `SEM039` por instancia), `hash` (`__hash__`),
+  copiarlo (`SEM038`), destruirlo (`__free__`) y escribirlo en un f-string:
+  cada instancia lo comprueba con su tipo concreto. Lo que es `SEM043` es
+  llamar a un método o a un dunder (`x.__aplica__(1)`), leer un campo o usar
+  `x[i]` sobre un valor de tipo `T` (o `T ptr`): un `T` sin cota no promete
+  nada. Para pedirle algo, declara una **cota** (`fn f<T: Contrato>`,
+  `<T: Ord>`, `<T: Print>`): dentro del cuerpo `T` ofrece lo que la cota
+  promete y se comprueba en la definición; cada instancia la cumple en su
+  llamada. O pásale una función (`fn(T) -> R`). Ver `type_system.rst`
+  (Cotas y conceptos).
+- **Un hook o un dunder no es un valor** (`SEM044`): no se guarda en una
+  variable ni se pasa. Un método de `@impl` sí: `Tipo.metodo` es una función
+  con el receptor como primer parámetro (`fn(Tipo ptr, ...) -> R`).
 - **`print` y `len` no son palabras clave**: son identificadores que, si no
   resuelven a una función declarada, despachan al hook del tipo de su primer
   argumento. Una función tuya llamada `print` tiene prioridad sobre el hook.
@@ -324,9 +393,12 @@ de verdad con `--run`.
 | Hooks **declarados por tu proyecto** (HTIMS) | Sí — contra la firma que declara tu extensión | ✅ Sí, invocados como `x.__hook__(...)` |
 | Hooks `__print__` / `__len__` / `__sizeof__` / `__free__` / `__cast__` | Sí | ✅ Sí |
 | Hooks `__index__` / `__index_set__` / `__eq__` | Sí | ✅ Sí (`v[i]`, `v[i] = x`, `a == b`) |
+| Hook `__cmp__` | Sí | ✅ en el intérprete. ❌ La VM todavía no lo despacha (compararía los *handles*); el target web, sin verificar |
+| `==` sin `__eq__` (igualdad de valor) | — | ✅ en el intérprete. ❌ La VM todavía compara la identidad; el target web, sin verificar |
 | Dunders (`x.__metodo__()`) en el mismo archivo | Sí | ✅ Sí — el método corre y la mutación del receptor se propaga |
 | Dunders sobre un tipo de **otra librería** | Sí | ✅ Sí — el despacho cross-módulo funciona |
 | Traits (`@trait` / `@impl`) | Sí (conformidad verificada, `SEM021`) | — (el contrato no "ejecuta"; los dunders que exige, sí) |
+| Cotas `<T: Contrato>` / conceptos | Sí (en la definición y en cada instancia) | ✅ en el intérprete. ❌ La VM rechaza lo que despacha una cota (`print(x)`, `x.metodo()` sobre `T`) con `VM003` |
 
 ## TODO
 

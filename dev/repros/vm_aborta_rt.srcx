@@ -1,0 +1,10 @@
+#from io #import stdp
+struct { int id; } R;
+hook fn __free__(R ptr r) -> void { stdp.println(f"free {r.id}"); }
+var R g = R{ id: 0 };
+fn main() -> int {
+    var R a = R{ id: 1 };
+    var int cero = 0;
+    var int x = 1 / cero;
+    return 0;
+}

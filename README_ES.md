@@ -47,7 +47,7 @@ suriaX es un lenguaje de programacion con los siguientes objetivos:
 el proyecto es una **Pre-Alpha Preview**. El numero exacto es la medalla
 *Version* de arriba: sale de [`version.py`](version.py), la fuente unica que
 leen todos los consumidores (CMake, el sitio de documentacion,
-`suriaX --version` y el release), asi que no puede contradecir a lo publicado.
+`suri --version` y el release), asi que no puede contradecir a lo publicado.
 Todo lo que se sabe que falla en la version vigente esta en
 [c_errorstfix.md](c_errorstfix.md).
 
@@ -57,13 +57,13 @@ Todo lo que se sabe que falla en la version vigente esta en
 
 [**X**] HIR (formato protobuf, escrito solo con la biblioteca estandar de Python) y un interprete tree-walk que lo ejecuta
 
-[**X**] bootstrap: el compilador escrito en suriaX (`src/`, la V1) se compila a si mismo, y cada unidad que produce es identica byte a byte a la del compilador en Python (el punto fijo) — siguen los diagnosticos
+[**X**] bootstrap: el compilador escrito en suriaX (`src/`, la V1) alcanzo el punto fijo en la 0.4.0: se compilaba a si mismo, y cada unidad que producia era identica byte a byte a la del compilador en Python. Hoy la V1 esta atrasada respecto del lenguaje de la 0.4.1 y el punto fijo esta roto hasta que se ponga al dia (ver [c_errorstfix.md](c_errorstfix.md))
 
 [**/**] backend nativo en C++: lector del HIR, lowering a MIR (registros virtuales + CFG), una VM de registros y verificacion de propiedad — sin JIT y sin binarios nativos todavia
 
 [**/**] target web: un subconjunto declarado del lenguaje compilado a WebAssembly
 
-[**/**] tooling suriniX: el comando `suri`, un playground web que muestra cada fase del compilador y el sitio de documentacion — el build system sigue **planeado**
+[**/**] tooling suriniX: el comando `suri`, un playground web que muestra cada fase del compilador, un servidor de lenguaje (LSP), un depurador (DAP), una extension de VS Code y el sitio de documentacion — el build system sigue **planeado**
 
 *para un listado de todas las futuras implementaciones lease: [ROADMAP.md](ROADMAP.md).*
 

@@ -52,8 +52,15 @@ def build_module(
     *,
     source_file: str = "",
     libraries: Optional[dict] = None,
+    schema_version: int = SCHEMA_VERSION,
 ) -> Tuple[Optional[object], List]:
     """Construye el message ``Module`` del programa VALIDADO (sin serializar).
+
+    ``schema_version`` elige el esquema (``--hir-schema``): el 2 (por defecto,
+    con pool de tipos) o el 1 (tipos inline, sin pool). El emisor construye
+    SIEMPRE el 2; el 1 se deriva de él en un paso aparte
+    (``schema_v1.to_schema_v1``), así que no hay dos emisores que puedan
+    divergir.
 
     Precondición (la garantiza el llamador, ver ``V0/main.py``): la fase
     Semántica terminó SIN errores — nunca se cruza la frontera con un
@@ -68,6 +75,13 @@ def build_module(
     :func:`module_to_text` (``.phir.txt`` / ``#test hir``) derivan de un
     MISMO ``Module`` — un solo recorrido del árbol aunque se pidan ambos.
     """
+    from .schema_v1 import EMITTABLE_SCHEMAS, SCHEMA_V1, to_schema_v1
+    if schema_version not in EMITTABLE_SCHEMAS:
+        # fail-fast: la CLI ya lo restringe, pero un llamador de la API no
+        # puede pedir un esquema que nadie sabe leer y recibir otro
+        raise ValueError(
+            f"schema_version {schema_version} no se puede emitir "
+            f"(se emiten: {', '.join(map(str, EMITTABLE_SCHEMAS))})")
     emitter = _Emitter(source_file)
     module = emitter.emit_module(program, table)
     if libraries:
@@ -77,6 +91,8 @@ def build_module(
             ref.phir = f"{alias}.phir"
     if emitter.errors:
         return None, emitter.errors
+    if schema_version == SCHEMA_V1:
+        module = to_schema_v1(module)
     return module, []
 
 
@@ -129,6 +145,10 @@ def emit_text(program: ast.Program, table: SymbolTable, *, source_file: str = ""
     return module_to_text(module), []
 
 
+# Nombre en hir.proto de un TypeKind de include/types_ast.py cuando no es
+# el mismo (ver el comentario de FUNCTION_TYPE en el .proto).
+_PROTO_TYPE_KIND_NAMES = {"FUNCTION": "FUNCTION_TYPE"}
+
 class _Emitter:
     """Estado de UNA emisión: stubs cargados, tablas de despacho y errores."""
 
@@ -150,7 +170,11 @@ class _Emitter:
 
         # enums espejo: mismo NOMBRE en Python y en el .proto — el mapeo se
         # construye una vez por emision consultando el descriptor (O(1) después).
-        self._type_kind = {k: self.pb.TypeKind.Value(k.name)
+        # Unica excepcion al mismo nombre: 'FUNCTION' es 'FUNCTION_TYPE' en
+        # el .proto, porque alli 'SymbolKind.FUNCTION' ya ocupa el nombre en
+        # el ambito del paquete (ver hir.proto, enum TypeKind).
+        self._type_kind = {k: self.pb.TypeKind.Value(
+                               _PROTO_TYPE_KIND_NAMES.get(k.name, k.name))
                            for k in _py_type_kinds()
                            if k.name != "SELF"}  # placeholder de trait, solo-frontend
         self._symbol_kind = {k: self.pb.SymbolKind.Value(k.name)
@@ -176,6 +200,7 @@ class _Emitter:
             ast.CastExpr: self._expr_cast,
             ast.MoveExpr: self._expr_move,
             ast.StructLiteral: self._expr_struct_literal,
+            ast.Lambda: self._expr_lambda,
         }
         self._stmt_dispatch: Dict[type, Callable] = {
             ast.Block: self._stmt_block,
@@ -192,6 +217,7 @@ class _Emitter:
             ast.ExprStmt: self._stmt_expr,
             ast.ImportBinding: self._stmt_import_binding,
             ast.ThrowStmt: self._stmt_throw,
+            ast.ExpectStmt: self._stmt_expect,
             ast.TryStmt: self._stmt_try,
         }
 
@@ -380,9 +406,17 @@ class _Emitter:
                 # hay que invocarlo.
                 for t in item.payload_restypes:
                     entry.payload_type_ids.append(self._type_id(t))
+            # 'enum Res<T, E>': los parametros que nombra su payload ('T')
+            msg.enum_decl.type_params.extend(node.type_params or [])
         elif cls is ast.TestDecl:
             msg.test_decl.name = node.name
             self._emit_block(node.body, msg.test_decl.body)
+            if node.errfinally is not None:
+                msg.test_decl.errfinally.SetInParent()   # presente aunque este vacio
+                self._emit_block(node.errfinally, msg.test_decl.errfinally)
+            if node.finally_block is not None:
+                msg.test_decl.finally_block.SetInParent()
+                self._emit_block(node.finally_block, msg.test_decl.finally_block)
         elif cls is ast.ExternBlock:
             msg.extern_block.target = node.target
             msg.extern_block.raw = node.raw
@@ -511,6 +545,8 @@ class _Emitter:
         for arm in node.cases:
             case = out.cases.add()
             self._emit_expr(arm.pattern, case.pattern)
+            if arm.binds:
+                case.binds = True    # 'case v' sobre un 'T?': liga, no compara
             self._emit_stmt(arm.body, case.body)
 
     def _stmt_return(self, node: ast.ReturnStmt, msg) -> None:
@@ -539,6 +575,14 @@ class _Emitter:
 
     def _stmt_throw(self, node: ast.ThrowStmt, msg) -> None:
         self._emit_expr(node.value, msg.throw_stmt.value)
+
+    def _stmt_expect(self, node: ast.ExpectStmt, msg) -> None:
+        out = msg.expect_stmt
+        self._emit_expr(node.condition, out.condition)
+        out.text = node.text
+        if node.body is not None:
+            out.body.SetInParent()   # presente aunque este vacio
+            self._emit_block(node.body, out.body)
 
     def _stmt_try(self, node: ast.TryStmt, msg) -> None:
         out = msg.try_stmt
@@ -675,6 +719,22 @@ class _Emitter:
 
     def _expr_move(self, node: ast.MoveExpr, msg) -> None:
         self._emit_expr(node.operand, msg.move_expr.operand)
+
+    def _expr_lambda(self, node: ast.Lambda, msg) -> None:
+        # la firma escrita (como la de una 'fn'), el cuerpo (la forma corta ya
+        # llega como '{ return e; }') y lo que lee del entorno. SetInParent:
+        # una lambda sin parametros ni capturas no escribiria ningun campo
+        # escalar, y el 'oneof' tiene que decir igual que es una lambda.
+        out = msg.lambda_expr
+        out.SetInParent()
+        for p in node.params:
+            param = out.params.add()
+            param.name = p.name
+            param.type_id = self._type_id(p.restype)
+        out.return_type_id = self._type_id(node.return_restype)
+        out.body.SetInParent()
+        self._emit_block(node.body, out.body)
+        out.captures.extend(node.captures)
 
     def _expr_struct_literal(self, node: ast.StructLiteral, msg) -> None:
         out = msg.struct_literal

@@ -1,4 +1,4 @@
-> **Obsoleto (0.3.1):** estas notas planeaban un backend LLVM IR dentro de
+> **Obsoleto (0.4.1):** estas notas planeaban un backend LLVM IR dentro de
 > `V0/`. El backend real vive en [`backend/`](../../../backend/README.md) (C++:
 > MIR y una VM de registros) y LLVM quedó fuera del plan en la v0.2.0. Se
 > conservan como historia hasta que se decida si se borran (ver

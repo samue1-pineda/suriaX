@@ -62,21 +62,35 @@ def _check_python_module(module: str) -> Optional[str]:
 def check_dependencies() -> dict[str, dict]:
     """Verifica todas las dependencias del core y devuelve un reporte.
 
-    El reporte es ``{nombre: {"ok": bool, "detail": str, "install": str}}``.
+    El reporte es ``{nombre: {"ok": bool, "detail": str, "install": str,
+    "optional": bool, "use": str}}``; ``use`` dice para qué sirve una
+    opcional.
     No aborta: solo informa. Para abortar usar :func:`ensure_dependencies`.
     """
     report: dict[str, dict] = {}
 
-    for mod, pip_name in (
-        ("google.protobuf", "protobuf"),
-        ("pybind11", "pybind11"),
-        ("yaml", "pyyaml"),
+    # (modulo, nombre pip, None si es obligatoria o PARA QUE sirve si es
+    # opcional). protobuf y pybind11 son OPCIONALES: el HIR se serializa con
+    # un codec propio (protobuf solo es la referencia de una prueba cruzada) y
+    # pybind11 solo hace falta para CONSTRUIR los modulos nativos (sin ellos
+    # el interprete usa su version en Python). Antes salian como [FALTA] y
+    # '--check' terminaba en 1 en una maquina que compilaba y ejecutaba bien.
+    for mod, pip_name, optional in (
+        ("google.protobuf", "protobuf",
+         "solo la comprobacion cruzada del codec del HIR "
+         "(test_hir_reproducible); sin el, todo lo demas funciona igual"),
+        ("pybind11", "pybind11",
+         "solo para construir los modulos nativos (memory_c...); sin ellos "
+         "el interprete usa su version en Python"),
+        ("yaml", "pyyaml", None),
     ):
         version = _check_python_module(mod)
         report[pip_name] = {
             "ok": version is not None,
             "detail": f"version {version}" if version else "no instalado",
             "install": f"pip install {pip_name}  (o: pip install -r requirements.txt)",
+            "optional": optional is not None,
+            "use": optional or "",
         }
 
     return report

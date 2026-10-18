@@ -1,0 +1,6 @@
+#from io #import stdp
+#import text
+fn main() -> int {
+    stdp.println(text.upper("hola"));
+    return 0;
+}

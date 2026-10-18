@@ -1,0 +1,22 @@
+// 09 — structs (EXTRA, no estaba en la lista): un struct por valor, con un
+// campo de cada tipo simple, pasado y devuelto por funciones. Está aparte
+// porque el target web todavía no representa structs (WEB100/WEB101), y por
+// eso los sintéticos no los usan.
+#from io #import stdp
+
+struct { int x; float y; bool visible; char tag; } Punto;
+
+fn mueve(Punto p, int dx) -> Punto {
+    return Punto{ x: p.x + dx, y: p.y * 2.0, visible: not p.visible, tag: p.tag };
+}
+
+fn main() -> int {
+    var Punto p = Punto{ x: 1, y: 2.5, visible: true, tag: 'p' };
+    var int i = 0;
+    while (i < 3) {
+        p = mueve(p, i);
+        stdp.println(f"x={p.x} y={p.y} visible={p.visible} tag={p.tag}");
+        i = i + 1;
+    }
+    return 0;
+}

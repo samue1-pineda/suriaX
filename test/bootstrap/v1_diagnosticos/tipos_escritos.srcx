@@ -1,0 +1,15 @@
+struct { int a; } Par;
+enum E { UNO };
+fn make<T>(int n) -> int { return n; }
+fn main() -> int {
+    var int a = cast<Nada>(1);
+    var int b = cast<Nada ptr>(1);
+    var int c = make<Fantasma>(2);
+    var E.UNO d = 0;
+    var int e = E{ a: 1 };
+    var Par f = Par{ a: 1, a: 2 };
+    var Par g = Par{ b: 1 };
+    var Par ptr? h = null;
+    var Fantasma ptr? i = null;
+    return a + b + c;
+}

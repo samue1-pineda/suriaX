@@ -25,6 +25,7 @@
 -/
 
 #import frontend.tokens as tk
+#import frontend.diagnosticos as dg
 #import array.vector as vec
 
 struct {
@@ -70,12 +71,12 @@ fn trozo(str s, int desde, int hasta) -> str {
 
 /- Un error léxico: se anota, el cursor avanza (al menos un carácter, para
    no quedarse en el mismo sitio) y queda un token ERROR con lo leído. -/
-fn falla(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+fn falla(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores,
          str codigo, str mensaje, int desde, int linea, int col,
          int hasta) -> tk.Token {
     avanza(c, hasta);
     if (c.pos == desde) { avanza(c, desde + 1); }
-    errores.push(f"{linea}:{col} {codigo}: {mensaje}");
+    errores.push(dg.nuevo(codigo, linea, col, mensaje));
     return tk.token(tk.TType.ERROR, trozo(c.fuente, desde, c.pos), linea, col);
 }
 
@@ -131,7 +132,7 @@ fn salta_linea(Cursor ptr mutable c) -> void {
 
 // Un comentario de bloque. Sin cerrar es LEX004 y, como en la V0, no deja
 // token. (Este comentario no puede ser de bloque: su cierre lo cortaría.)
-fn salta_bloque(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> void {
+fn salta_bloque(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> void {
     var int linea = c.linea;
     var int col = col_de(c);
     var int p = c.pos + 2;
@@ -143,7 +144,7 @@ fn salta_bloque(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> vo
         p = p + 1;
     }
     avanza(c, c.largo);
-    errores.push(f"{linea}:{col} LEX004: comentario multilinea sin cerrar");
+    errores.push(dg.nuevo("LEX004", linea, col, "comentario multilinea sin cerrar"));
 }
 
 // --------------------------------------------------------------------------- //
@@ -171,7 +172,7 @@ fn escanea_nombre(Cursor ptr mutable c) -> tk.Token {
    solo es decimal si le sigue un dígito (`1.foo` es `1` y luego `.`); un
    segundo punto, un dígito que no es de la base o un `_` suelto son LEX007,
    con los mensajes de la V0. -/
-fn escanea_numero(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea_numero(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
     var int col = col_de(c);
@@ -272,7 +273,7 @@ fn cabe_en_64(Cursor ptr mutable c, int desde, int hasta, int base) -> bool {
 
 /- Un entero con prefijo: `0x`, `0b` o `0o`. Es un PATRÓN DE BITS: puede
    usar los 64 (`0xFFFFFFFFFFFFFFFF` vale -1). -/
-fn escanea_con_base(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+fn escanea_con_base(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores,
                     int desde, int linea, int col) -> tk.Token {
     var char letra = c.fuente[desde + 1];
     var int base = 16;
@@ -341,7 +342,7 @@ fn solo_espacios(str s) -> bool {
 
 /- `"..."` o, con `interpola`, `f"...{expr}..."`. El token guarda el texto
    crudo; qué hay dentro de cada `{}` lo decide el parser. -/
-fn escanea_cadena(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
+fn escanea_cadena(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores,
                   int prefijo, bool interpola) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
@@ -412,7 +413,7 @@ fn escanea_cadena(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores,
 }
 
 /- `'x'`: exactamente un code point (o un escape). -/
-fn escanea_caracter(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea_caracter(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
     var int col = col_de(c);
@@ -458,7 +459,7 @@ fn fin_de_nombre(Cursor ptr c, int desde) -> int {
     return p;
 }
 
-fn escanea_directiva(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea_directiva(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
     var int col = col_de(c);
@@ -472,7 +473,7 @@ fn escanea_directiva(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) 
     return tk.token(tk.TType.DIRECTIVE, trozo(c.fuente, desde, p), c.linea, col);
 }
 
-fn escanea_decorador(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea_decorador(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
     var int col = col_de(c);
@@ -535,7 +536,7 @@ fn operador_simple(char a) -> tk.TType {
     return tk.TType.ERROR;
 }
 
-fn escanea_operador(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea_operador(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var int desde = c.pos;
     var int linea = c.linea;
     var int col = col_de(c);
@@ -563,7 +564,7 @@ fn escanea_operador(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -
 }
 
 /- El primer carácter decide el scanner. -/
-fn escanea(Cursor ptr mutable c, vec.Vector<str> ptr mutable errores) -> tk.Token {
+fn escanea(Cursor ptr mutable c, vec.Vector<dg.Diagnostico> ptr mutable errores) -> tk.Token {
     var char ch = c.fuente[c.pos];
     if (ch == 'f' and c.pos + 1 < c.largo and c.fuente[c.pos + 1] == '"') {
         return escanea_cadena(c, errores, 1, true);
@@ -605,7 +606,7 @@ fn agrega(vec.Vector<tk.Token> ptr mutable toks, tk.Token t) -> void {
 /- `fuente` -> sus tokens, terminados en `EOF`. Los errores léxicos se
    AÑADEN a `errores` ("linea:col LEXnnn: mensaje"); el análisis sigue
    después de cada uno. -/
-public fn tokenizar(str fuente, vec.Vector<str> ptr mutable errores) -> vec.Vector<tk.Token> {
+public fn tokenizar(str fuente, vec.Vector<dg.Diagnostico> ptr mutable errores) -> vec.Vector<tk.Token> {
     var Cursor c = Cursor{ fuente: fuente, largo: len(fuente), pos: 0, linea: 1, inicio: 0 };
     var vec.Vector<tk.Token> toks = vec.dynamic<tk.Token>(16);
     while (c.pos < c.largo) {

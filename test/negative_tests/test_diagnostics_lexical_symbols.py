@@ -60,3 +60,11 @@ def test_aridad_de_llamada():
 
 def test_tipo_no_declarado():
     assert_has_code("fn f() -> void { var Inexistente x = null; };", "AST005")
+
+
+def test_miembro_de_un_nombre_no_declarado():
+    """Regresión (H7): 'noexiste.x' era un ICE000 —el SEM001 estaba en una
+    rama que no corría nunca y la siguiente línea usaba None—. Ahora es el
+    error del nombre, en su posición, y nada más."""
+    assert error_codes("fn main() -> int { var int e = noexiste.x; return e; }") \
+        == ["SEM001"]

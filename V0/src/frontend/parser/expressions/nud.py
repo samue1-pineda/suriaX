@@ -13,7 +13,6 @@ entrada aqui, sin tocar ``parse_unary``/``parse_postfix``.
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 from contextlib import contextmanager
 from typing import Callable, Dict, List, Union
 
@@ -66,6 +65,11 @@ def parse_unary(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
 def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     """``postfix = ( primary | struct_literal ) { "." IDENTIFIER | "(" [arg_list] ")" | "[" expression "]" }``."""
     expr = parse_primary(cursor, ctx)
+    if expr.__class__ is ast.Lambda:
+        # una lambda no lleva sufijos: 'lambda (...) -> int { ... }(3)' no es
+        # una llamada a la lambda (solo vale como argumento), y en la forma
+        # corta el sufijo ya lo consumio su cuerpo ('x.campo' es de 'x')
+        return expr
     # 'dotted' acumula el nombre mientras la expresion siga siendo un NOMBRE
     # puro ('Nodo', 'point.Point'); pasa a None en cuanto aparece una llamada
     # o una indexacion, porque entonces ya no nombra un tipo.
@@ -83,26 +87,40 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
             expr = _struct_literal(cursor, ctx, expr, dotted)
             dotted = None
         elif tok.type is TokenType.LESS and dotted is not None:
-            # posible GENERICO: un literal ('Caja<int>{ v: 1 }') o una llamada
-            # ('make<int>(4)'). Es la unica posicion del lenguaje donde '<' es
-            # ambiguo (comparacion vs argumentos de tipo), y se resuelve
-            # MIRANDO que hay tras el '>': una llave abre un literal y un
-            # parentesis una llamada. Cualquier otra cosa y se retrocede: el
-            # '<' vuelve a ser el operador que siempre fue.
-            permitidos = (TokenType.L_PAREN,) if ctx.no_struct_literal \
-                else (TokenType.L_BRACE, TokenType.L_PAREN)
+            # posible GENERICO: un literal ('Caja<int>{ v: 1 }'), una llamada
+            # ('make<int>(4)') o la variante de un enum generico
+            # ('Res<int, str>.Ok(5)'). Es la unica posicion del lenguaje donde
+            # '<' es ambiguo (comparacion vs argumentos de tipo), y se
+            # resuelve MIRANDO que hay tras el '>': una llave abre un literal,
+            # un parentesis una llamada y un punto la variante. Cualquier otra
+            # cosa y se retrocede: el '<' vuelve a ser el operador que siempre
+            # fue. (Tras 'a < b >' un '.' solo podria empezar un '.campo' de
+            # 'with', y comparar un 'bool' con '>' ya es un error de tipos.)
+            permitidos = (TokenType.L_PAREN, TokenType.DOT) \
+                if ctx.no_struct_literal \
+                else (TokenType.L_BRACE, TokenType.L_PAREN, TokenType.DOT)
             type_args, seguido_de = _type_args_de_generico(cursor, ctx,
                                                            permitidos)
             if type_args is None:
+                if seguido_de in _VALUE_END:
+                    _generic_without_call(tok, dotted)
                 return expr
             if seguido_de is TokenType.L_BRACE:
                 expr = _struct_literal(cursor, ctx, expr, dotted, type_args)
+            elif seguido_de is TokenType.DOT:
+                # 'Res<int, str>.Ok': los argumentos son del ENUM que nombra
+                # 'expr'; el '.' lo consume la vuelta siguiente
+                expr.type_args = type_args
             else:
                 cursor.advance()          # el '('
-                args = _parse_arg_list(cursor, ctx)
+                args, inner_hint = _parse_call_args(cursor, ctx)
                 cursor.expect(TokenType.R_PAREN)
                 expr = ast.Call(ln=expr.ln, col=expr.col, callee=expr,
                                 args=args, type_args=type_args)
+                hint = _comparison_reading(ctx, dotted, type_args)
+                if hint:
+                    ctx.args_hint = hint      # tambien para la llamada de fuera
+                expr.ambiguity_hint = hint or inner_hint
             dotted = None
         elif tok.type is TokenType.DOT:
             cursor.advance()
@@ -112,9 +130,10 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
                 dotted = f"{dotted}.{member_tok.lexeme}"
         elif tok.type is TokenType.L_PAREN:
             cursor.advance()
-            args = _parse_arg_list(cursor, ctx)
+            args, inner_hint = _parse_call_args(cursor, ctx)
             cursor.expect(TokenType.R_PAREN)
-            expr = ast.Call(ln=expr.ln, col=expr.col, callee=expr, args=args)
+            expr = ast.Call(ln=expr.ln, col=expr.col, callee=expr, args=args,
+                            ambiguity_hint=inner_hint)
             dotted = None
         elif tok.type is TokenType.L_BRACKET:
             cursor.advance()
@@ -131,8 +150,9 @@ def parse_postfix(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
 def _type_args_de_generico(cursor: Cursor, ctx: ParserContext, permitidos):
     """``"<" type { "," type } ">"`` SI y solo si le sigue uno de ``permitidos``.
 
-    Devuelve ``(argumentos, token que sigue)``, o ``(None, None)`` si lo que
-    hay no es esa forma — en cuyo caso el cursor queda EXACTAMENTE donde
+    Devuelve ``(argumentos, token que sigue)``, o ``(None, X)`` si lo que
+    hay no es esa forma (``X`` es el token tras el ``>`` si los tipos se
+    leyeron, ``None`` si ni eso) — en cuyo caso el cursor queda EXACTAMENTE donde
     estaba y el ``<`` lo recoge el motor Pratt como comparacion. Es el unico
     retroceso del parser, y esta acotado: nunca cruza el ``>``, y ningun
     error llega a ``ctx`` porque ``parse_type_args`` senala lanzando, no
@@ -152,9 +172,34 @@ def _type_args_de_generico(cursor: Cursor, ctx: ParserContext, permitidos):
         return None, None
     siguiente = cursor.peek().type
     if siguiente not in permitidos:
+        # se devuelve QUE seguia: tras 'nombre<tipos>' un fin de valor
+        # ('maximo<int>;') es un generico sin llamar, no una comparacion
         cursor.pos = inicio
-        return None, None
+        return None, siguiente
     return args, siguiente
+
+
+#: lo que puede seguir a un VALOR completo (fin de sentencia, de argumento o
+#: de agrupacion). Tras 'nombre<tipos>' ninguna comparacion termina asi —a
+#: 'a < b >' le falta un operando—, asi que ahi solo cabe un generico.
+_VALUE_END = (TokenType.SEMICOLON, TokenType.COMMA, TokenType.R_PAREN)
+
+
+def _generic_without_call(less, name: str) -> None:
+    """``maximo<int>`` sin llamarlo: una funcion GENERICA usada como valor.
+
+    Las funciones son valores, pero una generica todavia no: haria falta que
+    el HIR lleve la instancia (con que tipos se usa) para que un backend que
+    monomorfiza sepa que copia bajar, y eso no se decidio. Se rechaza aqui,
+    donde se ve la forma, con lo que hay que escribir; sin esto el error
+    salia sobre el '>' hablando de una comparacion que nadie escribio."""
+    raise ParseError.InvalidExpressionError(
+        f"'{name}<...>' sin llamar: una funcion GENERICA todavia no se "
+        "puede usar como valor. Envuelvela en una funcion con los tipos "
+        "escritos (fn maximo_int(int a, int b) -> int { return "
+        "maximo<int>(a, b); }) y usa esa",
+        line=less.ln, column=less.col,
+    )
 
 
 def _struct_literal(cursor: Cursor, ctx: ParserContext,
@@ -183,19 +228,57 @@ def _struct_literal(cursor: Cursor, ctx: ParserContext,
                              values=values, type_args=type_args or [])
 
 
+def _comparison_reading(ctx: ParserContext, name: str, type_args) -> str:
+    """La explicacion de ``a<b, c>(d)`` cuando tambien eran dos comparaciones.
+
+    Solo entre los argumentos de una llamada (``dos(a < b, c > (d))``), con
+    dos o mas argumentos de tipo y todos nombres a secas: es la unica forma
+    en que la coma puede separar dos comparaciones. La lectura GENERICA se
+    mantiene (decision del mantenedor); esto solo se pega al error que
+    produzca, para que diga por que se leyo asi y como escribir la otra."""
+    if not ctx.in_call_args or len(type_args) < 2:
+        return ""
+    names = []
+    for t in type_args:
+        if not isinstance(t, ast.NominalTypeExpr) or t.args:
+            return ""
+        names.append(t.name)
+    return (f"ojo: '{name}<{', '.join(names)}>(...)' se leyo como una llamada "
+            f"GENERICA a '{name}' con los tipos {', '.join(names)}; entre los "
+            "argumentos de una llamada, 'a < b, c > (d)' se lee asi. Si eran "
+            f"comparaciones, ponlas entre parentesis: '({name} < {names[0]})'")
+
+
 @contextmanager
-def _struct_literals_allowed(ctx: ParserContext):
+def _struct_literals_allowed(ctx: ParserContext, in_args: bool = False):
     """Dentro de un DELIMITADOR (``(...)``, ``[...]``, ``{campo: ...}``) un
     literal de struct vuelve a ser valido aunque el contexto exterior lo
     haya suprimido: en ``case f(Nodo{ v: 1 })`` el '{' del argumento no es
     el cuerpo de la rama. Sin esto, la marca de ``ctx.no_struct_literal``
     se filtraria hacia dentro de las subexpresiones."""
     previous = ctx.no_struct_literal
+    previous_args = ctx.in_call_args
     ctx.no_struct_literal = False
+    # tambien marca si este delimitador es la lista de argumentos de una
+    # llamada (ver _comparison_reading): dentro de '(...)' o '[...]' no
+    ctx.in_call_args = in_args
     try:
         yield
     finally:
         ctx.no_struct_literal = previous
+        ctx.in_call_args = previous_args
+
+
+def _parse_call_args(cursor: Cursor, ctx: ParserContext):
+    """Los argumentos de una llamada y la explicacion de una lectura generica
+    ambigua entre ellos (``""`` si no la hubo; ver _comparison_reading)."""
+    outer = ctx.args_hint
+    ctx.args_hint = ""
+    try:
+        args = _parse_arg_list(cursor, ctx)
+        return args, ctx.args_hint
+    finally:
+        ctx.args_hint = outer
 
 
 def _parse_arg_list(cursor: Cursor, ctx: ParserContext) -> List[ast.Expression]:
@@ -204,7 +287,7 @@ def _parse_arg_list(cursor: Cursor, ctx: ParserContext) -> List[ast.Expression]:
     if cursor.check(TokenType.R_PAREN):
         return args
     from .. import pratt
-    with _struct_literals_allowed(ctx):
+    with _struct_literals_allowed(ctx, in_args=True):
         args.append(pratt.parse_expression(cursor, ctx))
         while cursor.match(TokenType.COMMA):
             args.append(pratt.parse_expression(cursor, ctx))
@@ -287,19 +370,37 @@ def _parse_interp(interp: Interp, string_tok: Token,
     El lexer solo delimita el texto de la interpolacion (ver ``Interp`` en
     ``t_types.py``); su analisis es responsabilidad del parser (EBNF).
     Se re-tokeniza y re-parsea el fragmento de forma aislada (una interpolacion
-    nunca cruza saltos de linea, ver ``scanners/strings.py``), y las posiciones
-    del sub-arbol resultante se reubican a la posicion real en el archivo.
+    nunca cruza saltos de linea, ver ``scanners/strings.py``). Los TOKENS del
+    fragmento se llevan a su posicion real antes de parsearlos
+    (:func:`_shift_tokens`), asi que cada nodo nace en su sitio: en
+    ``f"{doble(mas_uno(3))}"`` cada llamada tiene su columna, y un error
+    dentro de una interpolacion apunta a donde esta.
     """
-    from src.frontend.lexer.lexer import tokenize as _tokenize
+    from src.frontend.lexer.lexer import Lexer as _Lexer
+
+    # la linea de ESTA interpolacion: dos literales adyacentes en lineas
+    # distintas son un solo token, con la linea del primero
+    ln = interp.ln or string_tok.ln
+    col = interp.col
 
     texto, conversion, formato = separar_formato(interp.expr)
     if formato is not None and not formato_valido(formato):
         raise ParseError.InvalidExpressionError(
             f"interpolacion invalida: el formato ':{formato}' no se entiende; "
             "es [0][ancho][.precision][tipo], con tipo d, x, X, b, o o f",
-            line=string_tok.ln, column=interp.col,
+            line=ln, column=col,
         )
-    sub_tokens = _tokenize(texto)
+    sub_lexer = _Lexer(texto)
+    sub_tokens = sub_lexer.tokenize()
+    if sub_lexer.errors:
+        # sin esto el error lexico se perdia y quedaba un 'token inesperado
+        # en expresion: ERROR' que no decia que paso
+        first = sub_lexer.errors[0]
+        raise ParseError.InvalidExpressionError(
+            f"interpolacion invalida: {first.message}",
+            line=ln, column=col + (first.column or 1) - 1,
+        )
+    _shift_tokens(sub_tokens, ln, col)
     sub_cursor = Cursor(sub_tokens)
     sub_ctx = ParserContext()
     # '{.campo}' dentro de un 'with' se refiere a su receptor
@@ -311,19 +412,40 @@ def _parse_interp(interp: Interp, string_tok: Token,
     except ParseError.ParseError as exc:
         raise ParseError.InvalidExpressionError(
             f"interpolacion invalida: {exc.message}",
-            line=string_tok.ln, column=interp.col,
+            line=exc.line, column=exc.column,
         ) from exc
     if not sub_cursor.at_end():
+        extra = sub_cursor.peek()
         raise ParseError.InvalidExpressionError(
             "la interpolacion contiene mas de una expresion",
-            line=string_tok.ln, column=interp.col,
+            line=extra.ln, column=extra.col,
         )
 
-    _relocate(expr, string_tok.ln, interp.col)
     if conversion or formato:
-        return ast.FormattedValue(ln=string_tok.ln, col=interp.col, value=expr,
+        return ast.FormattedValue(ln=ln, col=col, value=expr,
                                   conversion=conversion, format_spec=formato or "")
     return expr
+
+
+def _shift_tokens(tokens: List[Token], ln: int, col: int) -> None:
+    """Lleva los tokens de un fragmento a su posicion en el archivo.
+
+    El mini-lex de una interpolacion cuenta desde 1:1 y no cruza lineas: un
+    token en la columna ``c`` del fragmento esta en la ``col + c - 1`` de la
+    linea ``ln``. Se desplazan los TOKENS y no los nodos ya construidos (lo
+    que se hacia antes, poniendolos TODOS en la posicion de la
+    interpolacion): asi lo que el parser copia de fuera del fragmento —el
+    receptor de un ``with`` en ``{.campo}``— conserva su posicion, y una
+    f-string anidada recibe tambien la suya en sus interpolaciones."""
+    for tok in tokens:
+        tok.ln = ln + tok.ln - 1
+        tok.col = col + tok.col - 1
+        value = tok.value
+        if tok.type is TokenType.STRING_LIT and value.is_interpolated:
+            tok.value = StringValue(tuple(
+                Interp(p.expr, col + p.col - 1, ln + (p.ln or 1) - 1)
+                if isinstance(p, Interp) else p
+                for p in value.parts))
 
 
 def separar_formato(texto: str):
@@ -367,20 +489,6 @@ def formato_valido(formato: str) -> bool:
     admita ese formato lo decide la Semantica."""
     import re
     return re.fullmatch(FORMAT_SPEC, formato) is not None
-
-
-def _relocate(node: object, ln: int, col: int) -> None:
-    """Reescribe ``ln``/``col`` de todo el sub-arbol a la posicion real en el
-    archivo (el mini-lex de una interpolacion cuenta desde 1:1)."""
-    if isinstance(node, ast.ASTNode):
-        node.ln = ln
-        node.col = col
-    if is_dataclass(node):
-        for f in fields(node):
-            _relocate(getattr(node, f.name), ln, col)
-    elif isinstance(node, (list, tuple)):
-        for item in node:
-            _relocate(item, ln, col)
 
 
 def _grouping(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
@@ -434,6 +542,68 @@ def _cast(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
     return ast.CastExpr(ln=tok.ln, col=tok.col, type=type_args[0], value=value)
 
 
+def _lambda(cursor: Cursor, ctx: ParserContext) -> ast.Expression:
+    """``"lambda" "(" [ param_list ] ")" "->" type ( ":" expression | block )``.
+
+    Los tipos se escriben SIEMPRE, el de retorno incluido (``-> void`` si no
+    devuelve nada): no hay inferencia, y una lambda no tiene una declaracion
+    aparte donde leerlos.
+
+    Que solo valga como ARGUMENTO de una llamada lo decide la Semantica (y
+    lo explica): aqui se lee en cualquier posicion de expresion, para que el
+    error diga por que no vale ahi y no "token inesperado".
+
+    El cuerpo es una funcion: sus ``break``/``continue`` no salen a un bucle
+    de fuera (no lo hay dentro de la lambda), un ``return`` devuelve de la
+    lambda (tambien dentro de un ``finally`` de fuera) y ``expect`` no vale
+    (es de un ``test``, no de una funcion). Por eso se lee con el contexto de
+    bucles, ``finally`` y pruebas a cero, como el de una ``fn``.
+
+    La forma CORTA es azucar: ``: e`` es ``{ return e; }`` (o ``{ e; }`` con
+    retorno ``void``). Se marca en ``Lambda.short``."""
+    tok = cursor.expect(TokenType.LAMBDA)
+    from ..grammar.functions import parse_lambda_signature
+    params, return_type = parse_lambda_signature(cursor, ctx, tok)
+    saved = (ctx.loop_depth, ctx.finally_loops, ctx.in_test, ctx.expects,
+             ctx.lambda_hides_loop, ctx.lambda_hides_test)
+    ctx.lambda_hides_loop = ctx.lambda_hides_loop or ctx.loop_depth > 0
+    ctx.lambda_hides_test = ctx.lambda_hides_test or ctx.in_test
+    ctx.loop_depth, ctx.finally_loops, ctx.in_test = 0, [], False
+    try:
+        if cursor.match(TokenType.COLON):
+            from .. import pratt
+            with _struct_literals_allowed(ctx):
+                value = pratt.parse_expression(cursor, ctx)
+            if isinstance(return_type, ast.PrimitiveTypeExpr) \
+                    and return_type.name == "void":
+                only: ast.Statement = ast.ExprStmt(ln=value.ln, col=value.col,
+                                                   expr=value)
+            else:
+                only = ast.ReturnStmt(ln=value.ln, col=value.col, value=value)
+            body = ast.Block(ln=value.ln, col=value.col, statements=[only],
+                             azucar="lambda corta: ': e' es '{ return e; }'")
+            short = True
+        elif cursor.check(TokenType.L_BRACE):
+            from ..grammar.block import parse_block
+            # sin el ';' opcional tras la '}': una lambda es una EXPRESION, y
+            # el ';' que siga es de la sentencia que la contiene
+            body = parse_block(cursor, ctx, trailing_semicolon=False)
+            short = False
+        else:
+            got = cursor.peek()
+            raise ParseError.ExpectedTokenError(
+                "tras la firma de una lambda va su cuerpo: ': expresion' (la "
+                "forma corta) o un bloque '{ ...; return ...; }'; se encontro "
+                f"{got.type.name}",
+                line=got.ln, column=got.col,
+            )
+    finally:
+        (ctx.loop_depth, ctx.finally_loops, ctx.in_test, ctx.expects,
+         ctx.lambda_hides_loop, ctx.lambda_hides_test) = saved
+    return ast.Lambda(ln=tok.ln, col=tok.col, params=params,
+                      return_type=return_type, body=body, short=short)
+
+
 PRIMARY_HANDLERS: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Expression]] = {
     TokenType.IDENTIFIER: _identifier,
     TokenType.DOT: lambda c, x: _miembro_del_receptor(c, x),   # '.campo' de un 'with'
@@ -449,6 +619,7 @@ PRIMARY_HANDLERS: Dict[TokenType, Callable[[Cursor, ParserContext], ast.Expressi
     TokenType.SIZEOF: _sizeof,
     TokenType.CAST: _cast,
     TokenType.MOVE: _move,
+    TokenType.LAMBDA: _lambda,
     # 'make' vuelve a ser un IDENTIFIER corriente.
 }
 

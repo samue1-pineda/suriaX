@@ -188,6 +188,44 @@ def test_emit_stage_ante_un_fallo_interno_no_devuelve_exito():
     assert "ICE000" in mensaje and "KeyError" in mensaje, mensaje
 
 
+def test_un_fallo_al_construir_el_indice_no_escapa_del_canal():
+    """``emit_index`` construía el índice FUERA de la guarda del canal: un
+    fallo ahí salía como excepción, y el canal del editor promete no lanzar
+    nunca. Ahora es un ``ICE000`` entre los diagnósticos, con el índice
+    vacío, y los diagnósticos del programa siguen ahí."""
+    from driver import inspect as driver_inspect
+    from src.frontend.semantic import index as modulo_indice
+
+    with tempfile.TemporaryDirectory(prefix="suriax-ice-") as tmp:
+        ruta = _fuente_temporal(tmp, _PROGRAMA.encode())
+        with _sustituido(modulo_indice, "build_index", _lanza):
+            datos = driver_inspect.emit_index(ruta)
+    ices = [d for d in datos["diagnostics"] if d["code"] == "ICE000"]
+    assert len(ices) == 1 and "KeyError" in ices[0]["message"], datos["diagnostics"]
+    assert ices[0]["phase"] == "index"
+    assert datos["symbols"] == [] and datos["references"] == []
+
+
+def test_el_canal_analiza_el_texto_que_recibe_y_no_el_del_disco():
+    """Quien tiene el texto en memoria —un servidor de lenguaje con el
+    buffer del editor— lo pasa como argumento. Antes solo podía darlo por la
+    entrada estándar, que en un servidor es el canal del protocolo."""
+    from driver import inspect as driver_inspect
+
+    with tempfile.TemporaryDirectory(prefix="suriax-ice-") as tmp:
+        ruta = _fuente_temporal(tmp, b"fn main() -> int { return 0; }\n")
+        en_disco = driver_inspect.emit_index(ruta)
+        en_memoria = driver_inspect.emit_index(
+            ruta, source="fn main() -> int { return q; }\n")
+        # un buffer que todavía no existe en disco también vale
+        sin_guardar = driver_inspect.emit_diagnostics(
+            os.path.join(tmp, "nuevo.srcx"),
+            source="fn main() -> int { return 0; }\n")
+    assert [d["code"] for d in en_disco["diagnostics"]] == []
+    assert [d["code"] for d in en_memoria["diagnostics"]] == ["SEM001"]
+    assert sin_guardar["diagnostics"] == [], sin_guardar
+
+
 # --------------------------------------------------------------------------- #
 # lo que NO es un ICE
 # --------------------------------------------------------------------------- #

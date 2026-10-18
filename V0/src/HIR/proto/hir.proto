@@ -13,10 +13,36 @@
 //
 // QUE CAMBIO EN v2 (schema_version == 2). Un POOL de tipos en el Module y
 // nodos que lo referencian por indice ('Expr.type_id' y hermanos) en vez de
-// re-serializar el mismo 'Type' una y otra vez. Es un cambio INCOMPATIBLE
-// -- los tags de los campos inline quedan 'reserved' y el lector rechaza un
-// .phir v1 con un mensaje que dice como regenerarlo -- y esta medido, no
-// supuesto: ver docs/plan_hir_v2.md.
+// re-serializar el mismo 'Type' una y otra vez. Fue el UNICO cambio entre el
+// esquema 1 y el 2, y esta medido, no supuesto: ver docs/plan_hir_v2.md.
+//
+// VERSIONADO Y ROLLBACK AL ESQUEMA 1. Al pasar al 2 los campos inline del 1
+// quedaron 'reserved' y los lectores rechazaban un .phir v1. Hoy esos campos
+// VUELVEN, en sus TAGS ORIGINALES y con el MISMO significado (reutilizar un
+// tag reservado con su significado original es seguro: ningun lector lo leyo
+// nunca como otra cosa). Asi el esquema 1 sigue funcionando:
+//
+//   - el emisor lo escribe con 'python V0/main.py prog.srcx --emit-hir
+//     --hir-schema 1': schema_version = 1, SIN 'Module.types' y con cada tipo
+//     INLINE (por defecto sigue siendo el 2);
+//   - los tres lectores (interprete, VM y web) aceptan {1, 2}. Un v1 se
+//     NORMALIZA al cargarlo: se construye el pool desde los tipos inline y se
+//     rellenan los 'type_id'; desde ahi el camino es el mismo que con el 2.
+//     Cualquier otra version se sigue rechazando (fail-fast).
+//
+// Campos del esquema 1 RECUPERADOS (tag original): Expr.restype = 3,
+// VarDecl.type = 2, Parameter.type = 1, FunctionDecl.return_type = 3,
+// Field.type = 1. Campos de tipo NACIDOS DESPUES del esquema 1, con su gemelo
+// inline en un tag NUEVO para que el esquema 1 "adaptado a hoy" exprese todo
+// el lenguaje sin pool: LambdaExpr.return_type = 5, EnumItem.payload_types =
+// 4. ('SizeofExpr.type', 'CastExpr.type', 'CatchClause.type' y la
+// SymbolTable siempre fueron inline: no cambian.)
+//
+// En un .phir v2 los campos inline NO se escriben ni se leen; en uno v1 los
+// 'type_id' y el pool NO se escriben, y un lector que los encuentre lo
+// rechaza (un v1 con pool es un archivo mal formado, no "casi un v2"). El
+// esquema 1 tal como era en el commit 8b8e65e esta copiado, como referencia
+// historica, en dev/diff/schema/hir_v1_original.proto.
 //
 // ALCANCE, que no cambió entre v1 y v2:
 //  - SIN REGIONES: 'region'/'shrd', 'make T in r' y 'x at r' nunca viajaron
@@ -82,7 +108,8 @@ package suriax.hir.v0;
 message Module {
   // versión del ESQUEMA (no del compilador). Se incrementa ante cualquier
   // cambio incompatible; el lector valida antes de tocar nada más.
-  uint32 schema_version = 1;   // == 2 (ver SCHEMA_VERSION en emmit_IR.py)
+  uint32 schema_version = 1;   // 2 por defecto (SCHEMA_VERSION en emmit_IR.py);
+                               // 1 con '--hir-schema 1' (tipos inline, sin pool)
   string source_file = 2;      // ruta del .srcx de origen (diagnósticos)
 
   SymbolTable symbols = 3;
@@ -107,6 +134,8 @@ message Module {
   // La SymbolTable NO participa: sus 'Type' son inline. Es el 4% de los
   // bytes y la parte que una persona lee al depurar; plegarla habria
   // costado legibilidad sin ganancia medible.
+  //
+  // Solo en el esquema 2. Un .phir v1 no lo lleva: sus tipos van inline.
   repeated Type types = 6;
 
   // NOTA de alcance (HTIMS): el nombre del proyecto y la lista de
@@ -141,12 +170,41 @@ enum TypeKind {
   ERROR = 11;    // 'error T' (inner) o 'error' solo: union valor-o-error
   BYTE = 12;     // entero SIN signo de 8 bits (0..255). Un bloque de 'byte'
                  // es compacto en la VM: un byte por celda
+  // TIPO FUNCION ('fn(int, str) -> bool'): el de una funcion con nombre
+  // usada como VALOR. Reusa los campos que ya tiene 'Type', sin añadir
+  // ninguno: 'args' son los tipos de los PARAMETROS en orden (puede no haber
+  // ninguno) e 'inner' el del RETORNO (siempre presente; VOID si no devuelve
+  // nada). Es el mismo convenio que include/types_ast.py.
+  //
+  // Donde aparece: en el pool, como tipo de una variable/parametro/campo, y
+  // como 'type_id' de la expresion que produce el valor:
+  //   - 'Identifier' con el nombre de una funcion de la unidad;
+  //   - 'MemberAccess' sobre un modulo ('lib.f'): el obj es el Namespace;
+  //   - 'MemberAccess' sobre un TIPO ('Punto.distancia'): un metodo de
+  //     '@impl'. Su 'obj' lleva el tipo META (no es un valor que evaluar) y
+  //     el dueño del metodo es el nucleo nominal de args[0] (el receptor).
+  // Una llamada a traves de un valor es un 'Call' corriente: su 'callee' es
+  // cualquier Expr cuyo tipo es FUNCTION_TYPE (o NULLABLE de FUNCTION_TYPE) y su 'hook'
+  // va vacio. Sin capturas: el valor es la funcion y nada mas.
+  //
+  // Cambio ADITIVO (schema_version sigue en 2): un .phir sin funciones como
+  // valores no cambia ni un byte. Un lector que no conoce el 13 lo ve como
+  // un kind desconocido; el contrato (A-3) es RECHAZARLO con su codigo, nunca
+  // ejecutar otra cosa.
+  //
+  // Se llama FUNCTION_TYPE y no FUNCTION porque los valores de un enum de
+  // protobuf son hermanos de su tipo (ambito del paquete, como en C++):
+  // 'SymbolKind.FUNCTION' ya usa el nombre, y repetirlo hace que protoc
+  // rechace el archivo y que el modelo C++ generado no compile. El emisor
+  // traduce el 'TypeKind.FUNCTION' de include/types_ast.py a este nombre.
+  FUNCTION_TYPE = 13;
 }
 
 message Type {
   TypeKind kind = 1;
   string name = 2;   // solo NOMINAL
   Type inner = 3;    // POINTER / NULLABLE / ERROR ('error' solo -> inner ausente)
+                     // FUNCTION_TYPE: el tipo de RETORNO
   // REGLA DE PUNTEROS (const-correctness): 'ptr mutable T' permite escribir
   // a través del puntero; 'ptr T' es solo lectura. Participa de la igualdad
   // del tipo; la única coerción segura es SOLTAR mutabilidad
@@ -156,6 +214,7 @@ message Type {
   // Participan de la identidad del tipo: 'Vector<int>' y 'Vector<str>' son
   // tipos distintos, y el consumidor no los puede confundir. Espejo de
   // types_ast.Type.args.
+  // FUNCTION_TYPE: los tipos de los PARAMETROS, en orden.
   repeated Type args = 5;
 }
 
@@ -205,6 +264,12 @@ enum HookKind {
                // 'hash(x)'. Sobre int/bool/char/str es NATIVO (dueño: el
                // primitivo) y sobre un parametro de tipo lo decide el backend
                // con el tipo concreto
+  CMP = 13;    // __cmp__: fn __cmp__(T ptr a, T ptr b) -> int — se dispara con
+               // 'a < b', '<=', '>', '>=' entre nominales (dueño: primer
+               // parámetro). Negativo: 'a' va antes; 0: empatan; positivo: va
+               // después. Como EQ, ninguna expresión lo nombra: el backend lo
+               // busca por el tipo CONCRETO del operando. Valor nuevo y
+               // aditivo: un lector viejo no lo encuentra en ninguna expresión
 
   // hook DECLARADO POR EL USUARIO (HTIMS). No tiene número propio porque su
   // identidad es el NOMBRE ('hook_name'), no un valor del enum: el
@@ -292,8 +357,11 @@ message Expr {
   // plegarlo no movió trabajo a nadie.
   uint32 type_id = 4;
 
-  reserved 3;   // 'Type restype' inline: v1
-  reserved "restype";
+  // ESQUEMA 1: el mismo tipo, INLINE. Tag y significado originales (era
+  // 'reserved' en el 2 y volvio para el rollback, ver la cabecera). Ausente
+  // = sin tipo anotado, como 'type_id = 0'. Excluyente con 'type_id': cada
+  // .phir usa uno de los dos segun su 'schema_version'.
+  Type restype = 3;
 
   oneof node {
     Literal literal = 10;
@@ -310,6 +378,7 @@ message Expr {
     CastExpr cast_expr = 24;
     StructLiteral struct_literal = 25;
     MoveExpr move_expr = 26;
+    LambdaExpr lambda_expr = 27;
   }
 
   reserved 16, 20, 21;  // Placement ('x at r') / MakeExpr / AllocExpr
@@ -389,6 +458,40 @@ message Call {
 // produce un valor y la otra no.
 message MoveExpr { Expr operand = 1; }
 
+// 'lambda (int ptr x) -> bool: x[0] > umbral': una funcion SIN nombre, con
+// sus tipos escritos, que solo existe como ARGUMENTO de una llamada en un
+// parametro de tipo funcion (la Semantica lo garantiza: SEM050/SEM051). Su
+// tipo (Expr.type_id) es el 'fn(A) -> R' que se comprobo contra ese
+// parametro.
+//
+// Lo que la hace distinta de una funcion con nombre es que LEE el entorno:
+// los locales y parametros de quien la escribe (las CAPTURAS), por
+// prestamo y solo para leer. Eso es seguro sin analizar vidas porque no
+// escapa: muere antes de que termine la llamada que la recibe. Un consumidor
+// la ejecuta como un cuerpo que ve el marco donde se evaluo la expresion; el
+// interprete lo hace asi. La VM la RECHAZA al bajar a MIR (VM004) y el
+// target web en la contencion (WEB104), nunca otra cosa.
+//
+// - 'params', 'return_type_id': la firma escrita (como en FunctionDecl).
+// - 'body': siempre un bloque. La forma corta (': e') llega ya como
+//   '{ return e; }' (o '{ e; }' con retorno void); sus drops son los de un
+//   cuerpo de funcion (sus parametros que posee y sus locales).
+// - 'captures': los nombres del entorno que lee, en orden de primer uso. Es
+//   informativo (el marco ya los tiene): lo implicito tiene que verse.
+//
+// Se llama 'LambdaExpr' y no 'Lambda' para que ningun lector tenga que
+// esquivar la palabra reservada 'lambda' de Python.
+message LambdaExpr {
+  repeated Parameter params = 1;
+  uint32 return_type_id = 2;   // indice en 'Module.types' (esquema 2)
+  Block body = 3;
+  repeated string captures = 4;
+  // ESQUEMA 1 "adaptado a hoy": el retorno INLINE. La lambda nacio despues
+  // del esquema 1, asi que este gemelo de 'return_type_id' lleva un tag
+  // NUEVO (no hay tag original que recuperar).
+  Type return_type = 5;
+}
+
 message Index        { Expr obj = 1; Expr index = 2; }
 message MemberAccess { Expr obj = 1; string member = 2; }
 message SizeofExpr   { Type type = 1; HookRef hook = 2; }
@@ -438,6 +541,7 @@ message Stmt {
     TypeDecl type_decl = 23;
     ThrowStmt throw_stmt = 24;
     TryStmt try_stmt = 25;
+    ExpectStmt expect_stmt = 26;
   }
 
   reserved 12;  // RegionStmt: del modelo por regiones, retirado
@@ -481,9 +585,7 @@ message VarDecl {
   string name = 3;
   Expr value = 4;        // ausente si no hay inicializador
   uint32 type_id = 5;    // indice en 'Module.types' (v2)
-
-  reserved 2;
-  reserved "type";
+  Type type = 2;         // ESQUEMA 1: inline (tag original, recuperado)
 }
 
 // '[qualifier] "type" IDENTIFIER [ "=" expr ];' — tipo nominal OPACO
@@ -506,7 +608,21 @@ message IfStmt {
 
 message WhileStmt { Expr condition = 1; Block body = 2; }
 
-message CaseArm { Expr pattern = 1; Stmt body = 2; }
+message CaseArm {
+  Expr pattern = 1;
+  Stmt body = 2;
+  // 'case v' en un 'match' sobre un 'T?': el patron NO se compara, LIGA. Es
+  // un 'Identifier' (el nombre, con el tipo 'T' en su 'type_id') que solo
+  // encaja si el sujeto no es null, y dentro de la rama 'v' es el contenido
+  // PRESTADO del sujeto (como el payload que liga 'case E.A(x)').
+  //
+  // Cambio ADITIVO (schema_version sigue en 2): sin 'case v' el .phir no
+  // cambia ni un byte. Un lector que no conoce el campo veria 'case v' como
+  // comparar con una variable 'v': el contrato (A-3) es RECHAZARLO de forma
+  // explicita, nunca ejecutar esa comparacion (la VM lo hace al bajar el
+  // 'match' a MIR; el target web ya rechaza todo sujeto 'T?').
+  bool binds = 3;
+}
 message MatchStmt { Expr subject = 1; repeated CaseArm cases = 2; }
 
 message ReturnStmt {
@@ -525,6 +641,15 @@ message MoveStmt { Expr target = 1; }
 
 // manejo de errores por EXCEPCIONES:
 message ThrowStmt { Expr value = 1; }  // inicia la propagación
+// 'expect (condition) [body]': la comprobación de un 'test'. Si no se cumple,
+// la prueba TERMINA como fallida: no es una excepción (ningún 'catch' la
+// atrapa; los 'finally' que atraviesa sí corren). 'body' ausente = sin bloque.
+// 'text' es la condición como se escribió: el mensaje del fallo la cita.
+message ExpectStmt {
+  Expr condition = 1;
+  Block body = 2;
+  string text = 3;
+}
 // Una rama 'catch'. 'type' presente = la rama SOLO atrapa valores de ese
 // tipo; ausente = atrapa cualquiera. El consumidor prueba las ramas EN ORDEN
 // y se queda con la primera que encaja; si ninguna encaja, el valor sigue
@@ -595,14 +720,17 @@ message Decl {
 message TestDecl {
   string name = 1;
   Block body = 2;
+  // cláusulas opcionales (ausente = no escrita). 'errfinally' corre SOLO si
+  // la prueba falló; 'finally_block', siempre y después. Cada una es un
+  // bloque con su propio ámbito.
+  Block errfinally = 3;
+  Block finally_block = 4;
 }
 
 message Parameter {
   string name = 2;
   uint32 type_id = 3;    // indice en 'Module.types' (v2)
-
-  reserved 1;
-  reserved "type";
+  Type type = 1;         // ESQUEMA 1: inline (tag original, recuperado)
 }
 
 message FunctionDecl {
@@ -620,16 +748,13 @@ message FunctionDecl {
   // monomorfizar (el backend C++ baja una copia por tipo concreto).
   repeated string type_params = 8;
 
-  reserved 3;             // 'Type return_type' inline: v1
-  reserved "return_type";
+  Type return_type = 3;   // ESQUEMA 1: inline (tag original, recuperado)
 }
 
 message Field {
   string name = 2;
   uint32 type_id = 3;    // indice en 'Module.types' (v2)
-
-  reserved 1;
-  reserved "type";
+  Type type = 1;         // ESQUEMA 1: inline (tag original, recuperado)
 }
 message StructDecl {
   string name = 1;
@@ -649,9 +774,24 @@ message StructDecl {
 message EnumItem {
   string name = 1;
   Expr value = 2;
-  repeated uint32 payload_type_ids = 3;  // indices en Module.types
+  repeated uint32 payload_type_ids = 3;  // indices en Module.types (esquema 2)
+  // ESQUEMA 1 "adaptado a hoy": los mismos tipos INLINE, en el mismo orden.
+  // El payload nacio despues del esquema 1: tag NUEVO, no recuperado.
+  repeated Type payload_types = 4;
 }
-message EnumDecl { string name = 1; repeated EnumItem items = 2; }
+message EnumDecl {
+  string name = 1;
+  repeated EnumItem items = 2;
+  // PARAMETROS DE TIPO de un enum GENERICO, en ORDEN ('enum Res<T, E>' ->
+  // ["T", "E"]): el payload los nombra ('Ok(T)' es un NOMINAL "T") y una
+  // instancia ('Res<int, str>', NOMINAL con 'args') dice con que se
+  // sustituyen, igual que 'StructDecl.type_params'. Cambio ADITIVO: un enum
+  // que no es generico no cambia ni un byte. Un lector que no lo conoce
+  // leeria 'T' como un tipo sin declarar: el contrato (A-3) es RECHAZARLO
+  // (la VM lo hace con VM002; el target web ya rechaza todo enum con
+  // payload).
+  repeated string type_params = 3;
+}
 
 message ExternBlock {
   string target = 1;  // hoy solo "cpp"

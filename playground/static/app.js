@@ -585,8 +585,11 @@ function verSimbolos(datos) {
 
   (async () => {
     try {
+      // La versión EXACTA, no '@11': con un rango, el código de un tercero
+      // que entra en la página cambia el día que publican otra, sin que
+      // nadie aquí lo haya visto. Subirla es editar esta línea a propósito.
       const mermaid = (await import(
-        "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")).default;
+        "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs")).default;
       // La fuente es la SANS de la página, no la monoespaciada del editor, y
       // no por gusto: Mermaid decide el ancho de cada etiqueta midiéndola con
       // SU tipografía y la dibuja con la que se le pase. Una pila monoespaciada
@@ -685,10 +688,27 @@ function verError(diag) {
 function verFallo(datos, fase) {
   const caja = document.createElement("div");
   caja.className = "panel-errores";
+  // Un fallo INTERNO no es un error del programa, y si se enseñara igual
+  // que uno, quien escribió el programa se pondría a buscar qué hizo mal.
+  if (datos?.status === "error_interno") {
+    caja.classList.add("interno");
+    const rotulo = document.createElement("p");
+    rotulo.className = "rotulo-interno";
+    rotulo.textContent = "FALLO INTERNO — no es un error de tu programa";
+    caja.appendChild(rotulo);
+  }
   const intro = document.createElement("p");
   intro.className = "intro";
   intro.textContent = datos?.reason ?? "esta fase no produjo nada";
   caja.appendChild(intro);
+  if (datos?.detail) {
+    // lo que el proceso escribió al fallar: es lo que hay que copiar en el
+    // reporte, así que va tal cual y seleccionable.
+    const detalle = document.createElement("pre");
+    detalle.className = "detalle-interno";
+    detalle.textContent = datos.detail;
+    caja.appendChild(detalle);
+  }
 
   const diags = diagnosticosDe(fase, datos);
   // Los dos motivos por los que un programa no llega al target dicen cosas
@@ -877,7 +897,10 @@ function pintarPestanas() {
     btn.type = "button";
     btn.role = "tab";
     btn.textContent = fase.titulo;
+    btn.id = `pestana-${fase.id}`;
     btn.setAttribute("aria-selected", String(fase.id === faseActiva));
+    btn.setAttribute("aria-controls", "contenido");
+    if (fase.id === faseActiva) contenido.setAttribute("aria-labelledby", btn.id);
     if (ultimo && !datos?.ok) btn.classList.add("sin-datos");
     if (ultimo && diagnosticosDe(fase.id, datos).length > 0) {
       btn.classList.add("con-errores");
@@ -895,7 +918,9 @@ function pintarPestanas() {
         sub.type = "button";
         sub.className = "vista";
         sub.textContent = vista.titulo;
-        sub.setAttribute("aria-selected",
+        // no es una pestaña (no tiene su propio panel): es un botón de dos
+        // posiciones, y 'aria-pressed' es lo que lo dice.
+        sub.setAttribute("aria-pressed",
                          String((vistaDe[fase.id] ?? fase.vistas[0].id) === vista.id));
         sub.addEventListener("click", () => {
           vistaDe[fase.id] = vista.id;
@@ -907,6 +932,20 @@ function pintarPestanas() {
     }
   }
 }
+
+// Con el teclado, las flechas pasan de una pestaña a la siguiente: es lo
+// que espera quien no usa ratón (patrón de pestañas de WAI-ARIA).
+pestanas.addEventListener("keydown", (ev) => {
+  if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+  const lista = [...pestanas.querySelectorAll('[role="tab"]')];
+  const actual = lista.indexOf(document.activeElement);
+  if (actual < 0) return;
+  ev.preventDefault();
+  const paso = ev.key === "ArrowRight" ? 1 : -1;
+  const destino = FASES[(actual + paso + FASES.length) % FASES.length];
+  faseActiva = destino.id;
+  pintar().then(() => document.getElementById(`pestana-${destino.id}`)?.focus());
+});
 
 /** El grafo visible, si la fase actual usa uno (la barra lo maneja). */
 let grafoActivo = null;
@@ -1035,10 +1074,26 @@ async function compilar({ debug = false } = {}) {
         ? `${delTarget.length} construcción(es) NO SOPORTADAS por el target web`
         : `no se pudo compilar para el target web (${delTarget.length})`);
     }
+    // El estado de la respuesta manda sobre la cuenta de diagnósticos: un
+    // fallo interno llega SIN diagnósticos (no es un error del programa), y
+    // "Compilado sin diagnósticos" sería justo lo contrario de lo que pasó.
+    const proveedores = datos.providers ?? {};
+    const interno = datos.status === "error_interno";
+    if (interno) {
+      const quien = proveedores.compiler?.status === "error_interno"
+        ? "compilador" : "target web";
+      partes.unshift(`FALLO INTERNO del ${quien}: no es un error de tu programa`);
+    } else if (proveedores.web?.status === "no_disponible"
+               && proveedores.compiler?.status === "ok") {
+      partes.push("WebAssembly no disponible en este servidor");
+    }
+    const hayDiagnosticos = errores || avisos || delTarget.length;
     estadoTexto.textContent = partes.length
-      ? partes.join(" · ") + " — cada pestaña marcada (●) lo explica en su sitio"
+      ? partes.join(" · ") + (hayDiagnosticos
+          ? " — cada pestaña marcada (●) lo explica en su sitio"
+          : " — su pestaña dice por qué")
       : "Compilado sin diagnósticos.";
-    if (errores || delTarget.length) estado.classList.add("error");
+    if (errores || delTarget.length || interno) estado.classList.add("error");
 
     // la fase de depuración solo existe si se pidió: no se enseña una
     // pestaña vacía a quien no la usa.

@@ -1,0 +1,16 @@
+// 'print(x)' de un PRIMITIVO: se escribe como un f-string escribe '{x}', sin
+// salto de linea ("7 2.5 true z" y main devuelve 0). El target web lo
+// traduce como sus 'print' del host.
+// Se regenera con: python V0/main.py primitive_print.srcx --emit-hir primitive_print.phir
+
+fn main() -> int {
+    var float f = 2.5;
+    print(7);
+    print(" ");
+    print(f);
+    print(" ");
+    print(true);
+    print(" ");
+    print('z');
+    return 0;
+}

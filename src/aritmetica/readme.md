@@ -42,8 +42,8 @@ Encontrado escribiéndolo, no leyendo el compilador:
 
 | límite | consecuencia aquí |
 |---|---|
-| **Un submódulo no podía importar a un hermano de su paquete** *(corregido en la 0.3.1)* | El linker buscaba el paquete empezando en la carpeta del submódulo, que está dentro de él, y no lo encontraba (`SEM009`); el propio `calc.srcx` tampoco corría desde aquí. Por eso `tokens`, `scanner` y `parser` están en **un solo archivo** en vez de en tres, que es como los tiene la V0. Ya se pueden separar. |
+| **Un submódulo no podía importar a un hermano de su paquete** *(corregido en la 0.4.1)* | El linker buscaba el paquete empezando en la carpeta del submódulo, que está dentro de él, y no lo encontraba (`SEM009`); el propio `calc.srcx` tampoco corría desde aquí. Por eso `tokens`, `scanner` y `parser` están en **un solo archivo** en vez de en tres, que es como los tiene la V0. Ya se pueden separar. |
 | **`error` es palabra reservada** | El campo del parser se llama `fallo`. Razonable —`error T` es un tipo—, pero el diagnóstico dice *"se esperaba un nombre, se encontro ERRORTYPE"* y no que el nombre esté reservado. |
 | **`.name` de un enum es constante** | Se resuelve al compilar, así que vale sobre `TType.PLUS.name` pero no sobre una variable: `nombre_de` tiene que escribir el `match` de diez ramas. |
-| **Sin punteros a función** | Una tabla de precedencias dirigida por datos no se puede escribir; la precedencia queda codificada en qué nivel llama a cuál (que aquí es legible, pero no escala a un lenguaje entero). |
-| **Sin E/S de ficheros** | El fuente a analizar se escribe en el programa. Leer un `.srcx` desde disco todavía no es posible. |
+| **Sin punteros a función** *(resuelto en la 0.4.1)* | Una tabla de precedencias dirigida por datos no se podía escribir; la precedencia quedó codificada en qué nivel llama a cuál (que aquí es legible, pero no escala a un lenguaje entero). Hoy las funciones con nombre son valores (`fn(A) -> R`) y hay lambdas que no escapan: la tabla ya se puede escribir. |
+| **Sin E/S de ficheros** *(resuelto en la 0.4.1)* | El fuente a analizar se escribe en el programa. Hoy `sistema.archivos.leer` lee un archivo y `sistema.proceso.argumento` da los argumentos del programa. |

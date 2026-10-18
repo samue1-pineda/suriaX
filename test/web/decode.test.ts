@@ -8,7 +8,14 @@ import assert from "node:assert/strict";
 
 import { HIRLoadError, decodeModule, loadModule } from "../../web/src/hir/decode.ts";
 import { Image, Unit, linkImage, resolveRelative } from "../../web/src/hir/link.ts";
-import { HookKind, SymbolKind, TypeKind, formatType, typeKey } from "../../web/src/hir/schema.ts";
+import {
+  HookKind,
+  SymbolKind,
+  TypeKind,
+  formatType,
+  typeKey,
+  type Type,
+} from "../../web/src/hir/schema.ts";
 import { Writer, buildModule, fixture, fixturePath, fixtureResolver } from "./helpers.ts";
 
 test("fixture real: cabecera, símbolos e items", () => {
@@ -185,4 +192,47 @@ test("typeKey distingue lo que el sistema de tipos distingue", () => {
   assert.notEqual(typeKey(vecInt), typeKey(vecStr),
                   "'Vector<int>' y 'Vector<str>' son tipos distintos");
   assert.equal(formatType(vecInt), "Vector<int>");
+});
+
+// --------------------------------------------------------------------------- //
+// funciones como valores y métodos homónimos
+// --------------------------------------------------------------------------- //
+
+test("fixture real: el tipo función se lee y se escribe 'fn(A) -> R'", () => {
+  const module = loadModule(fixture("funciones_valor.phir"), "funciones_valor.phir");
+  const aplica = module.items.find(
+    (d) => d.node.case === "function" && d.node.fn.name === "aplica");
+  assert.ok(aplica !== undefined && aplica.node.case === "function");
+  const f = aplica.node.fn.params[0]!.type!;
+  assert.equal(f.kind, TypeKind.FUNCTION_TYPE);
+  assert.equal(f.args.length, 1);
+  assert.equal(f.inner!.kind, TypeKind.INT);
+  assert.equal(formatType(f), "fn(int) -> int");
+});
+
+test("formatType: un tipo función envuelto va entre paréntesis (espejo de pretty.py)", () => {
+  const t = (kind: TypeKind, inner: Type | null = null, args: Type[] = [], mut = false,
+             name = ""): Type => ({ kind, name, inner, mut, args });
+  const fn = t(TypeKind.FUNCTION_TYPE, t(TypeKind.INT), [t(TypeKind.INT), t(TypeKind.STR)]);
+  assert.equal(formatType(fn), "fn(int, str) -> int");
+  assert.equal(formatType(t(TypeKind.FUNCTION_TYPE, t(TypeKind.VOID))), "fn() -> void");
+  assert.equal(formatType(t(TypeKind.NULLABLE, fn)), "(fn(int, str) -> int)?");
+  assert.equal(formatType(t(TypeKind.POINTER, fn, [], true)), "(fn(int, str) -> int) ptr mutable");
+  assert.equal(formatType(t(TypeKind.ERROR, fn)), "error (fn(int, str) -> int)");
+  // dentro de los argumentos de un genérico o de otra función, sin paréntesis
+  assert.equal(formatType(t(TypeKind.NOMINAL, null, [fn], false, "Caja")),
+               "Caja<fn(int, str) -> int>");
+  assert.equal(formatType(t(TypeKind.FUNCTION_TYPE, fn, [fn])),
+               "fn(fn(int, str) -> int) -> fn(int, str) -> int");
+});
+
+test("un método de '@impl' de nombre llano no pisa a la 'fn' homónima del módulo", () => {
+  // el método va DESPUÉS de la función en el fuente: con 'Map.set' a secas
+  // quedaba el último declarado, que es el método
+  const unit = new Unit("", "metodo_homonimo.phir",
+                        loadModule(fixture("metodo_homonimo.phir"), "metodo_homonimo.phir"));
+  const fn = unit.functions.get("distancia");
+  assert.ok(fn !== undefined);
+  assert.equal(fn.dunder, "");
+  assert.equal(fn.params[0]!.type!.kind, TypeKind.INT);
 });

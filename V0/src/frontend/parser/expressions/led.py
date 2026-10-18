@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     import ParseError  # type: ignore
 
 _BINARY_OPS: Dict[TokenType, str] = {
+    TokenType.NULL_COALESCE: "??",
     TokenType.OR: "or",
     TokenType.AND: "and",
     TokenType.EQUAL: "==",

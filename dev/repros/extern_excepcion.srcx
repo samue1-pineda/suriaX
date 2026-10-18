@@ -1,0 +1,11 @@
+#extern cpp{
+#include <stdexcept>
+extern "C" long long lanza(long long n) { throw std::runtime_error("c++"); }
+}
+#from io #import stdp
+fn lanza(int n) -> int;
+fn main() -> int {
+    try { stdp.println(f"{lanza(1)}"); } catch (e) { stdp.println("atrapado"); };
+    stdp.println("despues");
+    return 0;
+}

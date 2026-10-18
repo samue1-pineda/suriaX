@@ -1,0 +1,461 @@
+// =========================================================================
+// hir.proto — esquema del HIR de suriaX (v1, Fase 5)
+//
+// El HIR es la frontera entre el frontend Python y sus DOS consumidores:
+// el backend C++ (MIR -> LLVM IR) y el intérprete tree-walk (ver
+// runtime/interpreter/ARQUITECTURA.md). Serializa DOS cosas:
+//
+//   1. el AST-tipado VALIDADO (la salida de la fase Semántica, con el
+//      'restype' de cada expresión anotado en sitio), y
+//   2. la SymbolTable persistente (símbolos globales + hooks de tipo),
+//
+// exactamente las dos salidas que 'semantic.analyze()' produce hoy.
+//
+// ALCANCE DE v1 (schema_version == 1):
+//  - SIN RBMM: 'region'/'shrd', 'make T in r' y 'x at r' NO viajan. El
+//    emisor Python los RECHAZA fail-fast (HIR005) en lugar de degradarlos
+//    en silencio. Sus tags quedan 'reserved' para reintroducirlos en una
+//    versión futura sin romper el esquema.
+//  - move-semantics SÍ viaja: 'MoveStmt' y 'Symbol.moved_at' — el
+//    intérprete hace cumplir use-after-move EN RUNTIME (los caminos que el
+//    análisis estático conservador no ve), igual que hará el MIR.
+//  - 'alloc' dejó de existir en el lenguaje (la reserva cruda la aporta
+//    una librería): su tag también queda 'reserved'.
+//  - Reglas de punteros SÍ viajan, en dos lugares:
+//      * en el TIPO: 'Type.mut' distingue 'ptr mutable T' (escritura a
+//        través del puntero) de 'ptr T' (solo lectura) — participa de la
+//        identidad del tipo, igual que en include/types_ast.py;
+//      * en el NODO: '&x' es un mensaje propio (AddrOf) con la mutabilidad
+//        YA RESUELTA por la Semántica (binding 'var' -> mut, 'const' ->
+//        no-mut). Los consumidores despachan por caso, nunca comparando
+//        strings de operadores.
+//
+// Decisiones de diseño (justificación completa en PROTOBUF_BRIDGE.md):
+//  - un solo 'oneof' por categoría (Expr/Stmt/Decl) en vez de 'Any':
+//    despacho O(1) por 'case' en C++, sin reflexión ni registry.
+//  - 'Type' plano con kind + inner recursivo: espejo 1:1 de
+//    include/types_ast.py (TypeKind/Type).
+//  - los hooks viajan como referencias por nombre (owner + kind), no como
+//    punteros a nodos: el lector los re-enlaza contra su propia tabla en
+//    O(1). Cero dependencia del layout de memoria de Python.
+//  - 'schema_version' explícito: el lector RECHAZA versiones que no conoce
+//    en vez de mal-interpretarlas (fail-fast).
+// =========================================================================
+
+syntax = "proto3";
+
+package suriax.hir.v0;
+
+// ---------------------------------------------------------------------- //
+// raíz
+// ---------------------------------------------------------------------- //
+
+message Module {
+  // versión del ESQUEMA (no del compilador). Se incrementa ante cualquier
+  // cambio incompatible; el lector valida antes de tocar nada más.
+  uint32 schema_version = 1;   // == 1
+  string source_file = 2;      // ruta del .srcx de origen (diagnósticos)
+
+  SymbolTable symbols = 3;
+  repeated Decl items = 4;     // Program.items validado, en orden
+
+  // unidades .libsrx importadas: cada una compila a SU PROPIO .phir (los
+  // exports NO se re-embeben aquí — Symbol IMPORT viaja opaco). El
+  // consumidor (module linker del intérprete / lector C++) resuelve 'phir'
+  // RELATIVO al directorio de este archivo y liga las unidades.
+  repeated LibraryRef libraries = 5;
+}
+
+message LibraryRef {
+  string alias = 1;  // nombre público ('IO'): el mismo del '#export'
+  string phir = 2;   // archivo de la unidad ('IO.phir'), relativo a este .phir
+}
+
+// ---------------------------------------------------------------------- //
+// tipos resueltos — espejo de include/types_ast.py
+// ---------------------------------------------------------------------- //
+
+enum TypeKind {
+  TYPE_UNSPECIFIED = 0;  // proto3 exige un 0; equivale a "sin tipo" (null)
+  VOID = 1;
+  BOOL = 2;
+  INT = 3;
+  FLOAT = 4;
+  CHAR = 5;
+  STR = 6;
+  POINTER = 7;   // 'inner' = tipo apuntado; 'mut' = escribible a través de él
+  NULLABLE = 8;  // 'inner' = tipo envuelto
+  NOMINAL = 9;   // 'name'  = struct/enum/type por nombre (tipado nominal)
+  META = 10;     // 'type': el tipo de un TIPO ('const type int8;')
+  ERROR = 11;    // 'error T' (inner) o 'error' solo: union valor-o-error
+}
+
+message Type {
+  TypeKind kind = 1;
+  string name = 2;   // solo NOMINAL
+  Type inner = 3;    // POINTER / NULLABLE / ERROR ('error' solo -> inner ausente)
+  // REGLA DE PUNTEROS (const-correctness): 'ptr mutable T' permite escribir
+  // a través del puntero; 'ptr T' es solo lectura. Participa de la igualdad
+  // del tipo; la única coerción segura es SOLTAR mutabilidad
+  // (ptr mutable T -> ptr T), nunca ganarla. Espejo de types_ast.Type.mut.
+  bool mut = 4;      // solo POINTER
+}
+
+// ---------------------------------------------------------------------- //
+// tabla de símbolos persistente — espejo de semantic/symbol_table.py
+// ---------------------------------------------------------------------- //
+
+enum SymbolKind {
+  SYMBOL_UNSPECIFIED = 0;
+  FUNCTION = 1;
+  STRUCT = 2;
+  ENUM = 3;
+  ENUM_ITEM = 4;
+  PARAM = 5;
+  VAR = 6;
+  FIELD = 7;
+  IMPORT = 8;
+  HOOK = 10;
+  TYPE = 11;    // tipo nominal OPACO declarado con 'type' (ast_nodes.TypeDecl)
+
+  reserved 9;   // REGION: retirado de v1 junto con RBMM
+  reserved "REGION";
+}
+
+enum HookKind {
+  HOOK_UNSPECIFIED = 0;
+  FREE = 1;    // __free__:   fn __free__(T ptr x) -> void
+  MAKE = 2;    // __make__:   fn __make__(...) -> T ptr (sin disparador en v1:
+               // 'make T in r' es RBMM; el hook igual viaja si está declarado)
+  SIZEOF = 3;  // __sizeof__: fn __sizeof__(T ptr x) -> int
+  PRINT = 4;   // __print__:  fn __print__(T ptr x) -> void
+  LEN = 5;     // __len__:    fn __len__(T ptr x) -> int
+  CAST = 6;    // __cast__:   fn __cast__(X x) -> T — dueño: el lado NOMINAL
+               // de la firma; se dispara con 'cast<T>(x)'
+  INDEX = 7;   // __index__:  fn __index__(T ptr x, int i) -> Elem — se dispara
+               // con 'v[i]' sobre un tipo nominal (dueño: primer parámetro)
+  INDEX_SET = 8; // __index_set__: fn __index_set__(T ptr mutable x, int i, Elem v)
+               // -> void — se dispara con 'v[i] = x' (dueño: primer parámetro)
+  EQ = 9;      // __eq__: fn __eq__(T ptr a, T ptr b) -> bool — se dispara con
+               // 'a == b' entre nominales (dueño: primer parámetro)
+}
+
+message Symbol {
+  string name = 1;
+  SymbolKind kind = 2;
+  uint32 ln = 3;
+  uint32 col = 4;
+  Type type = 5;              // retorno para FUNCTION/HOOK; tipo del binding si VAR/...
+  bool mutable = 6;
+  uint32 moved_at = 8;                        // línea del 'move' estático (0 = nunca)
+  repeated Type param_types = 9;              // FUNCTION/HOOK
+  // STRUCT: campos | ENUM: items. Un IMPORT viaja OPACO (sin members): sus
+  // exports viven en el .phir de su propia unidad (Module.libraries).
+  map<string, Symbol> members = 10;
+  HookKind hook_kind = 11;                    // solo kind == HOOK
+  string hook_owner = 12;                     // idem
+
+  reserved 7, 13;  // region / shared: RBMM, fuera de v1
+  reserved "region", "shared";
+}
+
+message HookEntry {
+  string owner_type = 1;  // nombre nominal dueño ("Punto")
+  HookKind kind = 2;
+  Symbol symbol = 3;
+}
+
+message SymbolTable {
+  // scope GLOBAL completo; los scopes de bloque no sobreviven a la fase
+  // Semántica (cada lector reconstruye los suyos al recorrer los cuerpos).
+  map<string, Symbol> types = 1;   // namespace de TIPOS (struct/enum/type)
+  map<string, Symbol> values = 2;  // namespace de VALORES (fn/var/import/enum items)
+  repeated HookEntry hooks = 3;    // clave compuesta (owner,kind): no cabe en un map
+
+  // TABLA DE CONVERSIONES (__cast__): un tipo puede declarar VARIAS
+  // (int->int8, int8->int, str->Estado...). La clave del par es DERIVABLE
+  // de la firma del Symbol: origen = param_types[0], destino = type — el
+  // lector reconstruye su índice {(origen,destino): hook} en O(n).
+  repeated Symbol casts = 4;
+}
+
+// ---------------------------------------------------------------------- //
+// referencia a hook enlazado (anotación .hook de la Semántica)
+// ---------------------------------------------------------------------- //
+
+message HookRef {
+  string owner_type = 1;
+  HookKind kind = 2;
+  // suficiente para lookup O(1) en SymbolTable.hooks; NO se re-serializa
+  // el Symbol completo (evita duplicarlo N veces).
+}
+
+// ---------------------------------------------------------------------- //
+// expresiones — espejo de include/ast_nodes.py (Expression)
+// ---------------------------------------------------------------------- //
+
+message Expr {
+  uint32 ln = 1;
+  uint32 col = 2;
+  // tipo resuelto por AST-tipado/Semántica. Ausente (kind UNSPECIFIED) =
+  // aún no inferible en esta versión del frontend; los targets lo tratan
+  // como desconocido, nunca lo adivinan.
+  Type restype = 3;
+
+  oneof node {
+    Literal literal = 10;
+    InterpolatedString interp = 11;
+    Identifier identifier = 12;
+    UnaryOp unary = 13;
+    BinaryOp binary = 14;
+    Assignment assignment = 15;
+    Call call = 17;
+    Index index = 18;
+    MemberAccess member = 19;
+    SizeofExpr sizeof = 22;
+    AddrOf addr_of = 23;
+    CastExpr cast_expr = 24;
+    StructLiteral struct_literal = 25;
+  }
+
+  reserved 16, 20, 21;  // Placement ('x at r') / MakeExpr / AllocExpr
+  reserved "placement", "make", "alloc";
+}
+
+message Literal {
+  string kind = 1;  // 'int' | 'float' | 'str' | 'char' | 'bool' | 'null'
+  oneof value {
+    int64 int_value = 2;
+    double float_value = 3;
+    string str_value = 4;   // también char (1 code point)
+    bool bool_value = 5;
+    // 'null': ningún campo del oneof presente
+  }
+}
+
+message InterpolatedString {
+  // f"texto{expr}texto": segmentos en orden; texto y expresión alternan
+  message Part {
+    oneof part {
+      string text = 1;
+      Expr expr = 2;
+    }
+  }
+  repeated Part parts = 1;
+}
+
+message Identifier { string name = 1; }
+message UnaryOp    { string op = 1; Expr operand = 2; }  // op: 'not' | '-'
+message BinaryOp   { string op = 1; Expr left = 2; Expr right = 3; }
+message Assignment { Expr target = 1; Expr value = 2; }
+
+// '&expr' — dirección de un lvalue. Nodo propio (no un UnaryOp con string):
+// los consumidores despachan por caso y la REGLA de mutabilidad ya viene
+// resuelta por la Semántica: 'mut' == true si el binding es 'var' (el
+// puntero resultante es 'ptr mutable T'), false si es 'const' ('ptr T').
+// El Expr.restype contenedor lleva ese mismo tipo puntero completo.
+message AddrOf { Expr operand = 1; bool mut = 2; }
+
+message Call {
+  Expr callee = 1;
+  repeated Expr args = 2;
+  HookRef hook = 3;  // __print__/__len__ enlazado por la Semántica, si aplica
+}
+
+message Index        { Expr obj = 1; Expr index = 2; }
+message MemberAccess { Expr obj = 1; string member = 2; }
+message SizeofExpr   { Type type = 1; HookRef hook = 2; }
+
+// 'cast<T>(x)' — conversión EXPLÍCITA (única vía: el lenguaje no tiene
+// coerciones implícitas). 'type' = T escrito; entre primitivos el consumidor
+// ejecuta la conversión nativa; con nominal involucrado, 'hook' referencia
+// el '__cast__' que la implementa (enlazado por la Semántica).
+message CastExpr { Type type = 1; Expr value = 2; HookRef hook = 3; }
+
+// 'T{ campo: expr, ... }' — instancia un struct nominal. 'field_names' y
+// 'values' son listas PARALELAS (mismo índice = mismo campo), en orden.
+message StructLiteral {
+  string type_name = 1;
+  repeated string field_names = 2;
+  repeated Expr values = 3;
+}
+
+// ---------------------------------------------------------------------- //
+// sentencias — espejo de include/ast_nodes.py (Statement)
+// ---------------------------------------------------------------------- //
+
+message Stmt {
+  uint32 ln = 1;
+  uint32 col = 2;
+
+  oneof node {
+    Block block = 10;
+    VarDecl var_decl = 11;
+    IfStmt if_stmt = 13;
+    WhileStmt while_stmt = 14;
+    MatchStmt match_stmt = 15;
+    ReturnStmt return_stmt = 16;
+    BreakStmt break_stmt = 17;
+    ContinueStmt continue_stmt = 18;
+    MoveStmt move_stmt = 19;
+    FreeStmt free_stmt = 20;
+    ExprStmt expr_stmt = 21;
+    ImportBinding import_binding = 22;
+    TypeDecl type_decl = 23;
+    ThrowStmt throw_stmt = 24;
+    TryStmt try_stmt = 25;
+  }
+
+  reserved 12;  // RegionStmt: RBMM, fuera de v1
+  reserved "region";
+}
+
+message Block { repeated Stmt statements = 1; }
+
+message VarDecl {
+  string qualifier = 1;  // 'const' | 'var' | "" ("" equivale a 'var')
+  Type type = 2;
+  string name = 3;
+  Expr value = 4;        // ausente si no hay inicializador
+}
+
+// '[qualifier] "type" IDENTIFIER [ "=" expr ];' — tipo nominal OPACO
+// (sin representación escrita en suriaX; su layout lo aportan sus hooks).
+// El binding es de tipo META ('int8' es un valor de tipo 'type').
+message TypeDecl {
+  string qualifier = 1;  // 'const' | 'var' | ""
+  string name = 2;
+  Expr value = 3;        // ausente sin inicializador ('const type int8;')
+}
+
+message IfStmt {
+  Expr condition = 1;
+  Block then_block = 2;
+  oneof else_branch {
+    Block else_block = 3;
+    IfStmt else_if = 4;
+  }
+}
+
+message WhileStmt { Expr condition = 1; Block body = 2; }
+
+message CaseArm { Expr pattern = 1; Stmt body = 2; }
+message MatchStmt { Expr subject = 1; repeated CaseArm cases = 2; }
+
+message ReturnStmt { Expr value = 1; }  // ausente = 'return;'
+message BreakStmt {}
+message ContinueStmt {}
+
+// move-semantics: transfiere la propiedad e INVALIDA el origen. La
+// Semántica ya reportó los use-after-move lineales (SEM004/SEM005); el
+// runtime/MIR hace cumplir los caminos que el análisis estático no ve.
+message MoveStmt { Expr target = 1; }
+
+// manejo de errores por EXCEPCIONES:
+message ThrowStmt { Expr value = 1; }  // inicia la propagación
+message TryStmt {                      // intercepta la propagación
+  Block try_block = 1;
+  string catch_name = 2;   // nombre ligado al valor capturado (scope del catch)
+  Block catch_block = 3;
+}
+
+// REGLA DE PUNTEROS: 'free x;' exige que x sea 'ptr T' (SEM014 ya lo
+// verificó); si T declara '__free__', el hook viaja enlazado.
+message FreeStmt {
+  Expr target = 1;
+  HookRef hook = 2;
+}
+
+message ExprStmt { Expr expr = 1; }
+
+message ImportBinding {
+  string qualifier = 1;  // 'const' | 'mutable' | ""
+  string name = 2;
+  string lib = 3;    // los exports reales ya viajan en SymbolTable (IMPORT.members)
+  string member = 4; // solo forma '#from lib #import member': el nombre traído
+                     // ("" = import del módulo completo)
+}
+
+// ---------------------------------------------------------------------- //
+// declaraciones top-level — espejo de include/ast_nodes.py (Declaration)
+// ---------------------------------------------------------------------- //
+
+message Decl {
+  uint32 ln = 1;
+  uint32 col = 2;
+
+  oneof node {
+    FunctionDecl function = 10;
+    StructDecl struct_decl = 11;
+    EnumDecl enum_decl = 12;
+    ExternBlock extern_block = 13;
+    Stmt statement = 14;      // statements sueltos a nivel de módulo
+    ImportDirective import_directive = 15;
+    ExportDirective export_directive = 16;
+    FromDirective from_directive = 17;
+    TestDecl test_decl = 18;
+  }
+}
+
+// 'test "nombre" { ... }' — bloque de prueba (estilo Zig). El runner lo
+// ejecuta; la compilación normal lo transporta pero no lo ejecuta.
+message TestDecl {
+  string name = 1;
+  Block body = 2;
+}
+
+message Parameter { Type type = 1; string name = 2; }
+
+message FunctionDecl {
+  string name = 1;
+  repeated Parameter params = 2;
+  Type return_type = 3;
+  Block body = 4;         // ausente = PROTOTIPO (la implementación la aporta
+                          // el backend / #extern)
+  string dunder = 5;      // nombre sin guiones si es hook/dunder ("" = normal)
+  string decorator = 6;   // "@decorador" aplicado, si lo hay ("" = ninguno)
+}
+
+message Field { Type type = 1; string name = 2; }
+message StructDecl { string name = 1; repeated Field fields = 2; }
+
+message EnumItem { string name = 1; Expr value = 2; }
+message EnumDecl { string name = 1; repeated EnumItem items = 2; }
+
+message ExternBlock {
+  string target = 1;  // hoy solo "cpp"
+  string raw = 2;     // el C++ crudo, tal cual lo capturó el lexer
+}
+
+// Un import transporta TRES nombres distintos, y ninguno se deriva de otro
+// sin re-hacer la resolución del linker de librerías:
+//
+//   'lib'     lo que se ESCRIBIÓ ('io.stdp'). Solo para diagnósticos.
+//   'unit'    la unidad RESUELTA ('IO.stdp'): la clave de 'LibraryRef.alias'
+//             y por tanto el .phir que hay que cargar y ejecutar.
+//   'binding' el nombre LOCAL bajo el que la Semántica ligó el módulo en el
+//             scope ('stdp'). No coincide con el último componente de 'unit'
+//             cuando el import difiere en mayúsculas del '#export' que
+//             resolvió ('#import io' sobre '#export package as IO' liga
+//             'io' y carga la unidad 'IO').
+//
+// Escribir los tres es la aplicación de D3 (el intérprete EJECUTA lo que la
+// Semántica ya decidió, no lo re-decide): cualquier consumidor del HIR
+// —intérprete Python o backend C++— liga exactamente los mismos nombres sin
+// reimplementar 'linker_p'.
+message ImportDirective {
+  string lib = 1;      // puede ser punteado: 'io.string' (submodulo de paquete)
+  string alias = 2;    // el 'as X' tal cual se escribió ("" si no hay)
+  string unit = 3;     // unidad resuelta ('IO.stdp'); "" si no se pudo resolver
+  string binding = 4;  // nombre local ligado por la Semántica
+}
+message ExportDirective {
+  string alias = 1;
+  bool package = 2;  // '#export package as <alias>': padre de un paquete
+}
+message FromDirective {
+  string lib = 1;
+  string name = 2;   // el miembro traído: '#from d_types #import dt_variables'
+  string alias = 3;
+  string unit = 4;   // unidad resuelta de 'lib' (misma regla que ImportDirective)
+}

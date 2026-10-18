@@ -1,0 +1,12 @@
+enum Forma { Circulo(int), Cuadro(int, int) };
+fn area(Forma f) -> int {
+    match (f) {
+        case Forma.Circulo(1): { return 1; }
+        case Forma.Cuadro(a, b): { return a * b; }
+    }
+    return 0;
+}
+fn g() -> void {
+    try { throw 1; } catch (Fantasma e) { };
+    try { throw 1; } catch (void e) { };
+}

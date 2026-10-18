@@ -1,0 +1,6 @@
+#from io #import stdp
+test "falla" { expect (1 == 2); }
+fn main() -> int {
+    stdp.println("main");
+    return 0;
+}

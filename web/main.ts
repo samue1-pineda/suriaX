@@ -24,7 +24,12 @@ import { encodeModule } from "./src/hir/encode.ts";
 import { loadModule } from "./src/hir/decode.ts";
 import { resolveRelative, type PhirResolver } from "./src/hir/link.ts";
 import { formatStats } from "./src/opt/dce.ts";
-import { UNRESTRICTED_POLICY, WEB_V1_POLICY } from "./src/target/policy.ts";
+import {
+  POLICIES,
+  UNRESTRICTED_POLICY,
+  WEB_V1_POLICY,
+  type Policy,
+} from "./src/target/policy.ts";
 import { compile } from "./src/index.ts";
 import { toBase64 } from "./src/codegen/js.ts";
 import { SYMBOL_KIND_NAMES, formatType, type Module } from "./src/hir/schema.ts";
@@ -90,6 +95,9 @@ function usage(): void {
       "  --no-dce             no elimina código muerto (solo lee y contiene)\n" +
       "  --json               salida en JSON (diagnósticos + estadísticas)\n" +
       "  --unrestricted       desactiva la contención del target web\n" +
+      "  --policy <nombre>    perfil de contención: web-v1 (por defecto),\n" +
+      "                       playground (además, lista blanca de librerías)\n" +
+      "                       o unrestricted\n" +
       "  --emit-wat <ruta>    escribe el WebAssembly textual generado\n" +
       "  --emit-pretty <ruta> escribe la vista LEGIBLE del WIR (para leer el\n" +
       "                       programa, no para depurar el formato)\n" +
@@ -99,6 +107,27 @@ function usage(): void {
       "  --run                ejecuta el WebAssembly generado (--run-js usa el backend JS)\n" +
       "  --run-js             ejecuta el módulo JS puro en vez del WebAssembly\n",
   );
+}
+
+/**
+ * El perfil pedido: `--policy <nombre>`, o `--unrestricted`, o el del target.
+ * `null` si el nombre no existe — un perfil mal escrito NO cae al de por
+ * defecto: quien pidió `playground` y recibe `web-v1` cree estar contenido.
+ */
+function chosenPolicy(args: readonly string[]): Policy | null {
+  if (args.includes("--policy")) {
+    const name = optionValue(args, "--policy");
+    const policy = name === null ? undefined : POLICIES.get(name);
+    if (policy === undefined) {
+      process.stderr.write(
+        `perfil desconocido: ${name ?? "(sin nombre)"} ` +
+          `(los que hay: ${[...POLICIES.keys()].join(", ")})\n`,
+      );
+      return null;
+    }
+    return policy;
+  }
+  return args.includes("--unrestricted") ? UNRESTRICTED_POLICY : WEB_V1_POLICY;
 }
 
 /** Valor de una opción con argumento (`--emit-wat salida.wat`). */
@@ -113,7 +142,8 @@ function main(argv: readonly string[]): number {
   const args = argv.slice(2);
   // el primer argumento suelto es el .phir; los demás son valores de opción.
   const optionValues = new Set(
-    ["--emit-wat", "--emit-pretty", "--emit-js", "--emit-wasm", "--reencode"]
+    ["--emit-wat", "--emit-pretty", "--emit-js", "--emit-wasm", "--reencode",
+     "--policy"]
       .map((name) => optionValue(args, name))
       .filter((value): value is string => value !== null),
   );
@@ -129,7 +159,8 @@ function main(argv: readonly string[]): number {
 
   const json = args.includes("--json");
   const optimize = !args.includes("--no-dce");
-  const policy = args.includes("--unrestricted") ? UNRESTRICTED_POLICY : WEB_V1_POLICY;
+  const policy = chosenPolicy(args);
+  if (policy === null) return 2;
   const bytes = new Uint8Array(readFileSync(path));
 
   // --reencode no necesita ni contención ni codegen: es leer y volver a
@@ -270,7 +301,8 @@ async function runGenerated(argv: readonly string[]): Promise<number> {
     return 2;
   }
   const useJs = args.includes("--run-js");
-  const policy = args.includes("--unrestricted") ? UNRESTRICTED_POLICY : WEB_V1_POLICY;
+  const policy = chosenPolicy(args);
+  if (policy === null) return 2;
 
   let result;
   try {

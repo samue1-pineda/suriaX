@@ -45,7 +45,7 @@ import {
   type SymbolTable,
   type Type,
 } from "../hir/schema.ts";
-import { SymbolKind } from "../hir/schema.ts";
+import { SymbolKind, testBlocks } from "../hir/schema.ts";
 import { Image, Unit } from "../hir/link.ts";
 
 /** Tope de rondas de punto fijo. */
@@ -268,6 +268,10 @@ function collectStmtUses(stmt: Stmt, uses: NameUse): void {
         collectUses(rama.block, uses);
       }
       return;
+    case "expect":
+      collectExprUses(node.condition, uses);
+      if (node.body !== null) collectUses(node.body, uses);
+      return;
     case "importBinding":
       bump(uses.decls, node.name);
       return;
@@ -459,6 +463,14 @@ function cleanStmt(stmt: Stmt, ctx: CleanCtx): Stmt | null {
           };
     }
 
+    case "expect": {
+      if (node.body === null) return stmt;
+      const body = cleanBlock(node.body, ctx);
+      return body === node.body
+        ? stmt
+        : { ln: stmt.ln, col: stmt.col, node: { ...node, body } };
+    }
+
     default:
       return stmt;
   }
@@ -521,7 +533,7 @@ function collectNames(decl: Decl, out: Set<string>): void {
       }
       return;
     case "test":
-      if (decl.node.test.body !== null) blockNames(decl.node.test.body, out);
+      for (const parte of testBlocks(decl.node.test)) blockNames(parte, out);
       return;
     case "statement":
       stmtNames(decl.node.stmt, out);
@@ -574,6 +586,10 @@ function stmtNames(stmt: Stmt, out: Set<string>): void {
     case "try":
       blockNames(node.tryBlock, out);
       for (const rama of node.catches) blockNames(rama.block, out);
+      return;
+    case "expect":
+      exprNames(node.condition, out);
+      if (node.body !== null) blockNames(node.body, out);
       return;
     case "importBinding":
       out.add(node.name);
@@ -781,13 +797,19 @@ function cleanBodies(module: Module, counters: Counters, keepTests: boolean): Mo
       }
       case "test": {
         const test = decl.node.test;
-        if (!keepTests || test.body === null) break;
-        const body = cleanBody(test.body, counters);
-        if (body === test.body) break;
+        if (!keepTests) break;
+        // el cuerpo y las dos cláusulas se limpian igual: son bloques.
+        const limpia = (b: typeof test.body) =>
+          b === null ? null : cleanBody(b, counters);
+        const body = limpia(test.body);
+        const errfinally = limpia(test.errfinally);
+        const finallyBlock = limpia(test.finallyBlock);
+        if (body === test.body && errfinally === test.errfinally &&
+            finallyBlock === test.finallyBlock) break;
         changed = true;
         items.push({
           ln: decl.ln, col: decl.col,
-          node: { case: "test", test: { ...test, body } },
+          node: { case: "test", test: { ...test, body, errfinally, finallyBlock } },
         });
         continue;
       }

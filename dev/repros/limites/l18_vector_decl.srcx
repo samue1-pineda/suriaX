@@ -1,0 +1,8 @@
+#from io #import stdp
+#import array.vector as vec
+fn main() -> int {
+    int vec.Vector v[5];
+    v.push(1);
+    stdp.println(f"{v.len()}");
+    return 0;
+}

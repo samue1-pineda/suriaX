@@ -19,8 +19,8 @@ regla no negociable de la propuesta de la VM de bytecode (el documento,
 ## Estado actual: EJECUTA (Fase 5.5, núcleo funcional)
 
 ```
-python V0/main.py programa.srcx --run          # compila + ejecuta (target interp)
-python V0/main.py programa.srcx --run --time   # + tiempos por fase
+python V0/main.py programa.srcx --run interpreter          # compila + ejecuta aquí
+python V0/main.py programa.srcx --run interpreter --time   # + tiempos por fase
 
 python runtime/interpreter/main.py dumps/programa.srcx.phir            # resumen
 python runtime/interpreter/main.py dumps/programa.srcx.phir --exec     # ejecutar
@@ -34,9 +34,12 @@ python runtime/interpreter/main.py dumps/x.phir --exec --trace-memory  # + traza
 | [`memory/pointer.py`](memory/pointer.py) | **instrucciones de memoria**: celdas con estado (LIVE/MOVED/FREED), `&`, deref implícito, `move` (RT001/RT002), `free` (RT003) y el drop automático al cerrar el ámbito (`__free__`) |
 | [`enviroment/environment.py`](enviroment/environment.py) | cadena de frames nombre→Cell |
 | [`hook/dispatch.py`](hook/dispatch.py) | índices O(1): hooks (owner,kind) y conversiones (origen,destino) |
-| [`intrinsics.py`](intrinsics.py) | interfaz del host: `suriax_write` → stdout (IO imprime sin `#extern`) |
+| [`intrinsics.py`](intrinsics.py) | interfaz del host: `__write__`/`suriax_write` → stdout (IO imprime sin `#extern`) y las llamadas al host de `lib/sistema` y `text` (lista en [`lib/LLAMADAS_AL_HOST.md`](../../lib/LLAMADAS_AL_HOST.md)) |
+| [`values.py`](values.py) | modelo de valores en runtime: primitivos como nativos de Python y clases propias para lo demás |
 | [`interpreter.py`](interpreter.py) | orquestador: globales por unidad, nivel de módulo, entrada, exit code |
 | [`errors.py`](errors.py) | errores de runtime `RTxxx` con posición |
+| [`depurador.py`](depurador.py) | el núcleo del depurador: puntos de parada, paso a paso, la pila y el estado de propiedad de cada variable |
+| [`dap.py`](dap.py) | el depurador hablado en DAP (`python V0/main.py --dap`), para un editor |
 
 Pendiente del plan: arenas como librería y `match` con patrones más ricos.
 Lo que falla hoy está en [c_errorstfix.md](../../c_errorstfix.md), incluido
@@ -54,8 +57,9 @@ Puntos clave:
   de desacople** que ambos consumidores del HIR implementan a su manera.
 - **No re-decide semántica.** Ejecuta lo que el HIR ya trae resuelto (despacho
   de hooks, propiedad, move); no reimplementa las reglas de la Semántica.
-- Selección de target: `target: interp` en `.suriaX_config.yaml` (o
-  `python V0/main.py archivo.srcx --run`). `compilerconfig` conserva su rol de
+- Selección de target: `target: interp` en `.suriaX_config.yaml`, o
+  `python V0/main.py archivo.srcx --run interpreter` (`--run` sin valor usa
+  el `target`, que por defecto es `native`: la VM). `compilerconfig` conserva su rol de
   elegir la ruta; los knobs del intérprete viven en la sección `interpreter:`.
 - Esqueleto ya presente: `enviroment/` (scopes), `hook/` (despacho de dunder),
   `memory/` (celdas/punteros/move).

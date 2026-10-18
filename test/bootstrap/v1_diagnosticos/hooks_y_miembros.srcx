@@ -1,0 +1,16 @@
+struct { int v; } Caja;
+enum Color { ROJO, VERDE };
+fn main() -> int {
+    var Caja c = Caja{ v: 1 };
+    print(c);
+    var int n = len(c);
+    var int h = hash(c);
+    c.w = 3;
+    var str s = Color.name;
+    var int x = Caja.v;
+    var int y = Caja.nada;
+    var int z = c.v.w;
+    var Caja ptr q = &c;
+    var int u = q.otro;
+    return n + h + x + y + z + u;
+}

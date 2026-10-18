@@ -1,0 +1,51 @@
+#import array.vector as vec
+struct { int v; } R;
+hook fn __free__(R ptr self) -> void { }
+struct { R r; int n; } Caja;
+fn toma(R r) -> int { return 1; }
+fn usa(R ptr r) -> int { return r.v; }
+fn uno(bool b) -> int {
+    var R a = R{ v: 1 };
+    var R b2 = move a;
+    var int x = usa(&a);
+    move b2;
+    move b2;
+    return x;
+}
+fn dos(bool b) -> int {
+    var R a = R{ v: 1 };
+    if (b) { var R c = move a; } else { }
+    var int y = usa(&a);
+    var R d = R{ v: 2 };
+    if (b) { var R e = move d; return 0; };
+    var int z = usa(&d);
+    var Caja k = Caja{ r: R{ v: 3 }, n: 1 };
+    var R f = move k.r;
+    var int w = k.r.v + k.n;
+    return y + z + w;
+}
+fn tres() -> int {
+    var R ptr p = mem_nada();
+    free p;
+    free p;
+    var int q = p.v;
+    return q;
+}
+fn mem_nada() -> R ptr { return null; }
+fn cuatro(bool b) -> int {
+    var R a = R{ v: 1 };
+    match (b) {
+        case true: { var R m = move a; }
+        case false: { }
+    }
+    var int y = usa(&a);
+    try { var R t = move a; } catch (e) { var int u = usa(&a); };
+    var R a2 = R{ v: 5 };
+    a2 = R{ v: 6 };
+    return y + a2.v;
+}
+fn cinco() -> int {
+    var R a = R{ v: 1 };
+    try { var R t = move a; } catch (e) { var int u = usa(&a); };
+    return usa(&a);
+}

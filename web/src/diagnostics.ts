@@ -74,6 +74,22 @@ export const WebCode = {
    * aparición en el fuente en vez de alfabético.
    */
   CODEGEN_STRING: "WEB102",
+  /**
+   * Función usada como VALOR (tipo `fn(A) -> R`): guardarla en una variable,
+   * pasarla, devolverla o llamar a través de ella. Hoy solo la ejecuta el
+   * intérprete. Se reporta en la CONTENCIÓN (antes del DCE) y sin depender
+   * de la política: ni `--unrestricted` la deja pasar, porque el codegen no
+   * sabe traducirla y lo que haría con ella no sería lo que el programa dice.
+   */
+  FUNCTION_VALUE: "WEB103",
+  /**
+   * `lambda (A a) -> R: ...`: una función sin nombre que lee su entorno (sus
+   * capturas). Hoy solo la ejecuta el intérprete. Como `WEB103`, se reporta
+   * en la CONTENCIÓN y sin depender de la política: ni `--unrestricted` la
+   * deja pasar. Va en lugar de `WEB103` en la posición de la lambda (lo que
+   * falta no es solo el valor función, también el marco que lee).
+   */
+  LAMBDA: "WEB104",
 } as const;
 export type WebCode = (typeof WebCode)[keyof typeof WebCode];
 

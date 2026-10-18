@@ -23,14 +23,66 @@ from .memory.pointer import Cell
 
 
 class FunctionValue:
-    __slots__ = ("unit_alias", "decl")
+    """Una funcion con nombre usada como VALOR (``var fn(int) -> int g = doble``).
 
-    def __init__(self, unit_alias: str, decl: Any) -> None:
+    No captura nada: es la declaracion y la unidad cuyos globales ve, y nada
+    mas. Por eso se copia libremente y no tiene destructor.
+
+    ``==`` es IDENTIDAD de la funcion (la misma declaracion), no del objeto de
+    Python: ``lib.f`` crea un ``FunctionValue`` nuevo cada vez que se evalua,
+    y dos lecturas de la misma funcion tienen que ser iguales.
+    """
+
+    __slots__ = ("unit_alias", "decl", "display_name")
+
+    def __init__(self, unit_alias: str, decl: Any, *,
+                 display_name: str = "") -> None:
         self.unit_alias = unit_alias
         self.decl = decl  # message FunctionDecl
+        # como se ESCRIBE: el nombre declarado, o 'Tipo.metodo' para un
+        # metodo (dos tipos pueden tener un metodo con el mismo nombre)
+        self.display_name = display_name or decl.name
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, FunctionValue) and other.decl is self.decl
+
+    def __hash__(self) -> int:
+        return id(self.decl)
 
     def __repr__(self) -> str:
-        return f"<fn {self.decl.name}>"
+        return f"<fn {self.display_name}>"
+
+
+class LambdaValue:
+    """Una ``lambda`` evaluada: su cuerpo y el MARCO donde se escribio.
+
+    A diferencia de :class:`FunctionValue`, lee su entorno: los locales y
+    parametros de quien la escribio (sus capturas) se resuelven subiendo por
+    ``frame``, el mismo marco vivo, sin copiarlos. Es seguro porque no escapa
+    (lo garantiza la Semantica): solo existe como argumento de una llamada, y
+    muere antes de que esa llamada termine, cuando ``frame`` sigue vivo.
+
+    ``unit`` es la unidad donde se escribio: los tipos de su cuerpo son
+    indices en el pool de ESA unidad, aunque la llame una libreria
+    (``Vector.filter``).
+    """
+
+    __slots__ = ("unit", "node", "frame", "ln", "col")
+
+    def __init__(self, unit: Any, node: Any, frame: Any, ln: int, col: int) -> None:
+        self.unit = unit
+        self.node = node    # message LambdaExpr
+        self.frame = frame
+        self.ln = ln
+        self.col = col
+
+    @property
+    def name(self) -> str:
+        """Como se nombra en una traza o en la pila del depurador."""
+        return f"lambda@{self.ln}:{self.col}"
+
+    def __repr__(self) -> str:
+        return f"<lambda {self.ln}:{self.col}>"
 
 
 class Namespace:
@@ -53,8 +105,24 @@ class StructValue:
         self.fields = fields
 
     def __repr__(self) -> str:
-        inner = ", ".join(f"{k}={c.value!r}" for k, c in self.fields.items())
-        return f"{self.type_name}{{{inner}}}"
+        # la forma del LENGUAJE ('P{x: 3, s: "hi"}'), no la de Python
+        # ('P{x=3, s='hi'}'): es la que sale en una traza o en un 'throw' sin
+        # atrapar. Sin el tipo de cada campo, un 'char' sale con comillas
+        # dobles; un f-string usa '_texto', que sí lo sabe.
+        inner = ", ".join(f"{k}: {_field_repr(c.value)}"
+                          for k, c in self.fields.items())
+        short = self.type_name.rsplit(".", 1)[-1]
+        return f"{short}{{{inner}}}"
+
+
+def _field_repr(value: Any) -> str:
+    """Un campo dentro de la representación de un struct: una cadena entre
+    comillas, lo demás como en un f-string."""
+    if isinstance(value, str):
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') \
+            .replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r") \
+            .replace("\0", "\\0") + '"'
+    return format_value(value)
 
 
 def copy_on_bind(value: Any) -> Any:
@@ -70,7 +138,8 @@ def copy_on_bind(value: Any) -> Any:
     La copia es **superficial en los punteros y profunda en los campos**: se
     crean celdas nuevas para cada campo (por eso mutar la copia no toca al
     original) pero un ``ptr`` guardado en un campo sigue apuntando a lo mismo,
-    que es lo que significa un préstamo. Los demás valores del intérprete son
+    que es lo que significa un préstamo. Un enum con payload se copia igual
+    (su payload también son celdas). Los demás valores del intérprete son
     inmutables (int, float, bool, str, char) o son referencias a propósito
     (punteros, bloques, namespaces): se devuelven tal cual.
     """
@@ -80,6 +149,13 @@ def copy_on_bind(value: Any) -> Any:
             {name: Cell(_copia_de_campo(cell.value), name=name)
              for name, cell in value.fields.items()},
         )
+    if isinstance(value, EnumValue) and value.fields:
+        # un enum con payload es un valor igual que un struct: su payload va
+        # en celdas, y sin esta copia 'var Forma g = f;' compartia esas
+        # celdas — cambiar el payload de 'g' (en un 'case') cambiaba 'f'
+        return EnumValue(value.enum_name, value.variant,
+                         [Cell(_copia_de_campo(c.value), name=c.name)
+                          for c in value.fields])
     return value
 
 
@@ -148,12 +224,50 @@ class VariantCtor:
         return f"<variante {self.enum_name}.{self.variant}/{self.arity}>"
 
 
+class EnumItem(int):
+    """Un item de un enum SIN datos (estilo C): un entero que sabe de qué enum
+    es y cómo se llama.
+
+    Sigue siendo un ``int`` para todo lo demás (comparar, ordenar, el hash
+    splitmix64 que comparte con la VM, ``cast<int>``, guardarlo en un bloque):
+    solo cambia lo que el entero solo no podía decir. Dentro de un genérico
+    (``f"{x}"`` con ``x: T``) el tipo estático es ``T`` y no nombra el enum,
+    así que el texto lo decide el VALOR (A08): ``VERDE`` y no ``1``.
+
+    Sin ``__slots__``: Python no admite slots no vacíos en una subclase de
+    ``int``. La aritmética devuelve un ``int`` llano, que es lo correcto (un
+    ``ROJO + 1`` ya no es un item).
+    """
+
+    def __new__(cls, value: int, enum_of: str, variant: str) -> "EnumItem":
+        item = super().__new__(cls, value)
+        # 'enum_of' y no 'enum_name' a proposito: lo que despacha un hook por
+        # 'getattr(valor, "enum_name")' (print con 'T: Print', '__hash__')
+        # no debe tomar un item estilo C por un tipo con hooks (no puede
+        # declararlos: SEM006).
+        item.enum_of = enum_of
+        item.variant = variant
+        return item
+
+    # 'repr' y 'str' siguen siendo los del entero: una traza o un 'cast<str>'
+    # que antes escribían '1' no cambian por llevar el nombre.
+    __repr__ = int.__repr__
+    __str__ = int.__repr__
+
+
 class EnumValue:
     """El valor de un enum SUMA: qué variante es, y lo que lleva.
 
     Los campos son :class:`Cell` como los de un struct, así que el payload
     participa del mismo modelo de memoria que todo lo demás (una variante que
     lleva un puntero lo comparte igual que un campo).
+
+    Una variante SIN datos de un enum suma (``Forma.Punto``) también es un
+    ``EnumValue``, con ``fields`` vacío: es un valor DEL ENUM como sus
+    hermanas, y lo que despacha por el tipo del valor (``__eq__``,
+    ``__hash__``, ``__cmp__``, ``&v[i]`` de ``Vector.at``, un f-string en un
+    genérico) la reconoce. Antes era un entero y lo perdía (A10, A10b, A02).
+    El loader crea UNA por variante; sin campos, no hay nada que copiar.
     """
 
     __slots__ = ("enum_name", "variant", "fields")
@@ -184,6 +298,6 @@ def format_value(value: Any) -> str:
     return str(value)
 
 
-__all__ = ["FunctionValue", "Namespace", "StructValue", "TypeValue",
+__all__ = ["FunctionValue", "LambdaValue", "Namespace", "StructValue", "TypeValue",
            "copy_on_bind",
-           "EnumNamespace", "VariantCtor", "EnumValue", "format_value"]
+           "EnumNamespace", "VariantCtor", "EnumItem", "EnumValue", "format_value"]

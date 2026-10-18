@@ -1,0 +1,6 @@
+#from io #import stdp
+fn main() -> int {
+    var int a = 1;
+    stdp.println(f"{a + 2}");
+    return 0;
+}

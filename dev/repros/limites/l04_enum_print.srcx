@@ -1,0 +1,2 @@
+enum Color { Rojo, Verde };
+fn main() -> int { print(Color.Rojo); return 0; }

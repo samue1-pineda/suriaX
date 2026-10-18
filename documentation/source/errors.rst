@@ -19,6 +19,8 @@ columna.
    ``SEM``     Semántica              Al validar nombres, reglas y contratos.
    ``HIR``     Emisor del HIR         Al serializar el programa validado.
    ``RT``      Intérprete             Durante la ejecución.
+   ``EXC``     Runtime                Durante la ejecución: una excepción que el programa puede atrapar (``try``/``catch``).
+   ``VM``      Backend nativo (VM)    Al ligar el ``.phir`` para resolverlo, bajarlo al MIR y ejecutarlo.
    ``WEB``     Target web             Al preparar y generar WebAssembly.
    ``ICE``     Interno                En cualquier fase: el que falló es el **compilador**, no el programa.
    ==========  ====================  =============================================================================
@@ -173,12 +175,16 @@ LEX — análisis léxico
    ==========  ================================  ==================================================
    Código      Nombre                            Cuándo
    ==========  ================================  ==================================================
-   ``LEX001``  UnexpectedCharacterError          Un carácter que no pertenece al alfabeto.
+   ``LEX001``  UnexpectedCharacterError          Un carácter que no pertenece al alfabeto. Un
+                                                 ``!`` suelto dice que la negación es ``not``.
    ``LEX002``  InvalidTokenError                 Una secuencia que no forma ningún token válido.
    ``LEX003``  UnterminatedStringError           Una cadena que no cierra antes del fin de línea.
    ``LEX004``  UnterminatedCommentError          Un comentario de bloque sin ``-/``.
-   ``LEX005``  InvalidEscapeSequenceError        Un escape que no existe.
-   ``LEX006``  NumericLiteralOverflowError       Un número fuera del rango representable.
+   ``LEX005``  InvalidEscapeSequenceError        Un escape que no existe, o un ``\`` dentro de una
+                                                 interpolación (``f"{len(\"ab\")}"``): ahí va código
+                                                 y sus literales no se escapan (``f"{len("ab")}"``).
+   ``LEX006``  NumericLiteralOverflowError       Un número fuera del rango representable
+                                                 (un ``float`` que no cabe: ``1e400``).
    ``LEX007``  InvalidNumberFormatError          Un literal numérico mal formado.
    ``LEX008``  InvalidUnicodeCharacterError      Un *code point* no válido.
    ``LEX009``  UnexpectedEOFError                El archivo termina a mitad de un token.
@@ -221,6 +227,7 @@ PAR — análisis sintáctico
 .. _PAR026-def:
 .. _PAR027-def:
 .. _PAR028-def:
+.. _PAR029-def:
 
 
 .. table::
@@ -231,7 +238,9 @@ PAR — análisis sintáctico
    ==========  ================================  ==================================================
    ``PAR001``  SyntaxError                       Error de sintaxis genérico.
    ``PAR002``  UnexpectedTokenError              Un token que no encaja en esta posición.
-   ``PAR003``  ExpectedTokenError                Faltaba un token concreto.
+   ``PAR003``  ExpectedTokenError                Faltaba un token concreto. Si en el sitio de un
+                                                 nombre hay una palabra reservada (``int error;``),
+                                                 el mensaje lo dice.
    ``PAR004``  MissingSemicolonError             Falta el ``;`` que cierra la sentencia.
    ``PAR005``  MissingCommaError                 Falta una coma en una lista.
    ``PAR006``  UnexpectedCommaError              Una coma de más.
@@ -240,8 +249,14 @@ PAR — análisis sintáctico
    ``PAR009``  UnclosedParenthesisError          Un ``(`` sin cerrar.
    ``PAR010``  UnclosedBracketError              Un ``[`` sin cerrar.
    ``PAR011``  UnclosedBraceError                Un ``{`` sin cerrar.
-   ``PAR012``  InvalidExpressionError            Algo que no puede ser una expresión.
-   ``PAR013``  InvalidStatementError             Algo que no puede ser una sentencia.
+   ``PAR012``  InvalidExpressionError            Algo que no puede ser una expresión. También un
+                                                 operador de otro lenguaje, con lo que se escribe
+                                                 en suriaX: el ternario ``c ? a : b`` (``if``/``else``),
+                                                 ``&&`` (``and``) y ``||`` (``or``).
+   ``PAR013``  InvalidStatementError             Algo que no puede ser una sentencia: ``break`` o
+                                                 ``continue`` fuera de un bucle, ``expect`` fuera de
+                                                 un ``test``. Dentro de una lambda el mensaje dice
+                                                 que la lambda corta el bucle o el ``test`` de fuera.
    ``PAR014``  UnexpectedEOFError                El archivo termina a media construcción.
    ``PAR015``  DuplicatedModifierError           Un modificador repetido.
    ``PAR016``  InvalidTypeDeclarationError       Una declaración de tipo mal formada.
@@ -252,12 +267,16 @@ PAR — análisis sintáctico
    ``PAR021``  InvalidMemoryQualifierError       Un cualificador de memoria mal usado.
    ``PAR023``  MissingTypeAnnotationError        Falta la anotación de tipo obligatoria.
    ``PAR024``  InvalidExternBlockError           Un ``#extern`` mal formado.
-   ``PAR025``  ExpressionTooDeepError            Anidamiento por encima del límite.
+   ``PAR025``  ExpressionTooDeepError            Anidamiento por encima del límite; el mensaje
+                                                 dice si son bloques, una cadena de operadores o
+                                                 expresiones anidadas.
    ``PAR026``  InvalidLibraryNameError           Un nombre de librería mal formado.
    ``PAR027``  ExitFromFinallyError              ``return``, o ``break``/``continue`` que salen de un
                                                  ``finally``: reemplazarían la salida en curso.
    ``PAR028``  WithReceiverError                 ``.campo`` sin un ``with`` de UN valor alrededor
                                                  (fuera de un ``with``, o en uno con varios).
+   ``PAR029``  TestWithoutExpectError            Un ``test`` sin ningún ``expect``: no comprueba
+                                                 nada y pasaría siempre.
    ==========  ================================  ==================================================
 
 .. _ast-errores:
@@ -290,8 +309,23 @@ AST — tipos
    ``AST003``  UnexpectedASTStructureError     El árbol no tiene la forma esperada.
    ``AST004``  ASTConstructionError            No se pudo construir el nodo.
    ``AST005``  UnknownTypeError                Un tipo que no existe.
-   ``AST006``  TypeMismatchError               Los tipos no coinciden.
-   ``AST007``  CannotInferTypeError            No se puede determinar el tipo.
+   ``AST006``  TypeMismatchError               Los tipos no coinciden. También ``x ?? d`` con ``x``
+                                               que no es un ``T?``, o con ``d`` que no es EXACTAMENTE
+                                               su ``T`` (sin conversiones, ni ``null``), y un patrón
+                                               de otra instancia de un enum genérico
+                                               (``case Res<str, int>.Ok(x)`` sobre un ``Res<int, str>``).
+                                               Y el índice de ``v[i]``/``v[i] = x`` que no es del tipo
+                                               del 2.º parámetro de ``__index__``/``__index_set__``
+                                               (``v["a"]`` sobre un ``Vector``), o el de ``s[i]`` sobre
+                                               un ``str`` que no es ``int``.
+   ``AST007``  CannotInferTypeError            Los argumentos de tipo de una llamada a un genérico
+                                               (o a un método genérico) no se pueden deducir: un
+                                               parámetro que solo aparece en el retorno, del que
+                                               solo llega ``null`` o cuyo argumento no tiene su
+                                               forma (``T``, ``T ptr``, ``T?``, ``Nombre<..T..>``,
+                                               ``fn(..T..) -> R``, sin conversiones); o dos
+                                               argumentos dan tipos distintos para el mismo ``T``.
+                                               Dice por qué y cómo se escriben (todos o ninguno).
    ``AST008``  InvalidCastError                Una conversión que no es válida.
    ``AST009``  AmbiguousTypeError              Más de un tipo posible.
    ``AST010``  GenericTypeMismatchError        Argumentos de tipo incompatibles.
@@ -340,6 +374,19 @@ SEM — semántica
 .. _SEM036-def:
 .. _SEM037-def:
 .. _SEM038-def:
+.. _SEM039-def:
+.. _SEM040-def:
+.. _SEM041-def:
+.. _SEM042-def:
+.. _SEM043-def:
+.. _SEM044-def:
+.. _SEM045-def:
+.. _SEM046-def:
+.. _SEM047-def:
+.. _SEM048-def:
+.. _SEM049-def:
+.. _SEM050-def:
+.. _SEM051-def:
 
 
 .. table::
@@ -349,37 +396,88 @@ SEM — semántica
    Código      Nombre                          Cuándo
    ==========  ==============================  ====================================================
    ``SEM000``  MissingHandlerError             Un nodo del AST sin handler: fallo del compilador.
-   ``SEM001``  UndefinedSymbolError            Un nombre que no está declarado.
-   ``SEM002``  DuplicateSymbolError            Dos declaraciones del mismo nombre en un ámbito.
-   ``SEM003``  ImmutableAssignmentError        Asignación a un binding ``const``.
+   ``SEM001``  UndefinedSymbolError            Un nombre que no está declarado. También
+                                               ``print(x)``/``len(x)`` sobre un tipo que no puede
+                                               tener ``__print__``/``__len__`` (``len(3)``,
+                                               ``print(p)`` con ``p`` un ``int ptr``; ``print(5)``
+                                               escribe el primitivo desde la 0.4.1), y
+                                               ``hash`` de un tipo sin ``__hash__``, también en cada
+                                               instancia de un genérico (un ``Dictionary``).
+   ``SEM002``  DuplicateSymbolError            Dos declaraciones del mismo nombre en un ámbito,
+                                               o un patrón que liga el mismo nombre dos veces
+                                               (``case Par(x, x)``). También ``case v`` sobre un
+                                               ``T?`` con ``v`` ya declarado (¿ligar o comparar?) y
+                                               un parámetro de tipo repetido (``Par<T, T>``). Y
+                                               declarar en una rama un nombre que liga su patrón
+                                               (``case v { var str v = ...; }``), como en un
+                                               ``catch``.
+   ``SEM003``  ImmutableAssignmentError        Modificar un ``const``: reasignarlo, escribir un
+                                               campo a cualquier profundidad (``c.n = 5``,
+                                               ``d.c.n = 5``) o llamar sobre él a un método cuyo
+                                               receptor es ``ptr mutable`` (``k.sube()``). También
+                                               asignar, mover, liberar o modificar algo que
+                                               captura una lambda (la captura es de solo lectura).
    ``SEM004``  UseAfterMoveError               Uso de un valor ya movido.
    ``SEM005``  DoubleMoveError                 Dos ``move`` sobre el mismo valor.
-   ``SEM006``  InvalidHookSignatureError       Un hook cuya firma no cumple la convención.
+   ``SEM006``  InvalidHookSignatureError       Un hook cuya firma no cumple la convención
+                                               (``__eq__`` y ``__cmp__``: dos ``T ptr`` del mismo
+                                               tipo dueño).
    ``SEM007``  DuplicateHookError              Dos hooks de la misma clase para un tipo.
    ``SEM008``  CallArityError                  Número de argumentos distinto al de la firma.
+                                               También en un método (``v.push(1, 2)``): antes
+                                               una llamada a un método no se comprobaba. Y las
+                                               nativas: ``print()`` sin argumentos, ``print(a, b)``
+                                               dentro de una expresión (es variádico solo como
+                                               sentencia), ``len`` y ``hash`` con otro número que uno.
    ``SEM009``  LibraryNotFoundError            No se encontró la librería importada.
    ``SEM010``  InvalidLibraryError             El archivo no es una unidad válida.
    ``SEM011``  UnknownLibraryMemberError       El miembro no existe en esa librería.
-   ``SEM013``  InvalidAddressOfError           ``&`` sobre algo que no es un *lvalue*.
+   ``SEM013``  InvalidAddressOfError           ``&`` sobre algo que no es un *lvalue*, o sobre un
+                                               elemento ESCALAR de un bloque (``&b[i]`` con ``b``
+                                               un ``int ptr``): ningún motor presta el interior de
+                                               un bloque. En un genérico (``Vector.at``,
+                                               ``at_mut``) se decide en cada instancia.
    ``SEM014``  InvalidFreeTargetError          ``free`` sobre algo que no es un puntero.
-   ``SEM015``  ReadOnlyPointerWriteError       Escritura a través de un ``ptr`` no mutable.
+   ``SEM015``  ReadOnlyPointerWriteError       Escritura a través de un ``T ptr`` no mutable, a
+                                               cualquier profundidad, o llamar a través de él a un
+                                               método que modifica su receptor (``v.push(3)`` con
+                                               ``v`` un ``Vector<int> ptr``). También a través de
+                                               un puntero que captura una lambda, aunque sea
+                                               ``ptr mutable``.
    ``SEM016``  InvalidCastError                Conversión sin regla ni hook que la implemente.
    ``SEM017``  ExpressionTooDeepError          Anidamiento por encima del límite.
    ``SEM018``  UnknownHookError                Un ``__x__`` marcado como hook que no es del conjunto.
    ``SEM019``  VisibilityViolationError        Acceso a algo fuera de su visibilidad.
-   ``SEM021``  TraitNotSatisfiedError          El tipo no cumple el contrato del trait.
+   ``SEM021``  TraitNotSatisfiedError          El tipo no cumple el contrato del trait. También
+                                               una cota ``<T: X>`` cuyo ``X`` no es un trait de
+                                               este archivo ni un concepto (``Eq``, ``Ord``,
+                                               ``Hash``, ``Print``), y una instancia de una cota
+                                               de trait con un tipo que no declara ``@impl(X)``.
    ``SEM022``  InvalidDunderSignatureError     Un método dunder con firma inválida.
    ``SEM023``  UseAfterFreeError               Uso de un valor destruido con ``free``.
    ``SEM024``  DoubleFreeError                 ``free`` sobre un valor ya destruido.
-   ``SEM025``  InvalidValueTypeError           ``void`` como tipo de un valor (solo vale como retorno).
+   ``SEM025``  InvalidValueTypeError           ``void`` como tipo de un valor (solo vale como retorno),
+                                               también como argumento de tipo (``Vector<void>``).
    ``SEM026``  InfiniteSizeTypeError           Un ``struct`` que se contiene a sí mismo por valor.
    ``SEM027``  TypeArityError                  Un genérico usado con un número de argumentos que no es el suyo.
+                                               También la variante de un enum genérico sin sus
+                                               argumentos (``Res.Ok(5)``, ``Ok(5)``, ``Vacio``).
    ``SEM028``  IncompleteStructLiteralError    Un literal de struct que deja campos sin valor.
    ``SEM030``  NonExhaustiveMatchError         **Aviso**: un ``match`` sobre un ``enum`` deja variantes sin cubrir.
-   ``SEM031``  NotIndexableError               ``x[i]`` sobre un primitivo, que nunca puede declarar ``__index__``.
+                                               También sobre un ``T?`` sin ``case null`` (o, si ``T``
+                                               es un enum, sin una variante y sin ``case v``), y
+                                               sobre un ``E ptr``, que se desreferencia solo.
+   ``SEM031``  NotIndexableError               ``x[i]`` sobre un primitivo, que nunca puede declarar
+                                               ``__index__``; o ``s[i] = c`` sobre un ``str``, que se
+                                               lee por índice pero es inmutable.
    ``SEM032``  ImplicitOwnershipCopyError      Ligar a otro nombre —un ``var``, un parámetro por
                                                valor, una asignación o el campo de un literal— un
-                                               valor con destructor sin ``move``.
+                                               valor con destructor sin ``move``. También
+                                               ``return g;`` / ``throw g;`` con ``g`` una global
+                                               con destructor: entregaría una copia y la global
+                                               seguiría siendo dueña (``return move g;``). Y
+                                               ``x ?? d`` con un contenido con destructor (se
+                                               desenvuelve con ``match``, que presta).
    ``SEM033``  ContainerOverflowError          Mas ``push`` seguidos que espacios reservados en la
                                                declaracion (``int vec.Vector v[2];``). Solo cuando la
                                                cuenta no depende de la ejecucion; el resto sigue
@@ -392,13 +490,86 @@ SEM — semántica
                                                destructor a través de un puntero (o un elemento de
                                                un bloque): es de otro y se destruiría dos veces. Se
                                                lee con ``&``; un elemento se saca con ``mem.take``.
+                                               También lo que liga un patrón (``case E.A(x)``,
+                                               ``case v`` sobre un ``T?``): es del sujeto. Y lo
+                                               que captura una lambda (``return x`` dentro de
+                                               ella): es un préstamo.
    ``SEM037``  DanglingAddressError            ``return &x`` (o ``&x.campo``) con ``x`` local: muere
                                                al salir y el llamador recibiría un puntero a nada.
    ``SEM038``  GenericOwnerCopyError           Un genérico que COPIA su ``T`` (``Vector.get``,
-                                               ``v[i]``) instanciado con un tipo con destructor: la
+                                               ``v[i]``, ``v.filter``, ``func.map``, ``func.fold``)
+                                               instanciado con un tipo con destructor: la
                                                copia y el original serían dos dueños. Sale en la
                                                llamada y dice dónde copia; se usa ``at`` (préstamo)
                                                o ``take``.
+   ``SEM039``  GenericNotOrderableError        Un genérico que ORDENA su ``T`` (``a < b``,
+                                               ``Vector.sort``) instanciado con un tipo que no se
+                                               ordena (un struct sin ``__cmp__``, ``bool``, un
+                                               ``T?``). Sale en la llamada y dice dónde ordena.
+                                               También una cota ``Ord`` que la instancia no cumple
+                                               (en la llamada o en la anotación ``Par<P, int>``),
+                                               diciendo qué cota y desde qué argumento.
+   ``SEM040``  UninitializedVariableError      ``var T x;`` sin valor, en cualquier ámbito: valdría
+                                               ``null`` aunque ``T`` no lo admita. Se escribe el
+                                               valor inicial (``var int x = 0;``), o ``T?`` y
+                                               ``= null``. ``const type T;`` no es una variable.
+   ``SEM041``  TemporaryMutationError          Escribir en una COPIA temporal: ``v[i].n = 5`` o
+                                               ``v[i].push(x)`` con ``__index__`` (devuelve por
+                                               valor), o ``f().n = 5``. El cambio se perdería; se
+                                               pide el elemento prestado y mutable
+                                               (``v.at_mut(i)``).
+   ``SEM042``  NotCallableError                Llamar a algo que no es una función: ``n(3)`` con ``n``
+                                               un ``int``, ``p.noexiste()``, un campo que no es
+                                               ``fn(...)``, un módulo. Se llama a una función
+                                               declarada, a un valor ``fn(...) -> R`` o a un método.
+                                               También un método o un campo sobre un PRIMITIVO
+                                               (``s.len()``, ``n.abs()``, ``s.length``), con la
+                                               pista de suriaX (``len(s)``, ``text.upper(s)``).
+   ``SEM043``  UnboundedGenericMemberError     Un método, un campo o ``[]`` sobre un valor de un
+                                               parámetro de tipo que ninguna cota promete
+                                               (``f.aplica(x)`` con ``f: F`` sin un trait que lo
+                                               pida). Lo que el lenguaje hace solo (``==``, ``<``,
+                                               ``hash``, copiar, destruir, f-string) sigue
+                                               valiendo. También un parámetro de tipo sin la cota
+                                               que pide lo que recibe (``area_of<T: Forma>(x)`` con
+                                               ``x: U`` sin ``U: Forma``, o ``Par<U>`` con
+                                               ``Par<K: Print>``). ``Ord`` y ``Hash`` que el
+                                               parámetro no promete se comprueban por instancia
+                                               dentro de una función (``Par<U>`` con ``Par<K: Ord>``
+                                               en ``fn f<U>``); en la declaración de otro tipo, no.
+   ``SEM044``  InvalidFunctionValueError       Un nombre que no puede ser un valor función: un
+                                               prototipo (host / ``#extern``), una genérica, un
+                                               dunder, un método genérico o de un tipo genérico, o uno con
+                                               receptor por valor que tiene destructor.
+   ``SEM045``  GlobalUsedTooEarlyError         El valor inicial de una global (o una sentencia de
+                                               nivel superior) usa una global declarada MÁS ABAJO:
+                                               el nivel superior se ejecuta en orden. Era ``RT006``.
+                                               A través de una función llamada ahí sigue siendo
+                                               ``RT006``.
+   ``SEM046``  DuplicateCaseError              Dos ramas de un ``match`` con el mismo patrón (el mismo
+                                               literal, la misma variante o el mismo nombre): gana
+                                               la primera y la otra no se ejecuta nunca. También una
+                                               rama detrás de ``case v`` sobre un ``T?`` (salvo
+                                               ``case null``).
+   ``SEM047``  ExpressionWithoutEffectError    Una sentencia que solo calcula un valor y lo tira:
+                                               ``f;`` (la función sin llamar), ``a == b;``, un nombre
+                                               o un literal sueltos.
+   ``SEM048``  UnreachableCodeWarning          **Aviso**: sentencias detrás de un ``return``,
+                                               ``throw``, ``break`` o ``continue`` del mismo bloque.
+   ``SEM049``  NarrowerTypeInSignatureWarning  **Aviso**: una función de una librería se ve más que
+                                               un tipo de su firma (``fn f() -> P`` con ``private
+                                               struct P``): quien la llama no puede nombrar ``P``.
+   ``SEM050``  LambdaOutOfPlaceError           Una ``lambda`` fuera del único sitio donde vale: el
+                                               argumento de una llamada cuyo parámetro está escrito
+                                               ``fn(...) -> R``. En una variable, un campo, un
+                                               ``return``, un ``==``, un f-string, un parámetro
+                                               ``T`` o ``(fn...)?``, una variante o un prototipo
+                                               escaparía. Se usa una función con nombre.
+   ``SEM051``  FunctionParameterEscapeError    Un parámetro de tipo ``fn(...) -> R`` usado de otra
+                                               forma que llamarlo o pasarlo a otro parámetro de
+                                               tipo función (guardarlo, devolverlo, compararlo,
+                                               pasarlo a un ``T``): es prestado, puede ser una
+                                               lambda. Para guardarlo, ``(fn(...) -> R)?``.
    ==========  ==============================  ====================================================
 
 .. _hir-errores:
@@ -580,6 +751,58 @@ las muestra en uso.
                                                          ``[0, 64)``: con 64 bits no hay resultado.
    ==========  ========================================  ================================================
 
+.. _vm-errores:
+
+VM — backend nativo
+--------------------
+
+``suriax-hir`` da la misma salida y los mismos códigos ``RT``/``EXC`` que el
+intérprete. Los ``VM`` son lo contrario: un programa **correcto** que la VM
+todavía no sabe ejecutar. Los detecta el lowering a MIR, con su posición, y
+salen como las demás construcciones que el MIR no cubre (``--check-mir``,
+``--run``, ``--mir``), antes de ejecutar nada; las vistas (``--summary``,
+``--pretty``, ``--verify``) siguen leyendo el ``.phir``. ``suri --run
+compiler`` consulta ``--check-mir`` antes de elegir motor: ante un ``VM``
+avisa y lo ejecuta el intérprete.
+
+.. _VM001-def:
+.. _VM002-def:
+.. _VM003-def:
+.. _VM004-def:
+.. _VM005-def:
+
+.. table::
+   :widths: auto
+
+   ==========  ====================================================================================
+   Código      Cuándo
+   ==========  ====================================================================================
+   ``VM001``   El programa usa funciones como valores: una función suya recibe, devuelve o guarda
+               un ``fn(A) -> R`` (también dentro de un ``?`` o de un genérico), o una expresión
+               lo produce (``aplica(doble, 2)``, ``v.sort_by(compara)``). Sale en la posición de
+               la función o de la expresión, con el fuente y el tipo, y dice cómo ejecutarlo:
+               ``python V0/main.py <fuente>.srcx --run interpreter``. Una función de una
+               LIBRERÍA así (``Vector.sort_by``) no impide correr el programa: se baja a un
+               cuerpo que da ``VM001`` como error de ejecución si se llega a llamar.
+   ``VM002``   El programa desenvuelve un ``T?`` (``case v`` en un ``match``, una variante sobre un
+               sujeto ``E?``, ``x ?? d``) o declara un enum genérico (``enum Res<T, E>``), en
+               cualquier unidad cargada. Sale en la posición del patrón, del operador o de la
+               declaración, con el fuente, y dice cómo ejecutarlo:
+               ``python V0/main.py <fuente>.srcx --run interpreter``.
+   ``VM003``   El programa llama a algo que promete una COTA y no un tipo: ``print(x)`` con
+               ``T: Print`` o un método de un trait con ``T: Forma``. Su destino depende de la
+               instancia y la VM todavía no despacha por ella. Sale en la posición de la llamada,
+               con el fuente y el parámetro, y dice cómo ejecutarlo:
+               ``python V0/main.py <fuente>.srcx --run interpreter``.
+   ``VM004``   El programa usa una ``lambda``: la VM no tiene ni el valor ni el marco que lee. Sale
+               en la posición de la lambda (antes que ``VM001``), con el fuente, y dice cómo
+               ejecutarlo: ``python V0/main.py <fuente>.srcx --run interpreter``.
+   ``VM005``   El programa escribe un primitivo con ``print(x)`` (``print(5)``): la VM no tiene
+               cómo escribir sin el ``__write__`` de ``io``. Sale en la posición de la llamada, con
+               el fuente y el tipo; se escribe con un f-string (``stdp.print(f"{x}")``) o se
+               ejecuta con el intérprete.
+   ==========  ====================================================================================
+
 .. _web-errores:
 
 WEB — target web
@@ -628,6 +851,16 @@ traduce**.
      - Generador
    * - ``WEB102``
      - Cadena que no es un literal directo en un ``print``
+     - Generador
+   * - ``WEB103``
+     - Función usada como valor (``fn(A) -> R``). Se reporta en la
+       contención, una vez por línea y con **cualquier** política: no es una
+       capacidad que un perfil pueda habilitar. La ejecuta el intérprete
+     - Generador
+   * - ``WEB104``
+     - Una ``lambda``. Como ``WEB103``, en la contención y con **cualquier**
+       política, en la posición de la lambda (y en lugar de ``WEB103`` ahí).
+       La ejecuta el intérprete
      - Generador
    * - ``WEB900``
      - ``.phir`` ilegible o esquema no soportado

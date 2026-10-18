@@ -10,8 +10,10 @@ explícitas.
 > intérprete están completos; el target web ejecuta un subconjunto del
 > lenguaje; el backend C++ (`backend/`) lee el HIR, lo baja a **MIR** y lo
 > ejecuta en una **VM de registros** con verificación de propiedad. El
-> compilador escrito en suriaX (la V1, `src/`) se compila a sí mismo con
-> resultados idénticos a los de la V0 (el punto fijo). Falta el JIT y
+> compilador escrito en suriaX (la V1, `src/`) se compiló a sí mismo con
+> resultados idénticos a los de la V0 (el punto fijo, en la 0.4.0); hoy está
+> atrasado respecto del lenguaje de la 0.4.1 y el punto fijo está roto hasta
+> que se ponga al día. Falta el JIT y
 > cualquier artefacto nativo. Lo que falla en la versión vigente está en
 > [c_errorstfix.md](c_errorstfix.md).
 
@@ -40,7 +42,7 @@ end
 subgraph Cpp_backend [backend C++]
 HIR_cpp --> MIR[MIR · registros, CFG]
 MIR --> lowering
-lowering --> VM_JIT[VM bytecode / JIT]
+lowering --> VM_JIT[VM de registros / JIT]
 VM_JIT --> nativo[.o / .exe]
 end
 
@@ -75,7 +77,7 @@ dónde van los volcados, enseñarla en una página). El tooling se llama
 | | qué es | quién |
 |---|---|---|
 | **Compilador** | fuente -> artefactos | `V0/src/` (frontend, HIR, linker), `V0/include/`, `V0/error_handler/`, `V0/driver/`, `runtime/`, `backend/`, `web/`, `htims/`, `lib/` |
-| **suriniX** | todo lo que rodea a compilar | `suri/` (el comando), `V0/cli/` (argparse y formato de terminal), `config/` (el `.suriaX_config.yaml`, los logs, los volcados y la caché de build), `playground/` |
+| **suriniX** | todo lo que rodea a compilar | `suri/` (el comando), `V0/cli/` (argparse y formato de terminal), `config/` (el `.suriaX_config.yaml`, los logs, los volcados y la caché de build), `playground/`, `tooling/` (el servidor de lenguaje y la extensión de VS Code) |
 
 **La dirección de la dependencia es una sola: suriniX conoce al compilador, y
 el compilador no conoce a suriniX.** Un compilador que sabe formatear para una
@@ -144,7 +146,9 @@ Se verifica en dos niveles: un corpus de programas y proyectos que la V0 y la
 V1 compilan por igual (`test/bootstrap/test_bootstrap_v1.py`) y el **punto
 fijo** (`test/bootstrap/test_punto_fijo.py`): la V1 compila su propio fuente
 —30 unidades, ella y cada librería que importa— igual que la V0, y la V1
-compilada por sí misma vuelve a dar lo mismo.
+compilada por sí misma vuelve a dar lo mismo. Eso se alcanzó en la 0.4.0;
+hoy la V1 no lee la sintaxis nueva que ya usa la librería estándar y las dos
+pruebas fallan (ver [c_errorstfix.md](c_errorstfix.md), sección 3).
 
 El plan de versiones: la **V1** no optimiza (su meta es la identidad con la
 V0); la **V2** es la reproducción estable del autocompilado; la **V3**, el
@@ -173,11 +177,14 @@ dentro del HIR.
   devolver un tipo, y `const type int8;` declara un nominal opaco cuyo layout
   aportan sus hooks o el backend.
 
-> **Sin terminar, a propósito.** El sistema de inferencia definitivo aún no
-> está fijado (ver [ROADMAP.md](ROADMAP.md), Fase 3): se descartó
-> Hindley-Milner por su complejidad, su choque con el modelo de memoria y su
-> distancia del objetivo educativo. Hoy la anotación de tipos es explícita y
-> la inferencia se limita a literales y expresiones.
+> **Sin inferencia, por decisión.** El paradigma declarado (ver
+> [ROADMAP.md](ROADMAP.md)) es tipado estático, fuerte y nominal **sin
+> inferencia**: variables, parámetros y retornos se anotan siempre. Se
+> descartó Hindley-Milner por su complejidad, su choque con el modelo de
+> memoria y su distancia del objetivo educativo.
+> Lo que sí hay es la **deducción** de los argumentos de tipo de una llamada
+> genérica (`mayor(3, 9)`), que lee el tipo ya escrito en el argumento, como
+> los templates de C++.
 
 ## El puente: HIR en protobuf
 
@@ -212,7 +219,7 @@ protobuf. El frontend en Python no depende de este lado.
 |------|------------------|-----------------|
 | **Lector HIR** ✅ | `.phir` → `Module` + índices | Valida `schema_version` fail-fast, reconstruye la tabla de símbolos, liga las N unidades y recorre el árbol con un `switch` exhaustivo por `oneof`. Sus dos vistas (`--pretty`, `--summary`) son **byte-idénticas** a las de Python: eso convierte `test/backend/test_backend_cpp_*.py` en un diferencial entre consumidores. |
 | **Resolución** ✅ | `Image` → funciones resueltas | Cada función con sus slots, a qué se resuelve cada llamada y qué destruye cada bloque (`--resolve`). Falla si queda una llamada sin resolver. |
-| **MIR lowering** ✅ | HIR → **MIR** | IR de **registros virtuales** con control de flujo explícito (bloques con terminador). Los locales viven en el marco (`LoadLocal`/`StoreLocal`), los structs son handles con campos por índice y un `throw` es una arista del grafo. Lo que no sabe bajar lo nombra con su posición (hoy: `&` sobre un escalar). Ver [docs/mir.md](docs/mir.md). |
+| **MIR lowering** ✅ | HIR → **MIR** | IR de **registros virtuales** con control de flujo explícito (bloques con terminador). Los locales viven en el marco (`LoadLocal`/`StoreLocal`), los structs son handles con campos por índice y un `throw` es una arista del grafo. Lo que no sabe bajar lo nombra con su posición (hoy: lo que añadió la 0.4.1, con `VM001`–`VM005`: ver [c_errorstfix.md](c_errorstfix.md), sección 1). Ver [docs/mir.md](docs/mir.md). |
 | **Verificación de propiedad** ✅ | MIR → hallazgos | Análisis de flujo hacia adelante sobre el CFG: uso tras `move` por **todos** los caminos que llegan a un punto (`--mir`). Los préstamos se siguen dentro de un bloque; entre bloques, todavía no. |
 | **VM** ✅ | MIR → ejecución | Intérprete de **registros** del MIR (`--run`), con la MISMA semántica que el intérprete de Python (enteros de 64 bits que envuelven, división que trunca). Lo comprueba un diferencial. Límites para máquinas modestas: `--pasos N` y `--memoria-max` (la memoria del programa; `RT023`). |
 | **JIT** | MIR → código de máquina | Pendiente. La VM es su requisito, no su sustituto. |
@@ -284,10 +291,12 @@ contenido viaja intacto hasta el backend C++, que lo compila e integra vía los
 El viaje ya está completo hasta el lado nativo: `suriax-hir --emit-cpp`
 recoge los bloques de todas las unidades y los escribe como una unidad de
 traducción de C++, con `#line` al `.srcx` para que los errores del compilador
-apunten al archivo del usuario. Enlazarlo a la VM del backend nativo está
-pendiente. Donde **sí** se ejecuta hoy es en el intérprete:
-[`runtime/extern_cpp.py`](runtime/extern_cpp.py) compila el bloque con el
-compilador de C++ del sistema y liga sus prototipos al ejecutar. El target web
+apunten al archivo del usuario. Se ejecuta en los dos motores: en el
+intérprete, [`runtime/extern_cpp.py`](runtime/extern_cpp.py) compila el
+bloque con el compilador de C++ del sistema y liga sus prototipos al
+ejecutar; en la VM, [`backend/src/externo.cpp`](backend/src/externo.cpp) lo
+construye junto al `.phir`, lo carga y llama a cada prototipo con su firma
+tipada. Falta el enlazado estático, que es del binario nativo. El target web
 lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
 
 ## `compilerconfig` y la selección de target
@@ -303,8 +312,10 @@ lo **rechaza** (`WEB001`): no hay toolchain C++ en el navegador.
 
 ## Manejo de errores
 
-Cada fase tiene su jerarquía de errores con códigos estables (`LEXxxx`,
-`PARxxx`, `ASTxxx`, `SEMxxx`, `HIRxxx`, `RTxxx`, `WEBxxx`) bajo
+Cada fase tiene su familia de códigos estables (`CFGxxx`, `EXTxxx`,
+`LEXxxx`, `PARxxx`, `ASTxxx`, `SEMxxx`, `HIRxxx`, `RTxxx`, `EXCxxx`,
+`VMxxx`, `WEBxxx`, `ICE000`; el catálogo completo está en
+[errors.rst](documentation/source/errors.rst)). Los del frontend viven bajo
 `V0/error_handler/`, todos derivados de `CompilerError`. Ninguna fase lanza
 por construcciones del programa: **acumulan** diagnósticos con posición y los
 devuelven, de modo que una compilación reporta todo lo que está mal de una

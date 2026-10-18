@@ -1,0 +1,11 @@
+#from io #import stdp
+#import array.vector as vec
+struct { int x; } P;
+fn main() -> int {
+    var vec.Vector<P> b = vec.dynamic<P>(2);
+    b.push(P{ x: 1 });
+    var int ptr p = &b[0].x;
+    b[0] = P{ x: 2 };
+    stdp.println(f"{p[0]}");
+    return 0;
+}

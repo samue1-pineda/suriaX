@@ -1,0 +1,14 @@
+#from io #import stdp
+#import array.vector as vec
+struct { int x; } P;
+hook fn __cmp__(P ptr a, P ptr b) -> int {
+    if (a.x == 2 or b.x == 2) { throw "cmp"; }
+    return a.x - b.x;
+}
+fn main() -> int {
+    var vec.Vector<P> v = vec.dynamic<P>(4);
+    v.push(P{ x: 3 }); v.push(P{ x: 1 }); v.push(P{ x: 2 }); v.push(P{ x: 0 });
+    try { v.sort(); } catch (str e) { stdp.println("lanzo"); };
+    stdp.println(f"len={v.len()} {v.get(0).x} {v.get(1).x} {v.get(2).x} {v.get(3).x}");
+    return 0;
+}

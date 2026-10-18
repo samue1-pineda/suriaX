@@ -18,23 +18,32 @@ from_dir       = "#from" lib_name "#import" IDENTIFIER [ "as" IDENTIFIER ] [ ";"
 export_dir     = "#export" ( [ "as" ] IDENTIFIER | "package" "as" IDENTIFIER ) [ ";" ] ;
 lib_name       = IDENTIFIER { "." IDENTIFIER } ;
 extern_block   = "#extern" "cpp" [ "requires" "(" STRING_LIT { "," STRING_LIT } ")" ] RAW_BLOCK ;
-test_decl      = "test" STRING_LIT block ;
+test_decl      = "test" STRING_LIT block
+                 [ "errfinally" block ] [ "finally" block ] [ ";" ] ;
 
 decorated      = DECORATOR [ "(" name { "," name } ")" ] [ visibility ]
                  ( [ specifier ] function_decl | struct_decl | enum_decl )
                | impl_block
                | trait_decl ;
 impl_block     = "@impl" IDENTIFIER [ type_params ] "{" { method } "}" [ ";" ] ;
-method         = "fn" IDENTIFIER "(" param { "," param } ")" [ "->" type ] block ;
+method         = "fn" IDENTIFIER [ type_params ] "(" param { "," param } ")" [ "->" type ] block ;
+(* 'fn map<U>(...)' dentro de '@impl Caja<T>': un METODO GENERICO, con sus
+   propios parametros de tipo (y cotas); no pueden repetir los del '@impl'. *)
 trait_decl     = "@trait" [ visibility ]
                  ( "struct" "{" { trait_method } "}" IDENTIFIER ";" | trait_method ) ;
-trait_method   = [ specifier ] "fn" name "(" [ type { "," type } ] ")" [ "->" type ] ";" ;
+trait_method   = [ specifier ] "fn" name "(" [ trait_param { "," trait_param } ] ")"
+                 [ "->" type ] ";" ;
+trait_param    = type [ IDENTIFIER ] ;
+(* El nombre de un parametro de trait es opcional y no cuenta para el
+   contrato ('self ptr' y 'self ptr s' piden lo mismo). Un metodo de trait
+   con nombre dunder ('__x__') se cumple con un 'dunder fn'; uno con nombre
+   llano ('area'), con un metodo de un bloque '@impl Tipo { ... }'. *)
 
 function_decl  = "fn" name [ type_params ] "(" [ param { "," param } ] ")"
                  [ "->" type ] ( block | ";" ) ;
 param          = type name ;
 struct_decl    = "struct" "{" { type name ";" } "}" name [ type_params ] ";" ;
-enum_decl      = "enum" name "{" enum_item { "," enum_item } [ "," ] "}" ";" ;
+enum_decl      = "enum" name [ type_params ] "{" enum_item { "," enum_item } [ "," ] "}" ";" ;
 enum_item      = name ( "(" type { "," type } ")" | [ "=" expression ] ) ;
 
 block          = "{" { statement } "}" [ ";" ] ;
@@ -52,6 +61,7 @@ statement      = var_decl
                | free_stmt
                | throw_stmt
                | try_stmt
+               | expect_stmt
                | expr_stmt ;
 
 qualifier      = "const" | "var" ;
@@ -67,6 +77,9 @@ if_stmt        = "if" "(" expression ")" block [ "else" ( if_stmt | block ) ] ;
 while_stmt     = "while" "(" expression ")" block ;
 match_stmt     = "match" "(" expression ")" "{" { case_arm } "}" [ ";" ] ;
 case_arm       = "case" expression ( [ ":" ] block | ":" statement ) ;
+(* el patron es una expresion: "case null", "case 7", "case E.A(x)" (liga x).
+   Sobre un sujeto T?, "case v" con un nombre NUEVO liga el contenido; eso
+   lo decide la Semantica, la sintaxis es la misma. *)
 return_stmt    = "return" [ expression ] ";" ;
 break_stmt     = "break" ";" ;
 continue_stmt  = "continue" ";" ;
@@ -76,11 +89,16 @@ throw_stmt     = "throw" expression ";" ;
 try_stmt       = "try" block ( catch_clause { catch_clause } [ "finally" block ]
                              | "finally" block ) [ ";" ] ;
 catch_clause   = "catch" "(" [ type ] IDENTIFIER ")" block ;
+expect_stmt    = "expect" "(" expression ")" ( block [ ";" ] | ";" ) ;
 expr_stmt      = expression [ "++" | "--" ] ";" ;
 
-expression     = logic_or [ assign_op expression ] ;
+expression     = coalesce [ assign_op expression ] ;
 assign_op      = "=" | "+=" | "-=" | "*=" | "/=" | "%="
                | "&=" | "|=" | "^=" | "<<=" | ">>=" ;
+(* x ?? d: desenvuelve un T? con un defecto. Por debajo de "or" y asociativo
+   a la DERECHA (C#, Swift): a ?? b ?? c es a ?? (b ?? c). "??" son dos "?"
+   PEGADOS que el parser junta en posicion de operador (como ">>"). *)
+coalesce       = logic_or [ "??" coalesce ] ;
 logic_or       = logic_and { "or" logic_and } ;
 logic_and      = equality { "and" equality } ;
 equality       = comparison { ( "==" | "!=" ) comparison } ;
@@ -93,11 +111,16 @@ term           = factor { ( "+" | "-" ) factor } ;
 factor         = unary { ( "*" | "/" | "%" ) unary } ;
 unary          = ( "not" | "-" | "~" | "&" ) unary
                | postfix ;
-postfix        = ( struct_literal | generic_call | primary )
+postfix        = ( struct_literal | generic_call | generic_member | primary )
                  { "." name | "(" [ arguments ] ")" | "[" expression "]" } ;
 struct_literal = qualified_name [ type_args ]
                  "{" [ name ":" expression { "," name ":" expression } [ "," ] ] "}" ;
 generic_call   = qualified_name type_args "(" [ arguments ] ")" ;
+(* la variante de un enum GENERICO lleva los argumentos de su enum:
+   Res<int, str>.Ok(5), lib.Res<int, str>.Vacio. Tras "nombre<tipos>" un "{"
+   es un literal, un "(" una llamada y un "." una variante; otra cosa y el
+   "<" es una comparacion. *)
+generic_member = qualified_name type_args "." name ;
 arguments      = expression { "," expression } ;
 primary        = name
                | literal
@@ -105,7 +128,22 @@ primary        = name
                | "." name
                | "sizeof" "(" type ")"
                | "cast" "<" type ">" "(" expression ")"
-               | "move" unary ;
+               | "move" unary
+               | lambda ;
+(* LAMBDA: una funcion sin nombre con TODOS sus tipos escritos (el retorno
+   tambien: "-> void" si no devuelve nada). La forma corta ": expresion" es
+   azucar de "{ return expresion; }" (o "{ expresion; }" con retorno void), y
+   su expresion llega tan lejos como puede, como en Python: dentro de un
+   f-string va entre parentesis, porque el ":" seria el del formato. El
+   cuerpo es el de una funcion: "break"/"continue" no salen de el, "return"
+   devuelve de la lambda y "expect" no vale. No lleva sufijos ("lambda ...
+   { } (3)" no la llama). Se lee en cualquier posicion de expresion, pero la
+   Semantica solo la admite como ARGUMENTO de una llamada cuyo parametro esta
+   escrito "fn(...) -> R" (SEM050): asi no escapa, y por eso puede leer los
+   locales de quien la escribe. *)
+lambda         = "lambda" "(" [ param { "," param } ] ")" "->" type
+                 ( ":" expression | lambda_block ) ;
+lambda_block   = "{" { statement } "}" ;   (* sin el ";" opcional de 'block' *)
 literal        = INT_LIT | FLOAT_LIT | CHAR_LIT | STRING_LIT | FSTRING_LIT
                | "true" | "false" | "null" ;
 
@@ -113,9 +151,28 @@ type           = base_type { "?" | "ptr" [ "mutable" ] } ;
 base_type      = "int" | "float" | "bool" | "char" | "str" | "byte" | "void" | "type"
                | "error" [ type ]
                | "self"
+               | function_type
+               | "(" type ")"
                | qualified_name [ type_args ] ;
+(* tipo funcion: "fn" seguido de "(" es un TIPO; seguido de un nombre, una
+   declaracion. Sin "->" el retorno es void. Lo que sigue a la flecha es un
+   'type' completo, asi que "?" y "ptr" se pegan al RETORNO:
+   fn(int) -> int?  devuelve int?;  (fn(int) -> int)?  es la funcion opcional.
+   Un statement o un top_level que empieza por "fn (" es un var_decl; tambien
+   uno que empieza por "(" seguido de "fn (" o de una palabra de tipo
+   ("int", "str", "error"...): (fn(int) -> int)? h = null; no necesita "var".
+   Con un nombre tras el "(" sigue siendo una expresion: (Caja ptr)? p lleva
+   "var" delante. *)
+function_type  = "fn" "(" [ type { "," type } ] ")" [ "->" type ] ;
 type_args      = "<" type { "," type } ">" ;
-type_params    = "<" IDENTIFIER { "," IDENTIFIER } ">" ;
+type_params    = "<" type_param { "," type_param } ">" ;
+type_param     = IDENTIFIER [ ":" bound { "+" bound } ] ;
+bound          = qualified_name ;
+(* Una COTA nombra un trait del archivo o un concepto nativo ('Eq', 'Ord',
+   'Hash', 'Print'): no son palabras reservadas, solo existen en esta
+   posicion, y un trait del archivo con el mismo nombre manda. Que nombre es
+   lo decide la Semantica (una cota que no nombra ninguno es SEM021). Vale en
+   toda declaracion generica: fn, struct, enum, type y '@impl Tipo<T: Ord>'. *)
 qualified_name = name { "." name } ;
 name           = IDENTIFIER | DUNDER ;
 
@@ -126,7 +183,8 @@ type_kw        = "int" | "float" | "bool" | "char" | "str" | "byte" | "void"
 
 (* palabras reservadas: declaraciones y modificadores *)
 decl_kw        = "fn" | "struct" | "enum" | "const" | "var" | "test"
-               | "public" | "private" | "internal" | "hook" | "dunder" ;
+               | "public" | "private" | "internal" | "hook" | "dunder"
+               | "lambda" ;
 
 (* palabras reservadas: control de flujo *)
 control_kw     = "if" | "else" | "while" | "match" | "case" | "return"
@@ -137,6 +195,9 @@ memory_kw      = "move" | "free" | "sizeof" | "cast" ;
 
 (* palabras reservadas: excepciones *)
 error_kw       = "try" | "catch" | "throw" | "finally" ;
+
+(* palabras reservadas: pruebas *)
+test_kw        = "expect" | "errfinally" ;
 
 (* palabras reservadas: operadores y literales *)
 word_op        = "and" | "or" | "not" ;
@@ -151,7 +212,7 @@ operator       = "+" | "-" | "*" | "/" | "%"
                | "&" | "|" | "^" | "~" | "<<" | ">>"
                | "=" | "+=" | "-=" | "*=" | "/=" | "%="
                | "&=" | "|=" | "^=" | "<<=" | ">>="
-               | "++" | "--" | "->" | "?" ;
+               | "++" | "--" | "->" | "?" | "??" ;
 
 (* puntuación *)
 punctuation    = "(" | ")" | "{" | "}" | "[" | "]" | "," | ";" | ":" | "." ;
@@ -167,7 +228,11 @@ INT_LIT        = digits
                | "0x" hex_digit { [ "_" ] hex_digit }
                | "0b" bin_digit { [ "_" ] bin_digit }
                | "0o" oct_digit { [ "_" ] oct_digit } ;
-FLOAT_LIT      = digits "." digits ;
+FLOAT_LIT      = digits "." digits [ exponent ]
+               | digits exponent ;
+(* con exponente el literal es SIEMPRE float: 1e3 vale 1000.0. Un literal
+   con base (0x...) no lleva exponente: 0x1e3 es un entero. *)
+exponent       = ( "e" | "E" ) [ "+" | "-" ] digits ;
 digits         = digit { [ "_" ] digit } ;
 digit          = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 hex_digit      = digit | "a" | "b" | "c" | "d" | "e" | "f"
@@ -179,6 +244,10 @@ STRING_LIT     = '"' { char_item | escape } '"' ;
 FSTRING_LIT    = 'f"' { char_item | escape | "{{" | "}}"
                       | "{" expression [ "!r" ] [ ":" format_spec ] "}" } '"' ;
 format_spec    = [ "0" ] [ digits ] [ "." digits ] [ "d" | "x" | "X" | "b" | "o" | "f" ] ;
+(* dentro de "{" ... "}" va CODIGO (como en Python 3.12 y C#): un literal se
+   escribe tal cual, f"{len("ab")}" o f"{'}'}", y sus comillas y llaves no
+   cierran nada; un "\" fuera de un literal es un error (LEX005). La
+   interpolacion no cruza un salto de linea. *)
 escape         = "\" ( "n" | "t" | "r" | "0" | "\" | '"' | "'" ) ;
 char_item      = ?cualquier code point salvo el delimitador, "\" y el salto de línea? ;
 

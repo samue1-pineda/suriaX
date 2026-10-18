@@ -240,3 +240,26 @@ fn main() -> int {{
     return 0;
 }}
 """, {"datos/f.txt": b"x"}))
+
+
+def test_crear_carpeta_es_mkdir_p_en_los_dos_motores():
+    """'crear_carpeta' crea la carpeta y las que le falten; sobre una que ya
+    existe no hace nada; sobre un ARCHIVO lanza ErrorDeArchivo con el mismo
+    mensaje en los dos motores. Es lo que usa la V1 para su carpeta de
+    salida."""
+    _comparar(_con_archivos("""#from io #import stdp
+#import sistema.archivos as arch
+#import excepciones as exc
+fn main() -> int {
+    arch.crear_carpeta("a/b/c");
+    arch.crear_carpeta("a/b/c");
+    arch.escribir("a/b/c/x.txt", "hola");
+    stdp.println(arch.leer("a/b/c/x.txt"));
+    try {
+        arch.crear_carpeta("ocupado.txt");
+    } catch (exc.ErrorDeArchivo e) {
+        stdp.println(e.mensaje);
+    };
+    return 0;
+}
+""", {"ocupado.txt": b"soy un archivo"}))

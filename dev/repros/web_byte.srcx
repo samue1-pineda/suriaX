@@ -1,0 +1,6 @@
+#from io #import stdp
+fn main() -> int {
+    var byte b = 0x0F;
+    stdp.println(f"{b}");
+    return 0;
+}

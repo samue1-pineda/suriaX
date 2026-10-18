@@ -34,6 +34,10 @@ class SemanticContext:
         "loaded_libraries",
         "hook_specs",
         "copias",
+        "ordenes",
+        "elem_borrows",
+        "hashes",
+        "sizes",
         "instancias",
     )
 
@@ -85,6 +89,15 @@ class SemanticContext:
         # Con las dos, scope_resolver decide al cerrar el modulo que
         # instancias copiarian un valor con destructor (SEM038).
         self.copias: Dict[int, List[Any]] = {}
+        # ...y lo que ORDENA ('a < b' con 'a' de un parametro de tipo): la
+        # misma forma que 'copias', y se decide igual, en cada instancia
+        # (SEM039 si el tipo concreto no se ordena).
+        self.ordenes: Dict[int, List[Any]] = {}
+        # ...lo que PRESTA ('&b[i]' con elemento de un parametro de tipo) y a
+        # que le pide 'hash(x)': misma forma, decididos en cada instancia
+        self.elem_borrows: Dict[int, List[Any]] = {}
+        self.hashes: Dict[int, List[Any]] = {}
+        self.sizes: Dict[int, List[Any]] = {}
         self.instancias: List[Any] = []
         # unidades .libsrx CARGADAS en esta compilacion: alias publico ->
         # ruta del archivo. La fase HIR emite un .phir por unidad y el

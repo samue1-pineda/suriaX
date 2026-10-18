@@ -77,7 +77,8 @@
       ],
       "name": "Nodo",
       "visibility": null,
-      "type_params": []
+      "type_params": [],
+      "type_bounds": {}
     },
     {
       "__node__": "FunctionDecl",
@@ -194,10 +195,12 @@
                     },
                     "mut": true,
                     "args": []
-                  }
+                  },
+                  "type_args": []
                 },
                 "member": "x",
                 "restype": null,
+                "type_args": [],
                 "nombre_de_item": null,
                 "azucar": ""
               },
@@ -213,7 +216,8 @@
                   "inner": null,
                   "mut": false,
                   "args": []
-                }
+                },
+                "type_args": []
               },
               "restype": {
                 "__node__": "Type",
@@ -250,7 +254,8 @@
                 },
                 "mut": true,
                 "args": []
-              }
+              },
+              "type_args": []
             },
             "transfers": false
           }
@@ -281,7 +286,9 @@
         "args": []
       },
       "type_params": [],
+      "type_bounds": {},
       "impl_type_params": [],
+      "impl_type_bounds": {},
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -390,7 +397,8 @@
                   },
                   "mut": false,
                   "args": []
-                }
+                },
+                "type_args": []
               },
               "right": {
                 "__node__": "Literal",
@@ -453,7 +461,8 @@
                 "ln": 10,
                 "col": 12,
                 "name": "n",
-                "restype": null
+                "restype": null,
+                "type_args": []
               },
               "member": "x",
               "restype": {
@@ -464,6 +473,7 @@
                 "mut": false,
                 "args": []
               },
+              "type_args": [],
               "nombre_de_item": null,
               "azucar": ""
             },
@@ -489,7 +499,9 @@
         "args": []
       },
       "type_params": [],
+      "type_bounds": {},
       "impl_type_params": [],
+      "impl_type_bounds": {},
       "dunder": null,
       "specifier": null,
       "visibility": null
@@ -616,7 +628,8 @@
                 "ln": 15,
                 "col": 28,
                 "name": "crea",
-                "restype": null
+                "restype": null,
+                "type_args": []
               },
               "args": [
                 {
@@ -635,7 +648,8 @@
                       "inner": null,
                       "mut": false,
                       "args": []
-                    }
+                    },
+                    "type_args": []
                   },
                   "restype": {
                     "__node__": "Type",
@@ -696,7 +710,8 @@
               "valor_constante": null,
               "hook": null,
               "temp_drop": null,
-              "temp_by_type": false
+              "temp_by_type": false,
+              "ambiguity_hint": ""
             },
             "restype": {
               "__node__": "Type",
@@ -755,7 +770,8 @@
                       "ln": 17,
                       "col": 21,
                       "name": "suma",
-                      "restype": null
+                      "restype": null,
+                      "type_args": []
                     },
                     "args": [
                       {
@@ -784,7 +800,8 @@
                           },
                           "mut": false,
                           "args": []
-                        }
+                        },
+                        "type_args": []
                       }
                     ],
                     "type_args": [],
@@ -806,7 +823,8 @@
                     "valor_constante": null,
                     "hook": null,
                     "temp_drop": null,
-                    "temp_by_type": false
+                    "temp_by_type": false,
+                    "ambiguity_hint": ""
                   },
                   "restype": {
                     "__node__": "Type",
@@ -888,7 +906,9 @@
         "args": []
       },
       "type_params": [],
+      "type_bounds": {},
       "impl_type_params": [],
+      "impl_type_bounds": {},
       "dunder": null,
       "specifier": null,
       "visibility": null

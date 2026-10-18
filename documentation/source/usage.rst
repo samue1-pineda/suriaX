@@ -108,11 +108,13 @@ Y ejecútalo:
 
    $ python V0/main.py hola.srcx --run
    frontend OK: 23 tokens, 2 items, 2 simbolos globales, 0 hooks, 0 casts
-   HIR (306 bytes) generado en: dumps/hola.srcx.phir
-     unidad 'IO.stdpf': 349 bytes -> dumps/IO.stdpf.phir
-     unidad 'IO.stdp': 956 bytes -> dumps/IO.stdp.phir
-     unidad 'IO': 145 bytes -> dumps/IO.phir
+   HIR (… bytes) generado en: …/dumps/hola.srcx.phir
+     unidad 'IO.stdpf': … bytes -> …/dumps/IO.stdpf.phir
+     unidad 'IO.stdp': … bytes -> …/dumps/IO.stdp.phir
+     unidad 'IO': … bytes -> …/dumps/IO.phir
    hola, suriaX
+
+(Las rutas salen completas y los tamaños dependen de la ruta del archivo.)
 
 ``--run`` emite el HIR y lo ejecuta en el motor que pide el ``target`` del
 ``.suriaX_config.yaml``: ``native`` (el defecto) es la VM compilada
@@ -121,10 +123,11 @@ Y ejecútalo:
 el intérprete con un aviso. El valor que devuelve ``main`` es el código de
 salida del compilador, así que ``echo $?`` lo muestra.
 
-.. important::
-   El fuente tiene que estar donde el linker de librerías pueda encontrar
-   ``lib/``: busca junto al archivo y en ``<directorio>/lib``. Compilar desde
-   la raíz del repositorio siempre funciona.
+.. note::
+   El fuente puede estar en cualquier carpeta: el linker de librerías busca
+   primero junto al archivo, después en ``libraries.libsrx_paths`` del
+   ``.suriaX_config.yaml`` y al final en la librería estándar del
+   repositorio (o en la que diga ``SURIAX_STDLIB``).
 
 .. _viendo-las-fases:
 
@@ -158,7 +161,9 @@ compilador vuelca esa fase y termina, sin seguir el pipeline.
 
    int x = 1;
 
-Las fases disponibles son ``lexer``, ``parser``, ``ast``, ``sem`` y ``hir``.
+Las fases disponibles son las mismas de ``--emit-stage``: ``lexer``,
+``parser``, ``ast``, ``sem``, ``hir`` y ``desugar`` (sin distinguir
+mayúsculas).
 
 .. _cli:
 
@@ -208,7 +213,9 @@ Ejecución
    ====================  ===================================================================
    Opción                Efecto
    ====================  ===================================================================
-   ``--run``             Emite el HIR y lo ejecuta (en la VM o en el intérprete, según el ``target``).
+   ``--run [MOTOR]``     Emite el HIR y lo ejecuta (en la VM o en el intérprete, según el ``target``;
+                         ``compiler`` o ``interpreter`` lo fuerzan).
+   ``--test``            Corre los bloques ``test`` del programa (no su ``main``), en el intérprete.
    ``--trace-exec``      Traza llamadas y retornos anidados durante la ejecución.
    ``--trace-memory``    Traza las instrucciones de memoria (``&``, ``move``, ``free``).
    ``--time``            Tiempo de cada fase, en milisegundos.
@@ -247,6 +254,12 @@ Integración con editores
        y los *snippets* de cada construcción. Trae también
        ``compiler_version``, para que el cliente sepa contra qué compilador
        está hablando y no atribuya a un error suyo un vocabulario viejo.
+   * - ``--lsp``
+     - El **servidor de lenguaje** (LSP) por la entrada y la salida estándar:
+       lo lanza el editor. No necesita archivo fuente.
+   * - ``--dap``
+     - El **depurador** (DAP) por la entrada y la salida estándar, sobre el
+       intérprete: lo lanza el editor. No necesita archivo fuente.
    * - ``--emit-extensions``
      - Las extensiones del proyecto en JSON (HTIMS): el nombre del proyecto,
        cada hook declarado con su firma y su posición, y las líneas
@@ -278,14 +291,13 @@ configuración.
 
 .. code-block:: yaml
 
-   version: 1
-   target: interp            # interp | native | web
+   version: 2
+   target: interp            # native | interp | wasm
    platform: linux
    optimization: O0
    toolchain:
-     llvm_required_major: 22
-     llvm_config: /usr/bin/llvm-config
-     linker: /usr/bin/ld.lld
+     cxx_compiler: g++       # para '#extern cpp{}'
+     cxx_flags: []
    codegen:
      triple: x86_64-pc-linux-gnu
      artifact: o
@@ -300,8 +312,10 @@ configuración.
    flags:
      is_web: false
 
-Con ``target: interp`` el compilador ejecuta el programa sin necesidad de
-``--run``. ``libraries.libsrx_paths`` añade directorios donde buscar las
+Una clave que no existe o un valor del tipo equivocado es un error de
+configuración (``CFG0xx``, código de salida 5). ``--init-config`` escribe el
+archivo completo con lo que detecta en la máquina. Con ``target: interp`` el
+compilador ejecuta el programa sin necesidad de ``--run``. ``libraries.libsrx_paths`` añade directorios donde buscar las
 librerías ``.libsrx``.
 
 .. _ejecutar-en-wasm:
@@ -334,9 +348,10 @@ Ejecutar las pruebas
 
 .. code-block:: console
 
-   $ python test/main.py              # todas las categorías
+   $ python test/main.py              # las categorías de siempre
    $ python test/main.py unit e2e     # solo algunas
 
-Las categorías son ``unit``, ``grammar``, ``negative_tests``, ``snapshot``,
-``e2e`` y ``fuzz``. La suite incluye las pruebas del target web y una
+Las categorías de siempre son ``unit``, ``grammar``, ``negative_tests``,
+``snapshot``, ``e2e`` y ``fuzz``; ``backend`` (la VM contra el intérprete) y
+``bootstrap`` (la V1 contra la V0) se piden por nombre. La suite incluye las pruebas del target web y una
 comparación **diferencial** entre el intérprete y el WebAssembly generado.

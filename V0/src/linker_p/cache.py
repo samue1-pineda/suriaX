@@ -1,4 +1,4 @@
-"""Caché de librerías por proceso + guard de imports circulares.
+"""Caché de librerías POR COMPILACIÓN + guard de imports circulares.
 
 Toda ``.libsrx`` / paquete se parsea UNA vez por proceso, cacheada por su
 ruta ABSOLUTA: un compilador batch de M fuentes que importen la misma
@@ -11,6 +11,14 @@ veces y emite su diagnóstico N veces (p. ej. ``print.libsrx``, importada por
 el padre de su paquete Y descubierta como submódulo, se reportaba doble). El
 contrato es el mismo que el del resto de la fase: **cada problema se reporta
 una vez, con la ruta del archivo que lo contiene**.
+
+**Vive una compilación, no el proceso.** Cada compilación o análisis de
+nivel superior (``compile_source``, ``emit_diagnostics``, ``emit_stage``,
+``artifacts.collect``) empieza con :func:`nueva_compilacion`. Antes vivía
+el proceso entero: en uno largo —el playground, un LSP en proceso— la
+segunda compilación de un programa con una librería rota ya no mostraba sus
+errores (la caché negativa decía "ya se dijeron"), y una librería editada
+seguía sirviéndose vieja (la positiva no mira el archivo).
 
 El guard de ciclos (``_LOADING``) detecta ``A importa B importa A`` sin
 recursión infinita: es un ``set`` de rutas en curso de carga.
@@ -60,13 +68,19 @@ def unmark_loading(path: str) -> None:
 
 
 def clear_cache() -> None:
-    """Vacía la caché (positiva y negativa) y el guard de ciclos (para tests)."""
+    """Vacía la caché (positiva y negativa) y el guard de ciclos."""
     _CACHE.clear()
     _FAILED.clear()
     _LOADING.clear()
 
 
+def nueva_compilacion() -> None:
+    """Empieza una compilación: lo cargado por la anterior no vale (sus
+    archivos pudieron cambiar, y sus errores hay que volver a decirlos)."""
+    clear_cache()
+
+
 __all__ = [
     "get", "put", "has_failed", "mark_failed", "is_loading", "mark_loading",
-    "unmark_loading", "clear_cache",
+    "unmark_loading", "clear_cache", "nueva_compilacion",
 ]

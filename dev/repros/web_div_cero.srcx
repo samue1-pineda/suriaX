@@ -1,0 +1,6 @@
+#from io #import stdp
+fn divide(int a, int b) -> int { return a / b; }
+fn main() -> int {
+    stdp.println(f"{divide(7, 0)}");
+    return 0;
+}

@@ -207,7 +207,7 @@ y el consumidor los usa como cualquier otro tipo, cualificados por el módulo:
 
 ```srcx
 #from d_types #import dt_variables as dt;
-const dt.int8 abc;
+const dt.int8 abc = 5;
 ```
 
 Si el tipo no existe, el error nombra los que sí:

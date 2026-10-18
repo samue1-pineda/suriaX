@@ -1,0 +1,9 @@
+#from io #import stdp
+struct { int id; } R;
+hook fn __free__(R ptr r) -> void { stdp.println(f"free {r.id}"); }
+fn falla() -> void { throw "sin atrapar"; }
+fn main() -> int {
+    var R a = R{ id: 1 };
+    falla();
+    return 0;
+}

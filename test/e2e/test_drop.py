@@ -74,6 +74,19 @@ def test_un_destructor_que_si_lo_suelta_no_avisa():
     assert "drop 1" in out, (out, err)
 
 
+def test_un_destructor_que_lo_suelta_en_un_else_no_avisa():
+    """Regresión (H9): la búsqueda de los 'free' miraba un campo inexistente
+    ('else_block') y un 'free' en el 'else' —o al final de una cadena de
+    'else if'— no contaba: salía un NOTE002 falso."""
+    for cuerpo in ('if (c.n == "y") { } else { free &c.r; };',
+                   'if (c.n == "y") { } else if (c.n == "z") { } else { free &c.r; };'):
+        code, _out, err = run_source(
+            W + R + _CONTENEDOR.format(cuerpo) +
+            'fn main() -> int { var C c = C{ n: "x", r: R{ id: 1 } }; return 0; };\n')
+        assert code == 0, err
+        assert "NOTE002" not in err, (cuerpo, err)
+
+
 def test_free_sobre_un_campo_dice_como_escribirlo():
     """``free c.r`` no compila (``free`` quiere un puntero) y la salida es
     ``&``. Sin decirlo, el caso más común del destructor de un contenedor

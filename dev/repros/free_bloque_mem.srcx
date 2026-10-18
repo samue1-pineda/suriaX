@@ -1,0 +1,6 @@
+#import mem
+fn main() -> int {
+    var int ptr mutable q = mem.reserve<int>(1);
+    free q;
+    return 0;
+}

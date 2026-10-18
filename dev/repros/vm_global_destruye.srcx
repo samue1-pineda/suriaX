@@ -1,0 +1,8 @@
+#from io #import stdp
+struct { int id; } R;
+hook fn __free__(R ptr r) -> void { stdp.println(f"free {r.id}"); }
+var R g = R{ id: 1 };
+fn main() -> int {
+    stdp.println("fin de main");
+    return 0;
+}

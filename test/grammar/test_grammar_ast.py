@@ -124,8 +124,19 @@ def test_decorador_sobre_funcion():
 
 
 def test_test_decl():
-    t = _items('test "suma bien" { var int x = 1; };')[0]
+    t = _items('test "suma bien" { var int x = 1; expect (x == 1); };')[0]
     assert isinstance(t, ast.TestDecl) and t.name == "suma bien"
+    assert t.errfinally is None and t.finally_block is None
+    comprobacion = t.body.statements[1]
+    assert isinstance(comprobacion, ast.ExpectStmt) and comprobacion.body is None
+    assert comprobacion.text == "x == 1"      # como se escribió: lo cita el fallo
+
+
+def test_test_decl_con_clausulas():
+    t = _items('test "x" { expect (1 == 1) { } } errfinally { } finally { };')[0]
+    assert isinstance(t, ast.TestDecl)
+    assert t.errfinally is not None and t.finally_block is not None
+    assert t.body.statements[0].body is not None   # el bloque opcional del expect
 
 
 # --------------------------------------------------------------------------- #

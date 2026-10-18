@@ -8,6 +8,9 @@ entra al mundo del intérprete. Responsabilidades — y nada más:
  - **fail-fast de esquema**: ``schema_version`` fuera de
    :data:`SUPPORTED_SCHEMA_VERSIONS` se rechaza con error claro ANTES de
    tocar el contenido (nunca interpretar bytes con un layout desconocido);
+ - **normalizar el esquema 1** (tipos inline, sin pool) a la forma de hoy
+   (``V0/src/HIR/schema_v1.normalize_v1``): desde ahí el intérprete tiene un
+   solo camino, el del esquema 2;
  - indexar los hooks (``Module.symbols.hooks`` -> dict ``(owner, kind)``)
    en O(1), el mismo re-enlace que hará ``hook/dispatch.py``;
  - producir el resumen legible del módulo (``summarize``) que usa la CLI.
@@ -32,11 +35,14 @@ from V0.src.HIR.stubs import load_hir_pb2
 # diciendo 'error' y 'Vector'. Un resumen y una vista legible del MISMO
 # artefacto no pueden discrepar sobre cómo se llama un tipo.
 from V0.src.HIR.pretty import format_type
-from .values import VariantCtor
+from V0.src.HIR.schema_v1 import SCHEMA_V1, SchemaV1Error, normalize_v1
+from .values import EnumItem, EnumValue, VariantCtor
 
 #: versiones de esquema que este lector sabe interpretar. Un HIR de una
-#: version futura se RECHAZA (fail-fast) en vez de mal-interpretarse.
-SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({2})
+#: version futura se RECHAZA (fail-fast) en vez de mal-interpretarse. El 1
+#: (tipos inline) se acepta y se NORMALIZA al cargar: es el rollback del
+#: esquema versionado (ver la cabecera de hir.proto).
+SUPPORTED_SCHEMA_VERSIONS: frozenset[int] = frozenset({1, 2})
 
 
 class HIRLoadError(RuntimeError):
@@ -68,6 +74,13 @@ def load_module(path: str):
             f"intérprete (soportadas: {supported}). Regenera el .phir con un "
             "frontend compatible o actualiza el intérprete."
         )
+    if module.schema_version == SCHEMA_V1:
+        # un solo camino de ejecucion: el v1 se lleva a la forma del 2 (pool
+        # + indices) y el resto del interprete no sabe que existio
+        try:
+            normalize_v1(module)
+        except SchemaV1Error as exc:
+            raise HIRLoadError(f"'{path}': {exc}") from exc
     return module
 
 
@@ -119,7 +132,14 @@ class Unit:
                 # funcion normal. Los overloads de __cast__ comparten nombre
                 # pero solo se despachan por la tabla de casts, nunca por
                 # nombre, asi que la colision en 'functions' es inocua.
-                self.functions[fn.name] = fn
+                #
+                # Un METODO de '@impl' (nombre llano y 'dunder' igual al
+                # nombre) NO: se despacha por (tipo, nombre) en 'dunders', y
+                # por nombre pisaba a una 'fn' homonima del modulo —'fn
+                # distancia' y '@impl Punto { fn distancia }' conviven en la
+                # Semantica, y la llamada 'distancia(5)' ejecutaba el metodo.
+                if not (fn.dunder and fn.dunder == fn.name):
+                    self.functions[fn.name] = fn
                 if fn.dunder:
                     # ...y ademas resoluble como CUERPO de hook por (nombre,
                     # linea): hook/dispatch enlaza los HookRef contra esto.
@@ -130,6 +150,11 @@ class Unit:
                 nombre_enum = decl.enum_decl.name
                 values: Dict[str, object] = {}
                 next_value = 0
+                # ¿tipo SUMA? (alguna variante lleva datos). Entonces una
+                # variante SIN datos es un valor del enum como sus hermanas
+                # (un 'EnumValue' sin campos), no un entero: lo que despacha
+                # por el tipo del valor la reconoce (A10, A10b, A02).
+                is_sum = any(i.payload_type_ids for i in decl.enum_decl.items)
                 for item in decl.enum_decl.items:
                     if item.payload_type_ids:
                         # variante con PAYLOAD: no es un entero sino algo que
@@ -141,7 +166,15 @@ class Unit:
                     if item.HasField("value") and \
                             item.value.WhichOneof("node") == "literal":
                         next_value = int(item.value.literal.int_value)
-                    values[item.name] = next_value
+                    if is_sum:
+                        # UNA por variante: 'match' la reconoce por identidad
+                        # (ver 'Evaluator._encaja'); sin campos, nada la copia
+                        values[item.name] = EnumValue(nombre_enum, item.name, [])
+                    else:
+                        # estilo C: sigue siendo el entero, pero sabe su
+                        # nombre (para escribirlo dentro de un genérico, A08)
+                        values[item.name] = EnumItem(next_value, nombre_enum,
+                                                     item.name)
                     next_value += 1
                 self.enum_values[nombre_enum] = values
 
@@ -149,7 +182,7 @@ class Unit:
 class Image:
     """main + librerías ligadas: lo que ejecuta el intérprete."""
 
-    __slots__ = ("main", "units", "hooks", "casts", "dunders")
+    __slots__ = ("main", "units", "hooks", "casts", "dunders", "type_params")
 
     def __init__(self, main: Unit, units: Dict[str, Unit]) -> None:
         from .hook.dispatch import (index_casts as _casts,
@@ -162,6 +195,27 @@ class Image:
         self.casts = _casts(every)
         # métodos de usuario (dunder fn) por (owner_type, nombre): x.__m__(...)
         self.dunders = _dunders(every)
+        # los PARAMETROS DE TIPO de todas las unidades ('T', 'K'...). Un
+        # HookRef cuyo dueño es uno de ellos viene de una COTA ('print(x)' con
+        # 'T: Print'): no hay hook de 'T', se despacha con el tipo del valor.
+        # Un parametro no choca con un tipo real de su archivo (la Semantica
+        # lo rechaza), y el despacho estatico se intenta siempre antes.
+        self.type_params = frozenset(
+            name for unit in every for decl in unit.module.items
+            for name in _type_params_of(decl))
+
+
+def _type_params_of(decl):
+    """Los parametros de tipo que declara un item del HIR (una funcion
+    generica o un metodo de un '@impl' generico, un struct, un enum)."""
+    which = decl.WhichOneof("node")
+    if which == "function":
+        return decl.function.type_params
+    if which == "struct_decl":
+        return decl.struct_decl.type_params
+    if which == "enum_decl":
+        return decl.enum_decl.type_params
+    return ()
 
 
 def load_image(main_path: str) -> Image:

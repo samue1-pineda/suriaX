@@ -1,0 +1,9 @@
+#from io #import stdp
+fn main() -> int {
+    var int a = 6;
+    stdp.println(f"{a & 3}");
+    stdp.println(f"{a:08b}");
+    stdp.println(f"{hash(a)}");
+    var byte b = cast<byte>(1);
+    return 0;
+}

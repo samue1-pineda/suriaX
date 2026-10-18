@@ -62,7 +62,7 @@ def load_config(source_path: Optional[str]) -> dict:
 def build_library_units(libraries: dict, config: dict, *,
                         hir_text: bool = False,
                         reporter: Optional[Reporter] = None,
-                        log=None) -> tuple:
+                        log=None, hir_schema: int = 2) -> tuple:
     """Compila cada unidad ``.libsrx`` cargada y devuelve SUS BYTES.
 
     Recorre un *worklist*: si una librería importa otras, sus unidades se
@@ -85,7 +85,7 @@ def build_library_units(libraries: dict, config: dict, *,
     from src.frontend.semantic import analyze
     from src.frontend.parser.typed_ast import resolve_types
     from src.HIR.emmit_IR import build_module, module_to_text, serialize
-    from src.linker_p.resolver import PACKAGE_PARENT, package_parent
+    from src.linker_p.resolver import PACKAGE_PARENT, package_parent, ruta_publica
 
     reporter = reporter or SilentReporter()
     pending = dict(libraries)
@@ -135,16 +135,25 @@ def build_library_units(libraries: dict, config: dict, *,
             # Se dicen CUALES: antes solo salía "la unidad tiene errores", y
             # como el consumidor ya había compilado sin quejas, no había
             # forma de saber qué fallaba ni dónde.
-            reporter.diagnostics(f"errores de la unidad '{alias}' ({lib_path})",
-                                 diagnosticos)
+            reporter.diagnostics(_titulo(f"de la unidad '{alias}' ({lib_path})",
+                                         diagnosticos), diagnosticos)
             if log is not None:
                 log.error_batch(diagnosticos, source_file=lib_path)
+        if blocks(diagnosticos):
+            # solo lo que BLOQUEA impide emitir la unidad: un aviso (un
+            # 'match' no exhaustivo, codigo inalcanzable) se dice y se sigue,
+            # igual que en el programa principal. Antes cualquier aviso en
+            # una libreria dejaba el programa sin poder ejecutarse.
             failed = f"la unidad '{alias}' tiene errores; su .phir no se emitió"
             reporter.warn(f"  {failed}")
             continue
 
+        # la ruta PUBLICA (reproducible): relativa a la stdlib o al proyecto
+        # el MISMO esquema que el programa principal ('--hir-schema'): las
+        # unidades viajan juntas
         module, hir_errors = build_module(
-            lib_program, lib_table, source_file=lib_path, libraries=sub_libs,
+            lib_program, lib_table, source_file=ruta_publica(lib_path, config),
+            libraries=sub_libs, schema_version=hir_schema,
         )
         if hir_errors:
             reporter.diagnostics(f"errores del HIR ({alias})", hir_errors)
@@ -163,7 +172,8 @@ def build_library_units(libraries: dict, config: dict, *,
 def emit_library_units(libraries: dict, config: dict, log,
                        times: dict, *, hir_text: bool = False,
                        reporter: Optional[Reporter] = None,
-                       destino: Optional[str] = None) -> Optional[str]:
+                       destino: Optional[str] = None,
+                       hir_schema: int = 2) -> Optional[str]:
     """Escribe un ``<alias>.phir`` (+ ``.txt``) por unidad ``.libsrx`` cargada.
 
     Los ``.phir`` quedan junto al del módulo principal, así el module-linker
@@ -178,7 +188,8 @@ def emit_library_units(libraries: dict, config: dict, log,
     # principal no se podia cargar (con 'target: native' era un ICE000).
     dumps_dir = destino or compilerconfig.dumps_dir(config)
     unidades, failed = build_library_units(
-        libraries, config, hir_text=hir_text, reporter=reporter, log=log)
+        libraries, config, hir_text=hir_text, reporter=reporter, log=log,
+        hir_schema=hir_schema)
     for alias, (data, text, lib_path) in unidades.items():
         out = compilerconfig.dump_hir(
             data, source_path=lib_path, config=config,
@@ -220,6 +231,8 @@ def compile_source(path: str, options: Optional[CompileOptions] = None, *,
     errores": la CLI la muestra al estilo de Python y sale con
     ``EXIT_INTERNAL_ERROR`` (6).
     """
+    from src.linker_p import nueva_compilacion
+    nueva_compilacion()     # la caché del linker es de ESTA compilación
     fase = _Fase()
     try:
         return _compilar(path, options, reporter=reporter, fase=fase)
@@ -395,6 +408,14 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
 
     exit_code = 0
     phir_path: Optional[str] = None
+
+    #errores lexicos recuperados: PRIMERO, como en el canal del editor
+    #(--emit-diagnostics): lexicos, sintaxis, semanticos y notas
+    if lexer.errors:
+        reporter.diagnostics("errores lexicos", lexer.errors)
+        log.error_batch(lexer.errors, source_file=path)
+        result.diagnostics.extend(lexer.errors)
+        exit_code = EXIT_COMPILE_ERROR
     if debug:
         report = compilerconfig.DebugReport(path, config)
         report.environment()
@@ -424,6 +445,15 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
             libraries=libraries,
         )
         times["semantica"] = time.perf_counter() - t
+        # Tras un error lexico o de sintaxis el AST es el "mejor esfuerzo" de
+        # la recuperacion: lo que se trago no esta en la tabla, y cada uso de
+        # ello salia como un SEM001 FALSO ('suma' no esta declarado sobre una
+        # funcion que si lo esta). Sus diagnosticos y notas se descartan, la
+        # misma regla que el canal del editor (inspect.emit_diagnostics): los
+        # dos dan la misma lista. La tabla se conserva para los volcados.
+        if lexer.errors or parser.ctx.errors:
+            sem_errors = ()
+            notes = []
 
         n_syms = len(table.global_scope.values) + len(table.global_scope.types)
         result.metrics = {
@@ -431,11 +461,16 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
             "simbolos_globales": n_syms, "hooks": len(table.hooks),
             "casts": len(table.casts), "librerias": len(libraries),
         }
-        reporter.info(
-            f"frontend OK: {len(tokens)} tokens, {len(program.items)} items, "
-            f"{n_syms} simbolos globales, {len(table.hooks)} hooks, "
-            f"{len(table.casts)} casts"
-        )
+        # 'frontend OK' solo si de verdad lo esta: antes salia tambien con
+        # errores, justo encima de ellos, y se leia como que habia pasado.
+        # Un aviso (diagnostico que no bloquea) no lo impide. Las metricas
+        # siguen en 'result.metrics' y en el reporte de '--debug'.
+        if not (lexer.errors or blocks(parser.ctx.errors) or blocks(sem_errors)):
+            reporter.info(
+                f"frontend OK: {len(tokens)} tokens, {len(program.items)} items, "
+                f"{n_syms} simbolos globales, {len(table.hooks)} hooks, "
+                f"{len(table.casts)} casts"
+            )
 
         # NOTAS: consola (breve) + log estructurado
         # las notas no detienen compilacion, mas sin embargo tampoco deben ser ignoradas
@@ -525,6 +560,7 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
                 t = time.perf_counter()
                 module, hir_errors = build_module(
                     program, table, source_file=path, libraries=libraries,
+                    schema_version=options.hir_schema,
                 )
                 if hir_errors:
                     reporter.diagnostics("errores del HIR", hir_errors)
@@ -552,11 +588,15 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
                     # justo el defecto de la vista de texto del protobuf).
                     if hir_pretty is not None:
                         from src.HIR.pretty import write_pretty
+                        from src.HIR.schema_v1 import with_type_pool
                         pretty_path = compilerconfig.hir_pretty_path(
                             source_path=path, config=config,
                             out_path=hir_pretty or None)
                         with open(pretty_path, "w", encoding="utf-8") as fh:
-                            write_pretty(module, fh)
+                            # con '--hir-schema 1' el Module no tiene pool:
+                            # la vista lee su forma NORMALIZADA (la misma que
+                            # vera el lector), con 'schema 1' en la cabecera
+                            write_pretty(with_type_pool(module), fh)
                         result.artifacts["hir_pretty"] = pretty_path
                         reporter.info(f"HIR legible en: {pretty_path}")
                 times["hir-emit"] = time.perf_counter() - t
@@ -568,19 +608,13 @@ def _compilar(path: str, options: Optional[CompileOptions], *,
                                                 hir_text=hir_text,
                                                 reporter=reporter,
                                                 destino=os.path.dirname(
-                                                    os.path.abspath(phir_path)))
+                                                    os.path.abspath(phir_path)),
+                                                hir_schema=options.hir_schema)
                     times["hir-libs"] = time.perf_counter() - t
                     if failed and run:
                         reporter.warn(f"no se ejecuta: {failed}")
                         run = False
                         exit_code = EXIT_COMPILE_ERROR
-
-    #reporte de errores lexicos recuperados
-    if lexer.errors:
-        reporter.diagnostics("errores lexicos", lexer.errors)
-        log.error_batch(lexer.errors, source_file=path)
-        result.diagnostics.extend(lexer.errors)
-        exit_code = EXIT_COMPILE_ERROR
 
     #un solo flush de logs por compilacion (cero I/O por evento)
     fase.actual = "log"

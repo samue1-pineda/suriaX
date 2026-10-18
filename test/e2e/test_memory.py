@@ -147,10 +147,12 @@ def test_limite_no_hay_aritmetica_de_punteros():
 
 
 def test_limite_sizeof_exige_un_hook():
-    """Sin ``__sizeof__`` el layout es cosa del backend: no hay tamaño nativo."""
+    """Sin ``__sizeof__`` no hay tamaño: el layout es cosa de cada motor. Antes
+    era ``RT011`` al ejecutar; decisión del mantenedor: no compila."""
     _code, err = _fails(B + "fn main() -> int { "
                             '__write__(f"{sizeof(B)}\\n"); return 0; };')
-    assert "RT011" in err, err
+    assert "SEM001" in err and "__sizeof__" in err, err
+    assert "RT011" not in err, err
 
 
 def test_sizeof_con_hook_si_funciona():

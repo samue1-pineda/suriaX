@@ -34,7 +34,8 @@ Qué contiene un ``.phir``
    ``items``             El programa validado, en orden.
    ``libraries``         Las unidades importadas, por alias y archivo.
    ``types``             **Pool de tipos**: cada tipo distinto una sola vez;
-                         los nodos lo referencian por índice.
+                         los nodos lo referencian por índice. Solo en el
+                         esquema 2 (ver :ref:`rollback-esquema-1`).
    ====================  =====================================================
 
 Cada expresión viaja con **su tipo ya resuelto** y cada nodo con **su línea y
@@ -110,7 +111,62 @@ vez de interpretar bytes con un layout desconocido y fallar más tarde en otro
 sitio.
 
 Es la misma disciplina en los tres lectores: el intérprete, el target web y el
-backend C++ comparten el criterio, no solo el formato.
+backend C++ comparten el criterio, no solo el formato. Hoy los tres aceptan
+las versiones **1 y 2**; cualquier otra (``0``, ``3``…) se rechaza.
+
+.. _rollback-esquema-1:
+
+El esquema 1 sigue funcionando (rollback)
+------------------------------------------
+
+Versionar el esquema no es solo poder rechazar lo que no se conoce: es poder
+seguir leyendo lo que **sí** se conoce. Entre el esquema 1 y el 2 cambió una
+sola cosa, el :ref:`pool de tipos <pool-de-tipos>`. En el 1 cada nodo llevaba
+su tipo **inline** (``Expr.restype``, ``VarDecl.type``…); en el 2 lleva un
+índice al pool.
+
+El emisor de hoy puede escribir cualquiera de los dos:
+
+.. code-block:: console
+
+   $ python V0/main.py programa.srcx --emit-hir                  # esquema 2
+   $ python V0/main.py programa.srcx --emit-hir --hir-schema 1   # esquema 1
+
+Con ``--hir-schema 1`` el ``.phir`` (y el de cada librería) lleva
+``schema_version: 1``, **no** lleva ``Module.types`` y cada tipo va en su
+nodo. El emisor construye siempre el 2 y despliega el pool en un paso aparte:
+no hay dos emisores que puedan divergir.
+
+Al leer, los tres lectores **normalizan** un esquema 1 a la forma de hoy:
+construyen el pool desde los tipos inline y rellenan los índices. Desde ahí
+el camino es el mismo que con el 2 — el intérprete, el MIR y la VM, el WIR y
+el WebAssembly no saben qué esquema llegó. Un archivo que mezcla los dos (un
+1 con pool o con índices) está mal formado y se rechaza.
+
+Cómo se hizo sin romper nada:
+
+- los campos inline del esquema 1 volvieron **con su número de campo y su
+  significado originales** (al pasar al 2 habían quedado *reservados*, así
+  que ningún lector los leyó nunca como otra cosa): ``Expr.restype = 3``,
+  ``VarDecl.type = 2``, ``Parameter.type = 1``,
+  ``FunctionDecl.return_type = 3`` y ``Field.type = 1``;
+- los campos de tipo que nacieron **después** del esquema 1 tienen un gemelo
+  inline con un número **nuevo**: ``LambdaExpr.return_type = 5`` y
+  ``EnumItem.payload_types = 4``. Por eso lo que se emite es el esquema 1
+  *adaptado a hoy*: expresa todo el lenguaje actual sin pool. El esquema 1
+  tal como era se conserva en ``dev/diff/schema/hir_v1_original.proto``.
+
+Qué se comprobó (``test/unit/test_hir_schema_v1.py``,
+``test/e2e/test_hir_schema_v1.py``, ``test/web/schema_v1.test.ts``,
+``test/backend/test_backend_cpp_schema_v1.py``): el mismo programa da la
+misma ejecución en los dos esquemas en el intérprete y en la VM y el mismo
+WebAssembly en el target web; normalizar el ``.phir`` v1 da, byte a byte, el
+v2 (salvo ``schema_version``); y un ``.phir`` v2 sale idéntico al de antes de
+existir la bandera.
+
+Y por qué el 2 sigue siendo el de por defecto: el mismo programa ocupa más en
+el 1. El compilador V1 (``src/main.srcx``, 33 unidades) son 969 336 bytes en
+el esquema 2 y 1 280 188 en el 1 (un 32 % más).
 
 .. _hooks-hir:
 

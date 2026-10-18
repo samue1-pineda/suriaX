@@ -10,7 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from helpers import assert_has_code, assert_ok, error_codes  # noqa: E402
+from helpers import analyze, assert_has_code, assert_ok, error_codes  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # especificador hook/dunder (el compilador ya no adivina por la forma __x__)
@@ -66,9 +66,33 @@ def test_impl_trait_desconocido():
     assert_has_code("@impl(fantasma) struct { int x; } L;", "SEM021")
 
 
-def test_trait_metodo_no_dunder_es_error():
-    assert_has_code(
-        "@trait struct { fn siguiente(self ptr) -> int; } iterable;", "SEM021")
+def _codes(source: str) -> list:
+    """Los códigos por ``analyze`` y no por ``error_codes``: lo que pasa por
+    ``error_codes`` entra en el corpus del diferencial V0/V1, y la V1 todavía
+    no conoce los métodos llanos en un trait (paso 4)."""
+    _, _, errors = analyze(source)
+    return [e.code for e in errors]
+
+
+def test_trait_method_with_plain_name_is_met_by_an_impl_method():
+    """Paso 4: un trait puede pedir un método de ``@impl`` (nombre llano).
+    Antes era SEM021 ("debe tener nombre dunder")."""
+    assert _codes(
+        "@trait struct { fn siguiente(self ptr) -> int; } iterable;\n"
+        "@impl(iterable) struct { int pos; } L;\n"
+        "@impl L { fn siguiente(L ptr self) -> int { return self.pos; } }\n") == []
+
+
+def test_trait_method_with_plain_name_needs_the_impl_method():
+    """Sin el método en un ``@impl L { ... }`` (un ``dunder fn`` homónimo no
+    vale: la forma del nombre dice con qué se cumple), SEM021."""
+    assert _codes(
+        "@trait struct { fn siguiente(self ptr) -> int; } iterable;\n"
+        "@impl(iterable) struct { int pos; } L;\n") == ["SEM021"]
+    assert _codes(
+        "@trait struct { fn siguiente(self ptr) -> int; } iterable;\n"
+        "@impl(iterable) struct { int pos; } L;\n"
+        "@impl L { fn siguiente(L ptr self) -> str { return \"x\"; } }\n") == ["SEM021"]
 
 
 def test_fn_dunder_desnudo_es_funcion_normal():

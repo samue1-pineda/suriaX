@@ -92,7 +92,7 @@ def _parse_impl_block(cursor: Cursor, ctx: ParserContext,
     # '@impl Vector<T>': los parametros del tipo, para que los metodos puedan
     # nombrar 'T' en su firma. Sin esto, un generico solo podia tener metodos
     # si su elemento era un tipo concreto.
-    type_params = parse_type_params(cursor, ctx)
+    type_params, type_bounds = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.L_BRACE)
     methods: List[ast.FunctionDecl] = []
     while not cursor.check(TokenType.R_BRACE) and not cursor.at_end():
@@ -127,12 +127,13 @@ def _parse_impl_block(cursor: Cursor, ctx: ParserContext,
         # (FunctionDecl.type_params); van APARTE de los propios para no
         # cambiar lo que la Semantica ve de la firma
         method.impl_type_params = list(type_params)
+        method.impl_type_bounds = dict(type_bounds)
         methods.append(method)
     cursor.expect(TokenType.R_BRACE)
     cursor.match(TokenType.SEMICOLON)  # ';' final opcional
     return ast.ImplDecl(ln=deco_tok.ln, col=deco_tok.col,
                         type_name=type_tok.lexeme, methods=methods,
-                        type_params=type_params)
+                        type_params=type_params, type_bounds=type_bounds)
 
 
 def _parse_decorator_args(cursor: Cursor) -> List[str]:

@@ -1,0 +1,30 @@
+struct { int v; } P;
+fn f(int a) -> int { return a; }
+fn g() -> str { return 1; }
+fn h() -> int { return; }
+fn k() -> int? { return null; }
+fn j() -> int { return null; }
+fn main() -> int {
+    var int a = 1 + "x";
+    var bool b = 1 < "x";
+    var P p = P{ v: 1 };
+    var bool c = p < p;
+    var int? q = null;
+    var bool d = q < 3;
+    var int e = 7 / 0;
+    var int x = ~1.5;
+    var bool y = not 3;
+    if (1) { }
+    while ("s") { }
+    var float z = 1;
+    const int w = 2;
+    w = 3;
+    var int u = f("a");
+    var int v = f(1, 2);
+    var str s = f"{1.5:d}";
+    var str t = f"{p!r:5}";
+    var bool m = true and 1;
+    var int big = 9223372036854775808;
+    var int hx = 0xFFFFFFFFFFFFFFFF;
+    return 0;
+}

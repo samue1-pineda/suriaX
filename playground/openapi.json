@@ -1,0 +1,255 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "suriaX playground",
+    "version": "1",
+    "summary": "Las fases del compilador de suriaX sobre un fuente, por HTTP.",
+    "description": "Contrato de `playground/server.py`. Hay dos clases de respuesta y no se mezclan: un **200** significa que el servidor atendió la petición (y el cuerpo dice, proveedor por proveedor, cómo le fue al programa); un **4xx/5xx** significa que la petición no se pudo atender y llega con la forma de la RFC 9457. Un programa que no compila es un 200.\n\nLa versión (`info.version`, y el campo `api` de cada respuesta) sube cuando un campo cambia de significado o desaparece. Añadir campos no la sube: quien consume debe ignorar los que no conozca.",
+    "license": { "name": "la del repositorio (ver LICENSE)" }
+  },
+  "servers": [
+    { "url": "http://127.0.0.1:8000", "description": "local, valores por defecto" }
+  ],
+  "paths": {
+    "/api/compile": {
+      "post": {
+        "operationId": "compile",
+        "summary": "Todas las fases de un fuente, incluida la del target web.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Fuente" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Se atendió. `status` y `providers` dicen cómo le fue al programa y a cada proveedor.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Compilacion" } } }
+          },
+          "400": { "$ref": "#/components/responses/Problema" },
+          "411": { "$ref": "#/components/responses/Problema" },
+          "413": { "$ref": "#/components/responses/Problema" },
+          "415": { "$ref": "#/components/responses/Problema" },
+          "500": { "$ref": "#/components/responses/Problema" }
+        }
+      }
+    },
+    "/api/lex": {
+      "post": {
+        "operationId": "lex",
+        "summary": "Solo el análisis léxico. Para colorear mientras se escribe.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Fuente" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Los tokens del fuente.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Lexico" } } }
+          },
+          "400": { "$ref": "#/components/responses/Problema" },
+          "411": { "$ref": "#/components/responses/Problema" },
+          "413": { "$ref": "#/components/responses/Problema" },
+          "415": { "$ref": "#/components/responses/Problema" },
+          "500": { "$ref": "#/components/responses/Problema" }
+        }
+      }
+    },
+    "/api/language": {
+      "get": {
+        "operationId": "language",
+        "summary": "El contrato del lenguaje: categorías de token, catálogo de errores, palabras clave.",
+        "description": "Es `include/lang_info.build_language_info()` tal cual. No lleva `api` ni `status`: su versión propia es `lang_info_version`.",
+        "responses": {
+          "200": {
+            "description": "El contrato del lenguaje.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Lenguaje" } } }
+          },
+          "500": { "$ref": "#/components/responses/Problema" }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "El estado de cada proveedor, sin compilar nada.",
+        "description": "Responde 200 aunque un proveedor esté mal: quien contesta es el servidor, y está vivo. Para saber si el entorno está completo se lee `status`.",
+        "responses": {
+          "200": {
+            "description": "El estado del entorno.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Salud" } } }
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "openapi",
+        "summary": "Este documento.",
+        "responses": {
+          "200": {
+            "description": "La descripción de la API.",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Problema": {
+        "description": "La petición no se pudo atender.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problema" } } }
+      }
+    },
+    "schemas": {
+      "Estado": {
+        "type": "string",
+        "enum": ["ok", "error_del_programa", "no_disponible", "error_interno"],
+        "description": "`ok`: nada que hacer. `error_del_programa`: lo arregla quien escribió el programa. `no_disponible`: al entorno le falta algo (node) o no había nada que procesar. `error_interno`: falló el compilador o el target; lo arregla quien los mantiene."
+      },
+      "Fuente": {
+        "type": "object",
+        "required": ["source"],
+        "properties": {
+          "source": { "type": "string", "description": "El programa. Su tamaño máximo es `SURIAX_MAX_SOURCE_BYTES` (64 KB por defecto)." },
+          "debug": { "type": "boolean", "default": false, "description": "Añade `debug` a la respuesta de /api/compile: tiempos y métricas de la misma compilación." }
+        }
+      },
+      "Proveedor": {
+        "type": "object",
+        "required": ["status", "detail"],
+        "properties": {
+          "status": { "$ref": "#/components/schemas/Estado" },
+          "detail": { "type": "string", "description": "Por qué, cuando no es `ok`. Vacío si no hay nada que añadir." },
+          "node": { "type": ["integer", "null"], "description": "Solo en /api/health y solo en `web`: la versión mayor de node, o null si no está." }
+        }
+      },
+      "Diagnostico": {
+        "type": "object",
+        "required": ["code", "message", "line", "phase"],
+        "properties": {
+          "code": { "type": "string", "examples": ["SEM001", "WEB101"] },
+          "message": { "type": "string" },
+          "line": { "type": "integer", "description": "Desde 1; 0 si no tiene posición." },
+          "column": { "type": "integer" },
+          "severity": { "type": "string" },
+          "phase": { "type": "string", "enum": ["lexer", "parser", "semantic", "hir", "web"] },
+          "kind": { "type": "string", "enum": ["unsupported", "not-compiled"], "description": "Solo en los de `web`: `unsupported` (WEB0xx, el target decidió no ejecutarlo) o `not-compiled` (WEB1xx, el codegen todavía no llega)." }
+        }
+      },
+      "Fase": {
+        "type": "object",
+        "required": ["ok", "status"],
+        "description": "Lo que entregó una fase. Con `ok` verdadero lleva sus artefactos (los campos dependen de la fase); con `ok` falso lleva `reason`.",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "status": { "$ref": "#/components/schemas/Estado" },
+          "reason": { "type": "string", "description": "Por qué no hay artefacto. Siempre presente si `ok` es falso." },
+          "detail": { "type": "string", "description": "En un `error_interno` del target web: lo que el proceso escribió al fallar, sin rutas de la máquina." }
+        }
+      },
+      "Compilacion": {
+        "type": "object",
+        "required": ["api", "status", "providers", "phases", "diagnostics"],
+        "properties": {
+          "api": { "type": "string", "const": "1" },
+          "status": { "$ref": "#/components/schemas/Estado", "description": "El peor de los estados de `providers`." },
+          "providers": {
+            "type": "object",
+            "required": ["compiler", "web"],
+            "properties": {
+              "compiler": { "$ref": "#/components/schemas/Proveedor" },
+              "web": { "$ref": "#/components/schemas/Proveedor" }
+            }
+          },
+          "phases": {
+            "type": "object",
+            "description": "Siempre están las siete. `tokens`: `tokens`. `ast` y `typed_ast`: `tree`. `symbols`: `mermaid`, `scopes`, `symbols`. `hir`: `pretty`, `text`. `link`: `libraries`, `hooks`, `casts`. `wasm`: `wat`, `pretty`.",
+            "required": ["tokens", "ast", "typed_ast", "symbols", "hir", "link", "wasm"],
+            "additionalProperties": { "$ref": "#/components/schemas/Fase" }
+          },
+          "diagnostics": {
+            "type": "array",
+            "description": "Los del frontend y, detrás, los del target web. Un `error_interno` NO añade diagnósticos: no es un error del programa.",
+            "items": { "$ref": "#/components/schemas/Diagnostico" }
+          },
+          "source": { "type": "string" },
+          "path": { "type": "string" },
+          "debug": { "type": "object", "description": "Solo si se pidió: `times` (ms) y `metrics`." }
+        }
+      },
+      "Lexico": {
+        "type": "object",
+        "required": ["api", "status", "providers", "tokens", "diagnostics"],
+        "properties": {
+          "api": { "type": "string", "const": "1" },
+          "status": { "$ref": "#/components/schemas/Estado" },
+          "providers": {
+            "type": "object",
+            "required": ["compiler"],
+            "properties": { "compiler": { "$ref": "#/components/schemas/Proveedor" } }
+          },
+          "tokens": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "lexeme", "ln", "col"],
+              "properties": {
+                "type": { "type": "string", "description": "El nombre del token; su categoría está en /api/language (`token_categories`)." },
+                "lexeme": { "type": "string" },
+                "ln": { "type": "integer" },
+                "col": { "type": "integer" },
+                "value": { "type": ["string", "null"], "description": "El valor ya interpretado de un literal; null si no añade nada al lexema." }
+              }
+            }
+          },
+          "diagnostics": { "type": "array", "items": { "$ref": "#/components/schemas/Diagnostico" } }
+        }
+      },
+      "Salud": {
+        "type": "object",
+        "required": ["api", "status", "providers"],
+        "properties": {
+          "api": { "type": "string", "const": "1" },
+          "status": { "$ref": "#/components/schemas/Estado" },
+          "providers": {
+            "type": "object",
+            "required": ["compiler", "web"],
+            "properties": {
+              "compiler": { "$ref": "#/components/schemas/Proveedor" },
+              "web": { "$ref": "#/components/schemas/Proveedor" }
+            }
+          }
+        }
+      },
+      "Lenguaje": {
+        "type": "object",
+        "required": ["lang_info_version", "token_categories", "errors"],
+        "properties": {
+          "lang_info_version": {},
+          "compiler_version": { "type": "string" },
+          "token_categories": { "type": "object", "additionalProperties": { "type": "string" } },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["code", "explanation"],
+              "properties": { "code": { "type": "string" }, "explanation": { "type": "string" } }
+            }
+          }
+        }
+      },
+      "Problema": {
+        "type": "object",
+        "required": ["type", "title", "status", "detail"],
+        "description": "RFC 9457 (Problem Details for HTTP APIs).",
+        "properties": {
+          "type": { "type": "string", "const": "about:blank" },
+          "title": { "type": "string" },
+          "status": { "type": "integer" },
+          "detail": { "type": "string" },
+          "error": { "type": "string", "deprecated": true, "description": "Igual que `detail`. Se conserva para quien lo leía antes de la RFC 9457." }
+        }
+      }
+    }
+  }
+}

@@ -71,6 +71,49 @@ def dump_ast_json(program, *, source_path: str, config: Optional[dict] = None,
     return target
 
 
+def _escribe_entero(destino: str, datos: bytes) -> None:
+    """Escribe ``datos`` en ``destino`` de modo que nadie lo lea a medias.
+
+    Dos compilaciones en la misma carpeta (``make -j``, el editor y una
+    terminal a la vez) escriben los MISMOS ``.phir`` de librería en
+    ``dumps/``. Con ``open(..., "wb")`` el archivo se vaciaba primero, y la
+    otra podía leerlo vacío o cortado: un ``schema_version 0`` y un fallo
+    interno. Aquí se escribe en un temporal de la misma carpeta y se cambia
+    de nombre de una vez, que el sistema hace atómico.
+
+    En Windows el cambio de nombre falla mientras otro proceso tiene el
+    destino abierto; como el contenido es el mismo (el HIR es
+    reproducible), se reintenta un momento y, si sigue abierto, se deja el
+    que ya hay.
+    """
+    import tempfile
+    import time
+
+    carpeta = os.path.dirname(os.path.abspath(destino))
+    fd, temporal = tempfile.mkstemp(dir=carpeta, prefix=".phir-",
+                                    suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(datos)
+        for intento in range(20):
+            try:
+                os.replace(temporal, destino)
+                return
+            except PermissionError:
+                if intento == 19:
+                    raise
+                time.sleep(0.05)
+    except PermissionError:
+        if os.path.isfile(destino):
+            with open(destino, "rb") as fh:
+                if fh.read() == datos:
+                    return
+        raise
+    finally:
+        if os.path.exists(temporal):
+            os.remove(temporal)
+
+
 def dump_hir(data: bytes, *, source_path: str, config: Optional[dict] = None,
              out_path: Optional[str] = None,
              text: Optional[str] = None) -> str:
@@ -84,8 +127,7 @@ def dump_hir(data: bytes, *, source_path: str, config: Optional[dict] = None,
     ``#test hir``).
     """
     target = _target_path(config, source_path, ".phir", out_path)
-    with open(target, "wb") as fh:
-        fh.write(data)
+    _escribe_entero(target, data)
     if text is not None:
         with open(target + ".txt", "w", encoding="utf-8") as fh:
             fh.write(text)

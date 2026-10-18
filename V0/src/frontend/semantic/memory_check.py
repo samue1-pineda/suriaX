@@ -136,6 +136,11 @@ def run(program: ast.Program, ctx: SemanticContext) -> None:
             # (scope_resolver no publico sus locales; el checker no los
             # necesita -- solo rastrea nombres movidos).
             _PropiedadChecker(ctx, {}).check_block(item.body.statements, {})
+            # cada clausula parte de cero: es otro ambito, y no nombra los
+            # locales del cuerpo
+            for clausula in (item.errfinally, item.finally_block):
+                if clausula is not None:
+                    _PropiedadChecker(ctx, {}).check_block(clausula.statements, {})
 
 
 class _PropiedadChecker:
@@ -217,6 +222,14 @@ class _PropiedadChecker:
                 self.check_expr(target, muertos)
         elif cls is ast.ThrowStmt:
             self.check_expr(stmt.value, muertos)
+        elif cls is ast.ExpectStmt:
+            # como un 'if' sin 'else': su bloque es un camino que puede no
+            # tomarse (si no se cumple, la prueba termina ahi)
+            self.check_expr(stmt.condition, muertos)
+            if stmt.body is not None:
+                rama = dict(muertos)
+                self.check_block(stmt.body.statements, rama)
+                muertos.update(rama)
         elif cls is ast.TryStmt:
             # el try y el catch son caminos alternativos: cada uno parte del
             # 'muertos' de entrada (copia) y al cerrar se unen conservadoramente
@@ -332,6 +345,20 @@ class _PropiedadChecker:
             # use-after-move (SEM004) y doble move (SEM005) no dependan de en
             # qué posición se escribió el 'move'.
             self._marca_movido(expr.operand, expr, muertos)
+            return
+
+        if cls is ast.Lambda:
+            # el cuerpo de una LAMBDA es otra funcion: parte de lo que ya
+            # estaba muerto al escribirla (leer algo capturado que se movio
+            # antes es SEM004) y lo que mueva dentro —sus parametros, sus
+            # locales— no sale de ella: lo capturado no se puede mover
+            # (SEM003, scope_resolver). Sus parametros son valores NUEVOS.
+            body_dead = dict(muertos)
+            for param in expr.params:
+                _revive(body_dead, param.name)
+            checker = _PropiedadChecker(self.ctx,
+                                        self.ctx.fn_locals.get(id(expr), {}))
+            checker.check_block(expr.body.statements, body_dead)
             return
 
         if cls is ast.Identifier:

@@ -117,6 +117,14 @@ private:
         return "";
     }
 
+    // El tipo como SUFIJO de una expresion. Un tipo funcion va entre
+    // parentesis: sin ellos, 'f:fn(int) -> int(3)' no deja ver donde termina
+    // el tipo y empieza la llamada. Espejo de 'pretty._type_suffix'.
+    std::string type_suffix(std::uint32_t type_id) const {
+        const std::string type = type_of(type_id);
+        return type.rfind("fn(", 0) == 0 ? "(" + type + ")" : type;
+    }
+
     void line(const std::string& text, std::uint32_t ln = 0, std::uint32_t col = 0,
               int indent = 0) {
         std::string body(static_cast<std::size_t>(indent) * 2, ' ');
@@ -128,6 +136,25 @@ private:
             body += "@" + std::to_string(ln) + ":" + std::to_string(col);
         }
         out_ << body << "\n";
+        if (!lambdas_.empty()) {
+            // el cuerpo de cada lambda de esta linea, debajo y sangrado: que
+            // LEE del entorno (sus capturas) y sus sentencias. Espejo de
+            // 'pretty._Printer.line'.
+            std::vector<const pb::Expr*> pending;
+            pending.swap(lambdas_);
+            for (const pb::Expr* e : pending) {
+                const pb::LambdaExpr& lam = e->lambda_expr();
+                std::string reads;
+                for (int i = 0; i < lam.captures_size(); ++i) {
+                    if (i != 0) reads += ", ";
+                    reads += lam.captures(i);
+                }
+                line("cuerpo de la lambda" +
+                         (reads.empty() ? std::string() : "  ⟨lee: " + reads + "⟩"),
+                     e->ln(), e->col(), indent + 1);
+                block(lam.body(), indent + 2);
+            }
+        }
     }
 
     void unknown(const char* what, const std::string& node, std::uint32_t ln,
@@ -155,17 +182,22 @@ private:
     std::ostream& out_;
     std::vector<Unknown>& unknown_;
     std::vector<std::string> types_;
+    // las LAMBDAS de la linea que se esta armando: una expresion es una sola
+    // linea y el cuerpo de una lambda son sentencias; se escriben debajo de
+    // la linea que las contiene (ver 'line')
+    std::vector<const pb::Expr*> lambdas_;
 };
 
 std::string Printer::expr(const pb::Expr& e) {
     const std::string text = expr_text(e);
-    const std::string type = type_of(e.type_id());
+    const std::string type = type_suffix(e.type_id());
     // El sufijo ':tipo' solo aparece donde APORTA: en un literal el tipo es
     // evidente y ensucia; en una llamada o una variable es la informacion que
     // uno vino a buscar.
     const auto kind = e.node_case();
     if (!type.empty() && kind != pb::Expr::kLiteral &&
-        kind != pb::Expr::kStructLiteral && kind != pb::Expr::kIdentifier) {
+        kind != pb::Expr::kStructLiteral && kind != pb::Expr::kIdentifier &&
+        kind != pb::Expr::kLambdaExpr) {
         return text + ":" + type;
     }
     return text;
@@ -176,7 +208,7 @@ std::string Printer::expr_text(const pb::Expr& e) {
         case pb::Expr::kLiteral:
             return literal(e.literal());
         case pb::Expr::kIdentifier: {
-            const std::string type = type_of(e.type_id());
+            const std::string type = type_suffix(e.type_id());
             return type.empty() ? e.identifier().name()
                                 : e.identifier().name() + ":" + type;
         }
@@ -221,6 +253,19 @@ std::string Printer::expr_text(const pb::Expr& e) {
             }
             return e.struct_literal().type_name() + "{" + fields + "}" +
                    temp_drop(e.struct_literal().temp_drop());
+        }
+        case pb::Expr::kLambdaExpr: {
+            // la FIRMA en linea (ya es su tipo); el cuerpo, debajo
+            lambdas_.push_back(&e);
+            const pb::LambdaExpr& lam = e.lambda_expr();
+            std::string params;
+            for (int i = 0; i < lam.params_size(); ++i) {
+                if (i != 0) params += ", ";
+                params += type_of(lam.params(i).type_id()) + " " + lam.params(i).name();
+            }
+            std::string ret = type_of(lam.return_type_id());
+            if (ret.empty()) ret = "void";
+            return "lambda(" + params + ") -> " + ret;
         }
         case pb::Expr::kInterp: {
             std::string parts;
@@ -366,6 +411,12 @@ void Printer::stmt(const pb::Stmt& s, int indent) {
             break;
         case pb::Stmt::kThrowStmt:
             line("throw " + expr(s.throw_stmt().value()), ln, col, indent);
+            break;
+        case pb::Stmt::kExpectStmt:
+            // la comprobacion de un 'test' (la VM todavia no corre pruebas:
+            // aqui solo se LEE, igual que la vista de Python)
+            line("expect " + expr(s.expect_stmt().condition()), ln, col, indent);
+            if (s.expect_stmt().has_body()) block(s.expect_stmt().body(), indent + 1);
             break;
         case pb::Stmt::kTryStmt: {
             line("try", ln, col, indent);
@@ -518,6 +569,14 @@ void Printer::decl(const pb::Decl& d) {
         case pb::Decl::kTestDecl:
             line("test \"" + d.test_decl().name() + "\"", d.ln(), d.col());
             block(d.test_decl().body(), 1);
+            if (d.test_decl().has_errfinally()) {
+                line("errfinally");
+                block(d.test_decl().errfinally(), 1);
+            }
+            if (d.test_decl().has_finally_block()) {
+                line("finally");
+                block(d.test_decl().finally_block(), 1);
+            }
             out_ << "\n";
             break;
         case pb::Decl::kStatement:
@@ -616,15 +675,38 @@ void Printer::run() {
 
 }  // namespace
 
+namespace {
+
+// Un tipo funcion ENVUELTO se escribe entre parentesis: un sufijo tras
+// 'fn(int) -> int' se pegaria al retorno ('(fn(int) -> int)?' no es
+// 'fn(int) -> int?'). Espejo de 'pretty._wrapped'.
+std::string wrapped_type(const pb::Type& type) {
+    const std::string text = format_type(type);
+    return is_function_type(type) ? "(" + text + ")" : text;
+}
+
+}  // namespace
+
 std::string format_type(const pb::Type& type) {
+    // 'fn(A) -> R': 'args' son los parametros e 'inner' el retorno (ver
+    // hir.proto). Va antes del switch porque el kind se nombra por su numero
+    // (ver 'kFunctionTypeKind' en loader.hpp).
+    if (is_function_type(type)) {
+        std::string params;
+        for (int i = 0; i < type.args_size(); ++i) {
+            if (i != 0) params += ", ";
+            params += format_type(type.args(i));
+        }
+        return "fn(" + params + ") -> " + format_type(type.inner());
+    }
     switch (type.kind()) {
         case pb::POINTER:
-            return format_type(type.inner()) + (type.mut() ? " ptr mutable" : " ptr");
+            return wrapped_type(type.inner()) + (type.mut() ? " ptr mutable" : " ptr");
         case pb::NULLABLE:
-            return format_type(type.inner()) + "?";
+            return wrapped_type(type.inner()) + "?";
         case pb::ERROR:
             // 'error' sola (sin inner) es un tipo legitimo: solo error.
-            return type.has_inner() ? "error " + format_type(type.inner()) : "error";
+            return type.has_inner() ? "error " + wrapped_type(type.inner()) : "error";
         case pb::NOMINAL: {
             if (type.args_size() == 0) return type.name();
             std::string args;

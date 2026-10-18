@@ -1,0 +1,7 @@
+fn uno() -> int { return 1 + ; }
+fn dos( -> int { return 2; }
+struct { int x; int } Punto;
+enum Color { ROJO, , VERDE };
+fn tres() -> int { var int = 3; return 3; }
+fn cuatro() -> int { if (true { return 4; }; return 0; }
+fn main() -> int { return uno() + cinco(; }

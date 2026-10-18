@@ -51,6 +51,12 @@ struct {
     str visibilidad;     // "public", "private", "internal" o "" (sin escribir)
     int tparams_desde;   // sus PARÁMETROS DE TIPO ('T', 'K'...) están en `Tabla.tparams`
     int n_tparams;
+    str constante;       // `const_value`: el entero de una variante sin payload o lo que
+                         // devuelve un `__min__`/`__max__`, en decimal ("" = ninguno)
+    bool opaco;          // un IMPORT cuya librería no cargó: sus usos callan (el error
+                         // ya se dijo en el '#import')
+    int copias_desde;    // lo que COPIA el cuerpo de un genérico (tipos que nombran sus
+    int n_copias;        // parámetros), en `Tabla.copias`: lo decide cada instancia (SEM038)
 } Simbolo;
 
 struct {
@@ -58,6 +64,7 @@ struct {
     int clase;       // VAR o PARAM
     int tipo;
     bool es_mutable;
+    bool prestado;   // lo liga un 'case Nodo.A(x)': es el payload MISMO, de otro
 } Local;
 
 struct {
@@ -69,6 +76,7 @@ struct {
     vec.Vector<int> params;             // los tipos de parámetros, seguidos
     vec.Vector<int> miembros;           // los índices de miembros, seguidos
     vec.Vector<str> tparams;            // los parámetros de tipo, seguidos
+    vec.Vector<int> copias;             // lo que copia cada genérico, seguido
     vec.Vector<Local> locales;          // la pila de la función actual
     vec.Vector<int> marcas;             // dónde empieza cada bloque abierto
     dic.Dictionary<str, int> canonicos; // nombre CANÓNICO de un tipo -> su símbolo
@@ -80,7 +88,7 @@ public fn tabla() -> Tabla {
                   tipos: dic.make<str, int>(16), hooks: vec.dynamic<int>(4),
                   dunders: vec.dynamic<int>(4),
                   params: vec.dynamic<int>(16), miembros: vec.dynamic<int>(16),
-                  tparams: vec.dynamic<str>(4),
+                  tparams: vec.dynamic<str>(4), copias: vec.dynamic<int>(2),
                   locales: vec.dynamic<Local>(16), marcas: vec.dynamic<int>(8),
                   canonicos: dic.make<str, int>(16), unidad: "" };
 }
@@ -114,11 +122,38 @@ public fn copia(Tabla ptr desde, int i, Tabla ptr mutable hacia) -> int {
         k = k + 1;
     };
     var vec.Vector<str> tparams = tparams_de(desde, i);
+    var vec.Vector<int> copias = copias_de(desde, i);
     var int nuevo = guarda(hacia, s);
     pon_params(hacia, nuevo, &params);
     pon_miembros(hacia, nuevo, &miembros);
     pon_tparams(hacia, nuevo, &tparams);
+    pon_copias(hacia, nuevo, &copias);
     return nuevo;
+}
+
+/- Lo que copia el genérico `i` (tipos), en orden. -/
+public fn copias_de(Tabla ptr t, int i) -> vec.Vector<int> {
+    var Simbolo s = t.simbolos.get(i);
+    var vec.Vector<int> v = vec.dynamic<int>(s.n_copias + 1);
+    var int k = 0;
+    while (k < s.n_copias) {
+        v.push(t.copias.get(s.copias_desde + k));
+        k = k + 1;
+    };
+    return v;
+}
+
+/- Fija lo que copia el genérico `dueno`. -/
+public fn pon_copias(Tabla ptr mutable t, int dueno, vec.Vector<int> ptr tipos) -> void {
+    var Simbolo s = t.simbolos.get(dueno);
+    s.copias_desde = t.copias.len();
+    s.n_copias = tipos.len();
+    var int i = 0;
+    while (i < tipos.len()) {
+        t.copias.push(tipos.get(i));
+        i = i + 1;
+    };
+    t.simbolos[dueno] = s;
 }
 
 /- Un símbolo sin miembros ni hook: lo básico. -/
@@ -127,7 +162,8 @@ public fn simbolo_simple(str nombre, int clase, int linea, int col, int tipo,
     return Simbolo{ nombre: nombre, clase: clase, linea: linea, col: col, tipo: tipo,
                     es_mutable: es_mutable, params_desde: 0, n_params: 0,
                     miembros_desde: 0, n_miembros: 0, hook_kind: 0, hook_owner: "",
-                    tipo_nombre: "", visibilidad: "", tparams_desde: 0, n_tparams: 0 };
+                    tipo_nombre: "", visibilidad: "", tparams_desde: 0, n_tparams: 0,
+                    constante: "", opaco: false, copias_desde: 0, n_copias: 0 };
 }
 
 /- Guarda `s` y devuelve su índice (sin darle nombre global). -/
@@ -292,7 +328,15 @@ public fn inicio_del_bloque(Tabla ptr t) -> int { return t.marcas.get(t.marcas.l
 
 public fn define_local(Tabla ptr mutable t, str nombre, int clase, int tipo,
                        bool es_mutable) -> void {
-    t.locales.push(Local{ nombre: nombre, clase: clase, tipo: tipo, es_mutable: es_mutable });
+    t.locales.push(Local{ nombre: nombre, clase: clase, tipo: tipo, es_mutable: es_mutable,
+                          prestado: false });
+}
+
+/- Un local PRESTADO: lo que liga un `case Nodo.A(x)` (el payload del enum,
+   que lo destruye el enum; cederlo es `SEM036`). -/
+public fn define_prestado(Tabla ptr mutable t, str nombre, int tipo) -> void {
+    t.locales.push(Local{ nombre: nombre, clase: VAR, tipo: tipo, es_mutable: false,
+                          prestado: true });
 }
 
 public fn local(Tabla ptr t, int i) -> Local { return t.locales.get(i); }

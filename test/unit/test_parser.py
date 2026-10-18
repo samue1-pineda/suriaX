@@ -84,10 +84,10 @@ def test_throw():
 
 
 def test_test_decl_estilo_zig():
-    decl = _items('test "mi caso" { var int a = 1; };')[0]
+    decl = _items('test "mi caso" { var int a = 1; expect (a == 1); };')[0]
     assert isinstance(decl, ast.TestDecl)
     assert decl.name == "mi caso"
-    assert len(decl.body.statements) == 1
+    assert len(decl.body.statements) == 2
 
 
 def test_cast_con_argumento_de_tipo():

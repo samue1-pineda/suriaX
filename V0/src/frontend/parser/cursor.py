@@ -10,10 +10,10 @@ from __future__ import annotations
 from typing import Collection, List
 
 try:
-    from include.t_types import Token, TokenType
+    from include.t_types import KEYWORDS, Token, TokenType
     from error_handler import ParseError
 except ImportError:  # pragma: no cover - ejecucion directa
-    from t_types import Token, TokenType  # type: ignore
+    from t_types import KEYWORDS, Token, TokenType  # type: ignore
     import ParseError  # type: ignore
 
 
@@ -58,6 +58,8 @@ class Cursor:
         """Consume el token actual exigiendo un tipo; si no, lanza ParseError."""
         tok = self.peek()
         if tok.type is not ttype:
+            if ttype is TokenType.IDENTIFIER and is_reserved_word(tok):
+                raise reserved_word_error(tok)
             raise ParseError.ExpectedTokenError(
                 f"se esperaba {ttype.name}, se encontro {tok.type.name}",
                 line=tok.ln,
@@ -81,6 +83,8 @@ class Cursor:
         tok = self.peek()
         if tok.type is TokenType.IDENTIFIER or tok.type is TokenType.DUNDER:
             return self.advance()
+        if is_reserved_word(tok):
+            raise reserved_word_error(tok)
         raise ParseError.ExpectedTokenError(
             f"se esperaba un nombre (IDENTIFIER o DUNDER), se encontro {tok.type.name}",
             line=tok.ln,
@@ -89,3 +93,24 @@ class Cursor:
 
     def at_end(self) -> bool:
         return self.peek().type is TokenType.EOF
+
+
+def is_reserved_word(tok: Token) -> bool:
+    """¿El token es una palabra reservada (``error``, ``if``, ``type``...)?"""
+    return KEYWORDS.get(tok.lexeme) is tok.type
+
+
+def reserved_word_error(tok: Token) -> ParseError.ParseError:
+    """Una palabra reservada donde va un NOMBRE: el mensaje lo dice.
+
+    Antes salia ``se esperaba un nombre ..., se encontro ERRORTYPE``: el
+    nombre interno del token, que no dice que ``error`` sea una palabra del
+    lenguaje (es el tipo de los valores que pueden fallar). El codigo sigue
+    siendo ``PAR003`` (falta un token concreto: el nombre)."""
+    return ParseError.ExpectedTokenError(
+        f"'{tok.lexeme}' es una palabra reservada del lenguaje y no puede "
+        f"usarse como nombre; elige otro (p. ej. '{tok.lexeme}_' o "
+        f"'mi_{tok.lexeme}')",
+        line=tok.ln,
+        column=tok.col,
+    )

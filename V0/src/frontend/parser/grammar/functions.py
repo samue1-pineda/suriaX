@@ -37,7 +37,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     import ParseError  # type: ignore
 
 from ..context import ParserContext
-from ..cursor import Cursor
+from ..cursor import Cursor, is_reserved_word, reserved_word_error
 from .block import parse_block
 from .types import parse_type, parse_type_params
 
@@ -65,7 +65,7 @@ def parse_function_decl(cursor: Cursor, ctx: ParserContext,
     # que en 'struct { ... } Vector<T>;'. Aqui no hay ambiguedad con la
     # comparacion —esto es una DECLARACION, no una expresion—, asi que se
     # consumen directamente.
-    type_params = parse_type_params(cursor, ctx)
+    type_params, type_bounds = parse_type_params(cursor, ctx)
     cursor.expect(TokenType.L_PAREN)
     params = _parse_param_list(cursor, ctx)
     cursor.expect(TokenType.R_PAREN)
@@ -74,7 +74,8 @@ def parse_function_decl(cursor: Cursor, ctx: ParserContext,
     return ast.FunctionDecl(ln=tok.ln, col=tok.col, name=name_tok.lexeme,
                              params=params, return_type=return_type, body=body,
                              dunder=dunder, specifier=specifier,
-                             visibility=visibility, type_params=type_params)
+                             visibility=visibility, type_params=type_params,
+                             type_bounds=type_bounds)
 
 
 def _parse_return_type(cursor: Cursor, ctx: ParserContext, fn_tok) -> ast.TypeExpr:
@@ -92,6 +93,25 @@ def _parse_body_or_prototype(cursor: Cursor, ctx: ParserContext) -> Optional[ast
     return parse_block(cursor, ctx)  # 'parse_block' ya tolera un ';' final opcional
 
 
+def parse_lambda_signature(cursor: Cursor, ctx: ParserContext, lambda_tok):
+    """``"(" [ param_list ] ")" "->" type`` de una lambda: los parametros
+    como los de una ``fn`` y la flecha OBLIGATORIA (sin ella el retorno no
+    estaria escrito, y una lambda no tiene otra declaracion donde leerlo)."""
+    cursor.expect(TokenType.L_PAREN)
+    params = _parse_param_list(cursor, ctx)
+    cursor.expect(TokenType.R_PAREN)
+    if not cursor.check(TokenType.ARROW):
+        got = cursor.peek()
+        raise ParseError.ExpectedTokenError(
+            "una lambda escribe su tipo de retorno: 'lambda (...) -> R' "
+            "('-> void' si no devuelve nada); se encontro "
+            f"{got.type.name}",
+            line=got.ln, column=got.col,
+        )
+    cursor.advance()
+    return params, parse_type(cursor, ctx)
+
+
 def _parse_function_name(cursor: Cursor):
     tok = cursor.peek()
     if tok.type is TokenType.DUNDER:
@@ -100,6 +120,8 @@ def _parse_function_name(cursor: Cursor):
     if tok.type is TokenType.IDENTIFIER:
         cursor.advance()
         return tok, None
+    if is_reserved_word(tok):
+        raise reserved_word_error(tok)
     raise ParseError.ExpectedTokenError(
         f"se esperaba el nombre de la funcion (IDENTIFIER o DUNDER), se encontro {tok.type.name}",
         line=tok.ln, column=tok.col,
@@ -122,4 +144,4 @@ def _parse_param(cursor: Cursor, ctx: ParserContext) -> ast.Parameter:
     return ast.Parameter(ln=type_expr.ln, col=type_expr.col, type=type_expr, name=name_tok.lexeme)
 
 
-__all__ = ["parse_function_decl"]
+__all__ = ["parse_function_decl", "parse_lambda_signature"]

@@ -1,0 +1,7 @@
+#import pq.nada
+#import pq.bueno
+#import pq.roto
+#import pq
+#import ciclo_a
+#import pq.bueno.mas
+fn main() -> int { return bueno.b(); }

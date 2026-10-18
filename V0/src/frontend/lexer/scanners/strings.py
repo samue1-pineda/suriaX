@@ -9,7 +9,11 @@
    ``f"hola{a}"`` descompone el valor en segmentos de texto literal e
    interpolaciones ``{expr}`` (ver :class:`StringValue`). Para una llave
    literal dentro de una f-string se escribe ``{{`` o ``}}`` (estilo
-   f-string de Python).
+   f-string de Python). Lo que va entre ``{`` y ``}`` es CODIGO, como en
+   Python 3.12 y C#: un literal dentro se escribe tal cual (``f"{len("ab")}"``,
+   ``f"{'}'}"``) y sus comillas y llaves no cierran nada; un ``\\`` fuera de
+   un literal es :class:`InvalidEscapeSequenceError` (LEX005), con la forma
+   correcta en el mensaje (ver :func:`find_interpolation_end`).
  - caracteres: delimitados por comillas simples ``'x'`` (un solo code point,
    sin interpolacion). NO se concatenan entre si: son ``CHAR_LIT``, otro
    token, igual que en C.
@@ -69,6 +73,95 @@ def _string_end(src: str, n: int, pos: int) -> int:
             return pos + 1
         pos += 1
     return pos
+
+
+def _char_end(src: str, n: int, pos: int) -> int:
+    """Como :func:`_string_end`, para un literal de caracter (``'``)."""
+    while pos < n and src[pos] != "\n":
+        if src[pos] == "\\":
+            pos += 2
+            continue
+        if src[pos] == "'":
+            return pos + 1
+        pos += 1
+    return pos
+
+
+def _opens_fstring(src: str, j: int, lower: int) -> bool:
+    """¿La comilla de ``src[j]`` abre una f-string (``f"``)? Solo si la ``f``
+    EMPIEZA un token, igual que en el lexer: en ``xf"..."`` la ``f`` es parte
+    del nombre y la cadena es plana."""
+    if j - 1 < lower or src[j - 1] != "f":
+        return False
+    before = src[j - 2] if j - 2 >= 0 else ""
+    return not (before.isalnum() or before == "_")
+
+
+def find_interpolation_end(src: str, n: int, start: int) -> tuple:
+    """Donde cierra la interpolacion que empieza en ``start`` (tras su ``{``).
+
+    Devuelve ``(cierre, barra)``: ``cierre`` es la posicion de su ``}`` (o -1
+    si la linea termina antes) y ``barra``, la de un ``\\`` escrito FUERA de
+    un literal (o -1).
+
+    La regla (la de Python 3.12 y C#): lo que va entre ``{`` y ``}`` es
+    CODIGO, y un literal dentro es un literal entero. Su contenido no cuenta:
+    en ``f"{'}'}"`` la llave del caracter no cierra nada, y en
+    ``f"{len("ab")}"`` la comilla de ``"ab"`` no cierra la cadena de fuera.
+    Por eso las comillas de dentro se escriben SIN escapar; un ``\\`` fuera
+    de un literal no significa nada ahi (la expresion no es texto de la
+    cadena) y se informa aparte, con lo que hay que escribir.
+
+    Una f-string dentro de la interpolacion tiene a su vez interpolaciones:
+    se recorren con una pila explicita (sin recursion de Python), y nada de
+    esto cruza un salto de linea.
+    """
+    # cada entrada: [clase, profundidad de llaves]; clase "hole" (codigo),
+    # "str" (cadena plana) o "fstr" (f-string anidada)
+    stack = [["hole", 1]]
+    j = start
+    while j < n:
+        c = src[j]
+        if c == "\n":
+            return -1, -1
+        top = stack[-1]
+        if top[0] == "hole":
+            if c == '"':
+                stack.append(["fstr" if _opens_fstring(src, j, start) else "str", 0])
+            elif c == "'":
+                # literal de caracter: hasta su comilla, con escapes
+                k = j + 1
+                while k < n and src[k] not in "'\n":
+                    k += 2 if src[k] == "\\" else 1
+                if k >= n or src[k] != "'":
+                    return -1, -1
+                j = k
+            elif c == "\\":
+                return -1, j
+            elif c == "{":
+                top[1] += 1
+            elif c == "}":
+                top[1] -= 1
+                if top[1] == 0:
+                    stack.pop()
+                    if not stack:
+                        return j, -1
+            j += 1
+            continue
+        # dentro de un literal de cadena (plano o f-string anidada)
+        if c == "\\":
+            j += 2
+            continue
+        if c == '"':
+            stack.pop()
+        elif top[0] == "fstr" and c in "{}":
+            if src[j + 1:j + 2] == c:      # '{{' / '}}' literales
+                j += 2
+                continue
+            if c == "{":
+                stack.append(["hole", 1])
+        j += 1
+    return -1, -1
 
 
 def join_adjacent(left: Token, right: Token) -> Token:
@@ -161,7 +254,9 @@ def _scan_quoted(lx, *, interpolate: bool, prefix_len: int) -> Token:
                 break
             esc = src[pos]
             if esc not in _ESCAPES:
-                lx.jump_to(pos + 1)
+                # se reanuda tras el cierre del literal: reanudar en mitad dejaba su
+                # comilla de cierre abriendo otro literal (un LEX003 en cascada)
+                lx.jump_to(_string_end(src, n, pos + 1))
                 raise lex_error.InvalidEscapeSequenceError(
                     f"secuencia de escape no reconocida: '\\{esc}'",
                     line=lx.ln,
@@ -178,29 +273,36 @@ def _scan_quoted(lx, *, interpolate: bool, prefix_len: int) -> Token:
                 buf.append("{")
                 pos += 2
                 continue
-            # interpolacion: leer hasta '}' balanceado en la misma linea
+            # interpolacion: hasta su '}', en la misma linea, saltando los
+            # literales que haya dentro (ver find_interpolation_end)
             flush_literal()
             expr_start = pos + 1
-            expr_col = expr_start - lx._line_start + 1
-            depth = 1
-            j = expr_start
-            while j < n and src[j] != "\n":
-                if src[j] == "{":
-                    depth += 1
-                elif src[j] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            if j >= n or src[j] != "}":
-                lx.jump_to(_string_end(src, n, j))
+            j, backslash = find_interpolation_end(src, n, expr_start)
+            if backslash >= 0:
+                # se reanuda tras la cadena ENTERA: quien escapa las comillas
+                # de dentro las escribio como texto de la cadena, asi que el
+                # recorrido con escapes encuentra su cierre de verdad
+                bad_col = backslash - lx._line_start + 1
+                lx.jump_to(_string_end(src, n, expr_start))
+                raise lex_error.InvalidEscapeSequenceError(
+                    "'\\' dentro de una interpolacion: lo que va entre '{' y "
+                    "'}' es CODIGO, no texto de la cadena, y sus literales se "
+                    "escriben tal cual, sin escapar las comillas: "
+                    "f\"{len(\"ab\")}\", no f\"{len(\\\"ab\\\")}\"",
+                    line=lx.ln,
+                    column=bad_col,
+                    file=lx.file,
+                )
+            if j < 0:
+                lx.jump_to(_string_end(src, n, expr_start))
                 raise lex_error.InvalidTokenError(
                     "interpolacion sin cerrar: falta '}'",
                     line=lx.ln,
                     column=start_col,
                     file=lx.file,
                 )
-            expr = src[expr_start:j].strip()
+            raw = src[expr_start:j]
+            expr = raw.strip()
             if not expr:
                 lx.jump_to(_string_end(src, n, j + 1))
                 raise lex_error.InvalidTokenError(
@@ -209,7 +311,11 @@ def _scan_quoted(lx, *, interpolate: bool, prefix_len: int) -> Token:
                     column=start_col,
                     file=lx.file,
                 )
-            parts.append(Interp(expr, expr_col))
+            # la posicion es la del PRIMER caracter de la expresion (sin los
+            # espacios de delante): el parser cuenta desde ahi las columnas
+            # de cada nodo de la interpolacion
+            first = expr_start + (len(raw) - len(raw.lstrip()))
+            parts.append(Interp(expr, first - lx._line_start + 1, lx.ln))
             pos = j + 1
             continue
 
@@ -275,7 +381,7 @@ def scan_char(lx) -> Token:
                 break
             esc = src[pos]
             if esc not in _ESCAPES:
-                lx.jump_to(pos + 1)
+                lx.jump_to(_char_end(src, n, pos + 1))
                 raise lex_error.InvalidEscapeSequenceError(
                     f"secuencia de escape no reconocida: '\\{esc}'",
                     line=lx.ln,

@@ -43,8 +43,10 @@ import {
 import {
   HookKind,
   TypeKind,
+  findFunctionType,
   formatType,
   hookName,
+  testBlocks,
   type Block,
   type Decl,
   type Expr,
@@ -60,6 +62,8 @@ import {
   Capability,
   WEB_V1_POLICY,
   unitAllowed,
+  unitDeniedReason,
+  unitKey,
   unitTrusted,
   type Policy,
 } from "./policy.ts";
@@ -111,6 +115,10 @@ export function checkImage(
   const checker = new RestrictionChecker(policy);
   checker.checkUnit(image.main.module, image.main.alias);
   for (const unit of image.units.values()) {
+    // una unidad denegada no se va a compilar: ya se reportó donde se
+    // importa, y revisarla por dentro solo añadiría decenas de diagnósticos
+    // en un archivo que el usuario no escribió.
+    if (!unitAllowed(policy, unit.alias)) continue;
     checker.checkUnit(unit.module, unit.alias);
   }
   return checker.report();
@@ -157,7 +165,18 @@ class RestrictionChecker {
 
     // Las referencias a otras unidades se revisan SIEMPRE, incluso en una
     // unidad confiable: es por donde entraría una librería denegada.
-    for (const ref of module.libraries) this.#checkUnitName(ref.alias, ref.alias, null);
+    // Las que además nombra un '#import' de este módulo se reportan ALLÍ, con
+    // su posición: aquí saldrían otra vez y sin línea.
+    const escritas = new Set<string>();
+    for (const decl of module.items) {
+      if (decl.node.case !== "import" && decl.node.case !== "from") continue;
+      const { unit, lib } = decl.node.directive;
+      escritas.add(unitKey(unit !== "" ? unit : lib));
+    }
+    for (const ref of module.libraries) {
+      if (escritas.has(unitKey(ref.alias))) continue;
+      this.#checkUnitName(ref.alias, ref.alias, null);
+    }
 
     for (const decl of module.items) {
       if (trusted) this.#checkDirectivesOnly(decl);
@@ -191,6 +210,47 @@ class RestrictionChecker {
     this.#bag.add(code, `${what}: ${reason}`, pos);
   }
 
+  /**
+   * `WEB103` si `type` es, o contiene, un tipo función. No es una capacidad
+   * de la política: se reporta SIEMPRE (como `WEB901`), porque ningún perfil
+   * puede habilitar algo que el codegen no sabe traducir. A lo sumo uno por
+   * línea: `var fn(int) -> int g = doble;` es un solo problema aunque lo
+   * delaten la variable y la expresión.
+   */
+  #functionValue(type: Type | null, what: string, pos: HasPos | null): void {
+    const found = findFunctionType(type);
+    if (found === null) return;
+    const key = `${WebCode.FUNCTION_VALUE}:${pos?.ln ?? 0}`;
+    if (this.#seen.has(key)) return;
+    this.#seen.add(key);
+    this.#bag.add(
+      WebCode.FUNCTION_VALUE,
+      `${what} usa una función como valor (tipo '${formatType(found)}'): el target ` +
+        "web todavía no ejecuta funciones como valores; ejecútalo con el " +
+        "intérprete (python V0/main.py <fuente>.srcx --run interpreter)",
+      pos,
+    );
+  }
+
+  /**
+   * `WEB104`: una lambda. Como `WEB103`, SIEMPRE (ninguna política la
+   * habilita: el codegen no sabe traducirla). Ocupa la clave de `WEB103` de
+   * su línea, para no decir dos veces lo mismo de la misma expresión.
+   */
+  #lambda(pos: HasPos): void {
+    const key = `${WebCode.LAMBDA}:${pos.ln}:${pos.col}`;
+    if (this.#seen.has(key)) return;
+    this.#seen.add(key);
+    this.#seen.add(`${WebCode.FUNCTION_VALUE}:${pos.ln}`);
+    this.#bag.add(
+      WebCode.LAMBDA,
+      "una lambda (una función sin nombre que lee su entorno): el target web " +
+        "todavía no las ejecuta; ejecútalo con el intérprete (python " +
+        "V0/main.py <fuente>.srcx --run interpreter)",
+      pos,
+    );
+  }
+
   #malformed(what: string, pos: HasPos | null): void {
     this.#bag.add(
       WebCode.MALFORMED_NODE,
@@ -216,11 +276,13 @@ class RestrictionChecker {
       this.#deniedUnits.push(name);
     }
     const allowed = [...this.#policy.allowedUnits].join(", ") || "(ninguna)";
+    const reason = unitDeniedReason(this.#policy, name);
     this.#bag.add(
       WebCode.LIBRARY_DENIED,
       `la librería '${written}'${resolved !== "" && resolved !== written ? ` (unidad '${resolved}')` : ""} ` +
-        `no está permitida en el target web '${this.#policy.name}': en esta versión ` +
-        `solo puede ejecutarse ${allowed}`,
+        `no está permitida en el target web '${this.#policy.name}'` +
+        (reason !== null ? `: ${reason}` : "") +
+        `: en esta versión solo puede ejecutarse ${allowed}`,
       pos,
     );
   }
@@ -299,7 +361,9 @@ class RestrictionChecker {
         );
         return;
       case "test":
-        if (decl.node.test.body !== null) this.#checkBlock(decl.node.test.body);
+        // las tres partes de una prueba son código del programa: lo que el
+        // target no puede ejecutar tampoco puede estar en una cláusula.
+        for (const parte of testBlocks(decl.node.test)) this.#checkBlock(parte);
         return;
       case "statement":
         this.#checkStmt(decl.node.stmt);
@@ -324,6 +388,7 @@ class RestrictionChecker {
 
   /** Un tipo puntero en cualquier nivel de anidamiento (`int ptr?`, `T ptr ptr`). */
   #checkType(type: Type | null, what: string, pos: HasPos | null): void {
+    this.#functionValue(type, what, pos);
     for (let t: Type | null = type; t !== null; t = t.inner) {
       if (t.kind === TypeKind.POINTER) {
         this.#deny(
@@ -397,6 +462,10 @@ class RestrictionChecker {
         for (const rama of node.catches) this.#checkBlock(rama.block);
         if (node.finallyBlock !== null) this.#checkBlock(node.finallyBlock);
         return;
+      case "expect":
+        this.#checkExpr(node.condition);
+        if (node.body !== null) this.#checkBlock(node.body);
+        return;
       case "importBinding":
         this.#checkUnitName("", node.lib, stmt);
         return;
@@ -427,6 +496,16 @@ class RestrictionChecker {
 
   #checkExpr(expr: Expr): void {
     const node = expr.node;
+    if (node.case === "lambdaExpr") {
+      // antes que 'WEB103': su tipo es un 'fn(A) -> R', pero lo que no se
+      // ejecuta es la lambda entera (el valor y el entorno que lee)
+      this.#lambda(expr);
+      return;
+    }
+    // el tipo de TODA expresión: una función nombrada como valor
+    // ('aplica(doble, 2)') no tiene declaración propia en esta unidad que
+    // la delate, y una llamada a través de un valor ('f(3)') tampoco.
+    this.#functionValue(expr.restype, "la expresión", expr);
     switch (node.case) {
       case "literal":
         return;
@@ -497,6 +576,8 @@ class RestrictionChecker {
       case "structLiteral":
         for (const value of node.values) this.#checkExpr(value);
         return;
+      case "lambdaExpr":
+        return;     // ya se denegó arriba (WEB104)
       case "none":
         this.#malformed("una expresión", expr);
         return;

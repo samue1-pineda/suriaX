@@ -3,7 +3,7 @@
 Cubre exactamente la cadena de precedencia de ``docs/gramar/grammar.ebnf``
 (de ``expression`` a ``factor``), de menor a mayor:
 
-    assignment(=, +=, -=, *=, /=, %=) < or < and < equality(==,!=)
+    assignment(=, +=, -=, *=, /=, %=) < ?? < or < and < equality(==,!=)
         < comparison(<,<=,>,>=) < or de bits(|) < xor(^) < y de bits(&)
         < desplazamiento(<<,>>) < term(+,-) < factor(*,/,%)
 
@@ -54,6 +54,12 @@ BINDING_POWER: Dict[TokenType, Tuple[int, Assoc]] = {
     TokenType.CARET_ASSIGN: (10, Assoc.RIGHT),
     TokenType.SHIFT_LEFT_ASSIGN: (10, Assoc.RIGHT),
     TokenType.SHIFT_RIGHT_ASSIGN: (10, Assoc.RIGHT),
+
+    # 'x ?? d' (desenvolver un 'T?' con un defecto): por DEBAJO de 'or' y por
+    # encima de la asignacion, y asociativo a la DERECHA, como en C# y Swift.
+    # 'a ?? b ?? c' es 'a ?? (b ?? c)': el primero que no sea null. Por estar
+    # debajo de 'or', 'x ?? a or b' es 'x ?? (a or b)'.
+    TokenType.NULL_COALESCE: (15, Assoc.RIGHT),
 
     TokenType.OR: (20, Assoc.LEFT),
 

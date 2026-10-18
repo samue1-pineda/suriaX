@@ -79,6 +79,15 @@ LoadStatus load_module(const std::string& path, std::unique_ptr<pb::Module>& out
             "lector.");
     }
 
+    // El esquema 1 se NORMALIZA aqui y en ningun otro sitio: desde este punto
+    // la VM, el MIR y las vistas tienen un solo camino, el del esquema 2.
+    if (module->schema_version() == 1) {
+        std::string error;
+        if (!normalize_schema_v1(*module, error)) {
+            return LoadStatus::failure("'" + path + "': " + error);
+        }
+    }
+
     out = std::move(module);
     return LoadStatus{};
 }
@@ -97,7 +106,13 @@ void Unit::index() {
         switch (decl.node_case()) {
             case pb::Decl::kFunction: {
                 const pb::FunctionDecl& fn = decl.function();
-                functions_[fn.name()] = &fn;
+                // un METODO de '@impl' de nombre llano ('dunder' igual al
+                // nombre) no se llama por nombre: se despacha por (tipo,
+                // nombre), y aqui pisaria a una 'fn' homonima del modulo.
+                // Misma regla que 'runtime/interpreter/loader.py'.
+                if (fn.dunder().empty() || fn.dunder() != fn.name()) {
+                    functions_[fn.name()] = &fn;
+                }
                 if (!fn.dunder().empty()) {
                     // ...y ademas resoluble como CUERPO de hook por (nombre,
                     // linea): es como se enlazan los HookRef, porque los
@@ -203,6 +218,28 @@ const pb::FunctionDecl* Image::function(const std::string& name) const {
         if (const pb::FunctionDecl* fn = unit->function(name)) return fn;
     }
     return nullptr;
+}
+
+// -------------------------------------------------------------------------- //
+// funciones como valores
+// -------------------------------------------------------------------------- //
+
+const pb::Type* find_function_type(const pb::Type& type) {
+    if (is_function_type(type)) return &type;
+    if (type.has_inner()) {
+        if (const pb::Type* found = find_function_type(type.inner())) return found;
+    }
+    for (const pb::Type& arg : type.args()) {
+        if (const pb::Type* found = find_function_type(arg)) return found;
+    }
+    return nullptr;
+}
+
+std::string function_values_message(const std::string& source, const pb::Type& found) {
+    return std::string(kFunctionValuesCode) + ": '" + source +
+           "' usa funciones como valores (el tipo '" + format_type(found) +
+           "'): la VM todavia no las ejecuta. Ejecutalo con el interprete: "
+           "python V0/main.py <fuente>.srcx --run interpreter";
 }
 
 LoadStatus load_image(const std::string& main_path, Image& out) {

@@ -1,0 +1,8 @@
+#from io #import stdp
+enum Color { Rojo, Verde };
+fn main() -> int {
+    stdp.println(Color.Rojo.name);
+    var Color c = Color.Verde;
+    stdp.println(c.name);
+    return 0;
+}

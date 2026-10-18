@@ -5,7 +5,14 @@ Reconoce:
 - enteros y flotantes en base 10 (``42``, ``3.25``);
 - enteros en base 16, 2 y 8 con prefijo (``0xFF``, ``0b1010``, ``0o755``),
   como Python;
-- ``_`` como separador ENTRE dos digitos (``1_000_000``, ``0xFF_FF``).
+- ``_`` como separador ENTRE dos digitos (``1_000_000``, ``0xFF_FF``);
+- un EXPONENTE decimal (``1e3``, ``2.5e-3``, ``1E+10``): con exponente el
+  literal es SIEMPRE ``float``. Uno en base 16, 2 u 8 no lleva exponente
+  (``0x1e3`` es el entero hexadecimal ``0x1E3``). Un valor que no cabe en un
+  ``float`` (``1e400``) es :class:`NumericLiteralOverflowError` (LEX006), y
+  tambien uno distinto de cero tan pequeno que quedaria en ``0.0``
+  (``1e-400``): casi seguro es una errata. ``text.parse_float`` en cambio da
+  ``0.0``, porque lee datos, no codigo.
 
 Un literal en base 16, 2 u 8 es un PATRON DE BITS (la regla de Java): puede
 usar los 64 bits, y si el de arriba esta encendido el valor es negativo
@@ -19,6 +26,8 @@ lexema conserva lo que se escribio.
 """
 
 from __future__ import annotations
+
+import math
 
 try:
     from include.t_types import Token, TokenType
@@ -126,10 +135,53 @@ def scan(lx) -> Token:
         else:
             break
 
+    # exponente: 'e'/'E', signo opcional y digitos. Con exponente el literal
+    # es SIEMPRE float ('1e3' es 1000.0), como en C, Java y Python
+    has_exponent = False
+    if pos < n and src[pos] in "eE":
+        k = pos + 1
+        if k < n and src[k] in "+-":
+            k += 1
+        if not (k < n and "0" <= src[k] <= "9"):
+            _falla(lx, f"el exponente de '{src[start:k]}' no tiene digitos: "
+                       "se escribe '1e3', '2.5e-3' o '1E+10'",
+                   start_col, _fin_del_literal(src, k))
+        pos = k
+        while pos < n:
+            ch = src[pos]
+            if "0" <= ch <= "9":
+                pos += 1
+            elif ch == "_":
+                if not _separador_valido(src, pos, _DIEZ):
+                    _falla(lx, "un '_' separa digitos: tiene que ir entre dos",
+                           start_col, _fin_del_literal(src, pos))
+                pos += 1
+            else:
+                break
+        has_exponent = True
+
     lexeme = src[start:pos]
-    lx.jump_to(pos)
     limpio = lexeme.replace("_", "")
 
-    if seen_dot:
-        return Token(TokenType.FLOAT_LIT, lexeme, float(limpio), lx.ln, start_col)
+    if seen_dot or has_exponent:
+        # el valor es el 'double' mas cercano al decimal escrito: el mismo
+        # que da 'text.parse_float' con el mismo texto (float() de Python
+        # en el interprete, strtod en la VM)
+        valor = float(limpio)
+        if math.isinf(valor):
+            lx.jump_to(pos)
+            raise lex_error.NumericLiteralOverflowError(
+                f"el literal '{lexeme}' no cabe en un float (el mayor es "
+                "~1.8e308)", line=lx.ln, column=start_col, file=lx.file)
+        mantisa = limpio.lower().split("e")[0]
+        if valor == 0.0 and any(c in "123456789" for c in mantisa):
+            lx.jump_to(pos)
+            raise lex_error.NumericLiteralOverflowError(
+                f"el literal '{lexeme}' es demasiado pequeno para un float: "
+                "quedaria en 0.0 (el menor distinto de cero es ~4.9e-324); "
+                "si quieres un cero, escribe 0.0",
+                line=lx.ln, column=start_col, file=lx.file)
+        lx.jump_to(pos)
+        return Token(TokenType.FLOAT_LIT, lexeme, valor, lx.ln, start_col)
+    lx.jump_to(pos)
     return Token(TokenType.INT_LIT, lexeme, int(limpio), lx.ln, start_col)

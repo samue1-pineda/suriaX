@@ -17,6 +17,11 @@
     falló. Si nadie las atrapa, el programa termina con su código (EXC001,
     EXC002) y el mensaje.
 
+    Si la lanza una función de la librería estándar ('arch.leer',
+    'text.parse_int', 'v.get' de un Vector), la posición es la de la
+    LLAMADA en tu programa, no una línea de dentro de la librería. (Así en
+    el intérprete; la VM todavía da la de la librería, o 0.)
+
  2. Las de USO GENERAL, para que el programa las lance:
 
      if (edad < 0) { throw exc.ValorInvalido{ mensaje: "edad negativa" }; };

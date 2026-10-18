@@ -303,7 +303,7 @@ select:focus-visible, button:focus-visible, textarea:focus-visible {
   border-left: 1px solid var(--linea);
 }
 .pestanas .vista { font-size: 11px; padding: 3px 7px; }
-.pestanas .vista[aria-selected="true"] {
+.pestanas .vista[aria-pressed="true"] {
   color: var(--acento);
   background: var(--fondo-hueco);
 }
@@ -554,6 +554,21 @@ pre.volcado {
    catálogo del compilador, que publica el docstring de cada clase de error. */
 
 .panel-errores { display: flex; flex-direction: column; gap: 10px; }
+/* Un fallo interno no es un error del programa: lleva su propio rótulo. */
+.panel-errores .rotulo-interno {
+  margin: 0;
+  color: var(--critico);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.panel-errores .detalle-interno {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--critico);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
 .panel-errores .intro {
   color: var(--texto-suave);
   font-size: 13px;

@@ -24,7 +24,20 @@ y decidir por su cuenta qué imprime y qué devuelve. La CLI actual
 
 from __future__ import annotations
 
-from .execute import execute, finish_report
+import sys
+
+#: Las pasadas del compilador recorren el arbol de forma recursiva. El parser
+#: acota cuanto anida un programa (``MAX_NESTING``), y esto es el margen para
+#: recorrerlo: el limite de Python por defecto (1000) no alcanza para las
+#: pasadas que gastan varios marcos por nivel. Va AQUI y no solo en la CLI
+#: para que quien usa el compilador como libreria —el playground, el editor—
+#: tenga el mismo que ``V0/main.py``; antes una suma de 300 terminos
+#: compilaba en la terminal y era un fallo interno en el playground.
+RECURSION_LIMIT = 10_000
+if sys.getrecursionlimit() < RECURSION_LIMIT:
+    sys.setrecursionlimit(RECURSION_LIMIT)
+
+from .execute import execute, finish_report  # noqa: E402
 from .options import (EXIT_COMPILE_ERROR, EXIT_CONFIG_ERROR,
                       EXIT_EXTENSION_ERROR, EXIT_FILE_NOT_FOUND,
                       EXIT_INTERNAL_ERROR, EXIT_MISSING_DEPENDENCY, EXIT_OK,

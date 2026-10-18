@@ -1,0 +1,7 @@
+#from io #import stdp
+enum Color { ROJO, VERDE, AZUL };
+fn main() -> int {
+    var Color c = Color.AZUL;
+    if (c == Color.AZUL) { stdp.println("azul"); }
+    return 0;
+}

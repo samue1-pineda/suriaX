@@ -1,0 +1,5 @@
+#import sistema
+fn main() -> int {
+    sistema.archivos.escribir("no_existe_carpeta/x.txt", "hola");
+    return 0;
+}

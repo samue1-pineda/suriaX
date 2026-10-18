@@ -86,7 +86,9 @@ def _cmd_compile(args) -> int:
         emit_ast_json=args.emit_ast_json, emit_tokens=args.emit_tokens,
         emit_hir=args.emit_hir, hir_pretty=args.hir_pretty,
         dump_symbols=args.dump_symbols, hir_text=args.hir_text,
-        run=args.run, debug=args.debug,
+        hir_schema=args.hir_schema,
+        # '--test' ejecuta (las pruebas), y siempre en el interprete
+        run="interpreter" if args.pruebas else args.run, debug=args.debug,
         collect_times=args.show_times or args.debug,
         trace_exec=args.trace_exec, trace_memory=args.trace_memory,
     )
@@ -101,6 +103,7 @@ def _cmd_compile(args) -> int:
     print_result(result)
     exit_code = execute(result, trace_exec=args.trace_exec,
                         trace_memory=args.trace_memory, reporter=reporter,
+                        pruebas=args.pruebas,
                         argumentos=[args.source,
                                     *getattr(args, "argumentos_del_programa", [])])
 
@@ -174,7 +177,7 @@ def _separar_argumentos(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def _comando(args) -> str:
     """Nombre legible del comando que atendía la CLI (para un ICE)."""
-    for bandera in ("emit_lang_info", "check", "init_config", "emit_extensions",
+    for bandera in ("emit_lang_info", "dap", "lsp", "check", "init_config", "emit_extensions",
                     "emit_stage", "emit_diagnostics", "emit_index"):
         if getattr(args, bandera, None):
             return "cli --" + bandera.replace("_", "-")
@@ -185,6 +188,17 @@ def _despachar(parser, args) -> int:
     """Atiende el comando pedido y devuelve el código de salida."""
     if args.emit_lang_info:
         return _cmd_lang_info()
+    if args.dap:
+        # el depurador no conoce a la terminal: la CLI le entrega quien
+        # entiende sus banderas.
+        from runtime.interpreter import dap
+        from .depurar import banderas
+        return dap.main(lee_banderas=banderas)
+    if args.lsp:
+        # el servidor de lenguaje es tooling (tooling/lsp), no compilador:
+        # importa los canales del driver, y el driver no sabe que existe
+        from tooling import lsp
+        return lsp.main()
     if args.check:
         return compilerconfig._print_report()
     if args.init_config:

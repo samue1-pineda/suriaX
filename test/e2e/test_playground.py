@@ -504,3 +504,822 @@ def test_el_env_no_pisa_lo_que_ya_esta_en_el_entorno():
             for clave in ("SURIAX_PRUEBA_NUEVA", "SURIAX_PRUEBA_COMILLAS",
                           "SURIAX_PRUEBA_EXISTENTE"):
                 os.environ.pop(clave, None)
+
+
+# --------------------------------------------------------------------------- #
+# los proveedores fallan por separado
+#
+# El compilador y el target web son dos proveedores detrás de dos adaptadores.
+# Lo que se fija aquí es que el fallo de uno no se lleva al otro, y que un
+# fallo INTERNO no se le atribuye al programa: son cuatro estados (ok,
+# error_del_programa, no_disponible, error_interno) y cada uno pide una acción
+# distinta a quien lo lee.
+#
+# Los fallos se simulan cambiando la función que lanza el proceso (o la que
+# recolecta las fases): así se prueban también donde node no está.
+# --------------------------------------------------------------------------- #
+
+import contextlib
+import subprocess
+
+
+@contextlib.contextmanager
+def _parche(modulo, **nuevos):
+    """Cambia atributos de un módulo y los repone al salir, pase lo que pase."""
+    viejos = {clave: getattr(modulo, clave) for clave in nuevos}
+    for clave, valor in nuevos.items():
+        setattr(modulo, clave, valor)
+    try:
+        yield
+    finally:
+        for clave, valor in viejos.items():
+            setattr(modulo, clave, valor)
+
+
+def _con_node_falso(lanzar):
+    """El adaptador web con un node de mentira: ``lanzar(cmd)`` hace de él."""
+    from capas import web
+    return _parche(web, version_de_node=lambda: 22, _lanzar=lanzar)
+
+
+def _proceso(cmd, codigo=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(cmd, codigo, stdout, stderr)
+
+
+def _frontend_intacto(datos):
+    """Las fases del compilador llegaron, falle lo que falle el target."""
+    for fase in ("tokens", "ast", "typed_ast", "symbols", "hir", "link"):
+        assert datos["phases"][fase]["ok"], (fase, datos["phases"][fase])
+    assert datos["providers"]["compiler"]["status"] == "ok", datos["providers"]
+
+
+def _target_roto(datos):
+    wasm = datos["phases"]["wasm"]
+    assert wasm["ok"] is False and wasm["status"] == "error_interno", wasm
+    assert wasm["reason"].startswith("el backend web falló por dentro"), wasm
+    assert datos["providers"]["web"]["status"] == "error_interno"
+    assert datos["status"] == "error_interno"
+    # un fallo interno NO es un diagnóstico del programa
+    assert not [d for d in datos["diagnostics"] if d["phase"] == "web"], \
+        datos["diagnostics"]
+
+
+def test_un_target_web_que_no_responde_no_se_lleva_al_compilador():
+    """Antes el ``TimeoutExpired`` salía como un 500 y la página se quedaba
+    sin NINGUNA fase, también las que el compilador sí había producido."""
+    from server import compile_source
+
+    def lanzar(cmd):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    with _con_node_falso(lanzar):
+        datos = compile_source(_VALIDO)
+    _frontend_intacto(datos)
+    _target_roto(datos)
+    assert "no respondió" in datos["phases"]["wasm"]["reason"]
+
+
+def test_un_target_web_que_muere_dice_lo_que_dijo_al_morir():
+    """Sin informe no hay nada que atribuirle al programa. Su salida de error
+    es lo único que explica el fallo; antes se tiraba. Y se publica sin las
+    rutas de la máquina donde corre el servidor."""
+    from capas import config
+    from server import compile_source
+
+    def lanzar(cmd):
+        return _proceso(cmd, 3, "", f"TypeError: boom\n  at {config.REPO}"
+                                    f"{os.sep}web{os.sep}main.ts:1:1\n")
+
+    with _con_node_falso(lanzar):
+        datos = compile_source(_VALIDO)
+    _frontend_intacto(datos)
+    _target_roto(datos)
+    detalle = datos["phases"]["wasm"]["detail"]
+    assert "TypeError: boom" in detalle, detalle
+    assert "sin informe" in datos["phases"]["wasm"]["reason"]
+    assert config.REPO not in detalle and "<repo>" in detalle, detalle
+
+
+def test_un_target_que_no_genera_ni_explica_no_culpa_al_programa():
+    """Con un informe válido, sin artefacto y sin diagnósticos, la página
+    decía "el target web todavía no compila construcciones del programa". Era
+    inventar un motivo: el target no había dicho nada."""
+    from server import compile_source
+
+    def lanzar(cmd):
+        return _proceso(cmd, 0, json.dumps({"ok": True, "diagnostics": []}))
+
+    with _con_node_falso(lanzar):
+        datos = compile_source(_VALIDO)
+    _frontend_intacto(datos)
+    _target_roto(datos)
+
+
+def test_lo_que_el_target_diagnostica_si_es_del_programa():
+    """La otra cara: un diagnóstico del target es un error DEL PROGRAMA, y no
+    se confunde con un fallo interno."""
+    from server import compile_source
+
+    def lanzar(cmd):
+        return _proceso(cmd, 1, json.dumps({"ok": False, "diagnostics": [
+            {"code": "WEB101", "line": 3, "col": 1, "message": "struct"}]}))
+
+    with _con_node_falso(lanzar):
+        datos = compile_source(_VALIDO)
+    _frontend_intacto(datos)
+    wasm = datos["phases"]["wasm"]
+    assert wasm["status"] == "error_del_programa" and not wasm["ok"], wasm
+    assert [d["kind"] for d in datos["diagnostics"] if d["phase"] == "web"] \
+        == ["not-compiled"], datos["diagnostics"]
+    assert datos["status"] == "error_del_programa"
+
+
+def test_un_target_que_si_genera_entrega_sus_dos_vistas():
+    from server import compile_source
+
+    def lanzar(cmd):
+        with open(cmd[cmd.index("--emit-wat") + 1], "w", encoding="utf-8") as fh:
+            fh.write("(module)")
+        with open(cmd[cmd.index("--emit-pretty") + 1], "w",
+                  encoding="utf-8") as fh:
+            fh.write("fn main")
+        return _proceso(cmd, 0, json.dumps({"ok": True, "diagnostics": []}))
+
+    with _con_node_falso(lanzar):
+        datos = compile_source(_VALIDO)
+    wasm = datos["phases"]["wasm"]
+    assert wasm == {"ok": True, "status": "ok", "wat": "(module)",
+                    "pretty": "fn main"}, wasm
+    assert datos["status"] == "ok" and datos["api"] == "1", datos["status"]
+
+
+def test_sin_node_el_target_no_esta_disponible_y_no_es_un_fallo():
+    """Que falte node lo arregla quien instala el entorno, no quien mantiene
+    el compilador: es otro estado."""
+    from capas import web
+    from server import compile_source
+
+    def lanzar(cmd):
+        raise AssertionError("sin node no hay nada que lanzar")
+
+    with _parche(web, version_de_node=lambda: None, _lanzar=lanzar):
+        datos = compile_source(_VALIDO)
+    _frontend_intacto(datos)
+    assert datos["phases"]["wasm"]["status"] == "no_disponible"
+    assert "node 22" in datos["phases"]["wasm"]["reason"]
+    assert datos["status"] == "no_disponible"
+
+
+def test_un_compilador_que_falla_por_dentro_no_tira_el_servidor():
+    """Y viceversa: si el que falla es el compilador, el servidor contesta
+    200 con la MISMA forma de siempre y dice quién falló. Antes era un 500
+    con un solo campo, y la página no tenía pestañas que enseñar."""
+    from capas import compilador
+
+    def recolectar(fuente):
+        raise RuntimeError("se rompió el enlazador")
+
+    def lanzar(cmd):
+        raise AssertionError("sin HIR no se invoca al target web")
+
+    def comprobar(base):
+        peticion = urllib.request.Request(
+            f"{base}/api/compile",
+            data=json.dumps({"source": _VALIDO}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(peticion, timeout=60) as r:
+            assert r.status == 200
+            datos = json.loads(r.read())
+        assert datos["status"] == "error_interno"
+        propio = datos["providers"]["compiler"]
+        assert propio["status"] == "error_interno", propio
+        assert propio["detail"] == "RuntimeError: se rompió el enlazador"
+        for fase in compilador.FASES:
+            panel = datos["phases"][fase]
+            assert panel["ok"] is False and panel["status"] == "error_interno"
+            assert "el compilador falló por dentro" in panel["reason"], panel
+        # el target no falló: no tuvo nada que procesar
+        assert datos["phases"]["wasm"]["status"] == "no_disponible"
+        assert datos["diagnostics"] == []
+
+        # y la página se sigue sirviendo
+        with urllib.request.urlopen(f"{base}/", timeout=30) as r:
+            assert r.status == 200
+
+    with _parche(compilador, _recolectar=recolectar), _con_node_falso(lanzar):
+        _con_servidor(comprobar)
+
+
+def test_un_error_del_programa_no_es_un_fallo_de_nadie():
+    from capas import web
+    from server import compile_source
+
+    with _parche(web, version_de_node=lambda: None):
+        datos = compile_source("fn main() -> int { return q; }")
+    assert datos["providers"]["compiler"]["status"] == "error_del_programa"
+    assert datos["status"] == "error_del_programa"
+
+
+_VARIOS = (
+    _CON_IO,
+    "#import array.vector as vec\n"
+    "fn main() -> int { var vec.Vector<int> v = vec.dynamic<int>(2);"
+    " v.push(1); return v.get(0); }\n",
+    "#import collections.dictionary as dic\n"
+    "fn main() -> int { var dic.Dictionary<str, int> d = dic.make<str, int>(2);"
+    ' d.put("a", 1); return d.get("a"); }\n',
+)
+
+
+def test_compilar_a_la_vez_da_lo_mismo_que_compilar_en_serie():
+    """El frontend guarda estado global y el servidor atiende con hilos: sin
+    el candado del adaptador, un programa VÁLIDO salía con ``SEM010`` porque
+    otra compilación le había cambiado la caché del enlazador a media
+    resolución (medido: 10 de 90 en paralelo distintas de la serie)."""
+    from capas import web
+    from server import compile_source
+
+    def resumen(fuente):
+        datos = compile_source(fuente)
+        return ([d["code"] for d in datos["diagnostics"]],
+                datos["phases"]["hir"]["ok"],
+                datos["providers"]["compiler"]["status"])
+
+    with _parche(web, version_de_node=lambda: None):
+        serie = [resumen(f) for f in _VARIOS]
+        assert all(r == ([], True, "ok") for r in serie), serie
+        for _ in range(4):
+            salida = [None] * (len(_VARIOS) * 5)
+
+            def trabajo(i):
+                salida[i] = resumen(_VARIOS[i % len(_VARIOS)])
+
+            hilos = [threading.Thread(target=trabajo, args=(i,))
+                     for i in range(len(salida))]
+            for h in hilos:
+                h.start()
+            for h in hilos:
+                h.join()
+            distintas = [r for i, r in enumerate(salida)
+                         if r != serie[i % len(_VARIOS)]]
+            assert not distintas, distintas[:3]
+
+
+# --------------------------------------------------------------------------- #
+# el transporte: lo que el servidor promete a cualquiera que lo llame
+# --------------------------------------------------------------------------- #
+
+def _pedir(base, ruta, *, metodo="GET", cuerpo=None, cabeceras=None):
+    """``(código, cabeceras, json)`` de una petición, falle o no."""
+    peticion = urllib.request.Request(f"{base}{ruta}", data=cuerpo,
+                                      method=metodo, headers=cabeceras or {})
+    try:
+        with urllib.request.urlopen(peticion, timeout=60) as r:
+            return r.status, r.headers, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, json.loads(exc.read() or b"null")
+
+
+def test_la_salud_dice_el_estado_de_cada_proveedor_sin_compilar():
+    """Para quien despliega: una sola pregunta que dice qué falta."""
+    from capas import compilador, web
+
+    def no_se_compila(fuente):
+        raise AssertionError("la salud no compila nada")
+
+    def comprobar(base):
+        codigo, _, datos = _pedir(base, "/api/health")
+        assert codigo == 200
+        assert datos["api"] == "1"
+        assert datos["providers"]["compiler"]["status"] == "ok", datos
+        assert datos["providers"]["web"] == {
+            "status": "no_disponible", "node": None,
+            "detail": datos["providers"]["web"]["detail"]}, datos
+        assert "node 22" in datos["providers"]["web"]["detail"]
+        assert datos["status"] == "no_disponible"
+
+    with _parche(compilador, _recolectar=no_se_compila), \
+            _parche(web, version_de_node=lambda: None):
+        _con_servidor(comprobar)
+
+
+def test_un_error_http_tiene_la_forma_de_la_rfc_9457():
+    """Un error HTTP es "no pude atender la petición", que no es lo mismo que
+    un programa que no compila. Lleva una forma que una herramienta puede
+    leer, y conserva ``error`` para quien ya lo leía."""
+    def comprobar(base):
+        from server import MAX_SOURCE_BYTES
+        codigo, cabeceras, datos = _pedir(
+            base, "/api/compile", metodo="POST",
+            cuerpo=json.dumps({"source": "a" * (MAX_SOURCE_BYTES + 8)}).encode(),
+            cabeceras={"Content-Type": "application/json"})
+        assert codigo == 413
+        assert cabeceras["Content-Type"].startswith("application/problem+json")
+        assert datos["status"] == 413 and datos["title"] and datos["detail"]
+        assert datos["error"] == datos["detail"]
+
+    _con_servidor(comprobar)
+
+
+def test_el_servidor_rechaza_lo_que_no_es_una_peticion_valida():
+    def comprobar(base):
+        json_ = {"Content-Type": "application/json"}
+        # un formulario de otra página no pone a compilar a un servidor local
+        codigo, _, _ = _pedir(base, "/api/compile", metodo="POST",
+                              cuerpo=b'{"source": ""}',
+                              cabeceras={"Content-Type": "text/plain"})
+        assert codigo == 415, codigo
+        codigo, _, _ = _pedir(base, "/api/compile", metodo="POST",
+                              cuerpo=b"[1, 2]", cabeceras=json_)
+        assert codigo == 400, codigo
+        codigo, _, _ = _pedir(base, "/api/compile", metodo="POST",
+                              cuerpo=b'{"source": 7}', cabeceras=json_)
+        assert codigo == 400, codigo
+        codigo, _, _ = _pedir(base, "/api/compile", metodo="POST",
+                              cuerpo=b"{no es json", cabeceras=json_)
+        assert codigo == 400, codigo
+        # el método equivocado dice cuál es el bueno
+        codigo, cabeceras, _ = _pedir(base, "/api/compile")
+        assert codigo == 405 and "POST" in cabeceras["Allow"], cabeceras
+        codigo, cabeceras, _ = _pedir(base, "/api/health", metodo="POST",
+                                      cuerpo=b"{}", cabeceras=json_)
+        assert codigo == 405 and "GET" in cabeceras["Allow"], cabeceras
+        codigo, _, _ = _pedir(base, "/api/noexiste", metodo="POST",
+                              cuerpo=b"{}", cabeceras=json_)
+        assert codigo == 404, codigo
+
+    _con_servidor(comprobar)
+
+
+def test_las_respuestas_llevan_las_cabeceras_de_seguridad():
+    def comprobar(base):
+        with urllib.request.urlopen(f"{base}/", timeout=30) as r:
+            assert r.headers["X-Content-Type-Options"] == "nosniff"
+            assert r.headers["Referrer-Policy"] == "no-referrer"
+            assert "Python" not in r.headers["Server"], r.headers["Server"]
+        _, cabeceras, _ = _pedir(base, "/api/language")
+        assert cabeceras["X-Content-Type-Options"] == "nosniff"
+        assert cabeceras["Cache-Control"] == "no-store"
+        assert cabeceras["Content-Security-Policy"] == "default-src 'none'"
+        # sin configurarlo, ningún otro origen puede llamar a la API
+        assert cabeceras["Access-Control-Allow-Origin"] is None
+
+    _con_servidor(comprobar)
+
+
+def test_otro_origen_solo_entra_si_se_configura():
+    """La integración desde otro sitio es una decisión de quien despliega
+    (``SURIAX_CORS_ORIGIN``), y se concede a UN origen, no a todos."""
+    from capas import config
+
+    def comprobar(base):
+        codigo, cabeceras, _ = _pedir(base, "/api/compile", metodo="OPTIONS")
+        assert codigo == 204
+        assert cabeceras["Access-Control-Allow-Origin"] == "https://otro.example"
+        assert "POST" in cabeceras["Access-Control-Allow-Methods"]
+        _, cabeceras, _ = _pedir(base, "/api/language")
+        assert cabeceras["Access-Control-Allow-Origin"] == "https://otro.example"
+
+    with _parche(config, ORIGEN_PERMITIDO="https://otro.example"):
+        _con_servidor(comprobar)
+
+
+def test_por_defecto_el_servidor_solo_escucha_en_esta_maquina():
+    """Publicarlo en la red es una decisión (``HOST=0.0.0.0``), no un
+    descuido. Y una variable ilegible no arranca con el valor por defecto."""
+    entorno = {k: v for k, v in os.environ.items()
+               if k not in ("HOST", "PORT") and not k.startswith("SURIAX_")}
+    orden = [sys.executable, "-c",
+             "import sys; sys.path.insert(0, 'playground');"
+             "from capas import config; print(config.HOST, config.PUERTO)"]
+    if os.path.isfile(os.path.join(_REPO_ROOT, ".env")):
+        omitir("hay un .env en la raíz: los valores por defecto no se ven")
+    sale = subprocess.run(orden, capture_output=True, text=True, env=entorno,
+                          cwd=_REPO_ROOT, timeout=60)
+    assert sale.stdout.split() == ["127.0.0.1", "8000"], (sale.stdout,
+                                                          sale.stderr)
+    sale = subprocess.run(orden, capture_output=True, text=True,
+                          env={**entorno, "SURIAX_WEB_TIMEOUT": "dos minutos"},
+                          cwd=_REPO_ROOT, timeout=60)
+    assert sale.returncode != 0 and "SURIAX_WEB_TIMEOUT" in sale.stderr, \
+        (sale.returncode, sale.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# la descripción de la API dice lo que el servidor hace
+#
+# Una descripción que se escribe aparte se queda atrás. Estas pruebas la atan
+# al código: las rutas, los estados y los campos obligatorios salen de las
+# respuestas de verdad.
+# --------------------------------------------------------------------------- #
+
+def _openapi():
+    with open(os.path.join(_REPO_ROOT, "playground", "openapi.json"),
+              encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _obligatorios(api, esquema):
+    return api["components"]["schemas"][esquema]["required"]
+
+
+def test_la_descripcion_de_la_api_tiene_las_rutas_del_servidor():
+    import server
+    from capas import config
+
+    api = _openapi()
+    assert api["openapi"].startswith("3.1"), api["openapi"]
+    assert api["info"]["version"] == config.API
+    descritas = {ruta: next(iter(metodos)).upper()
+                 for ruta, metodos in api["paths"].items()}
+    assert descritas == server._RUTAS, (descritas, server._RUTAS)
+
+
+def test_los_estados_descritos_son_los_del_codigo():
+    from capas import estados
+
+    descritos = _openapi()["components"]["schemas"]["Estado"]["enum"]
+    assert sorted(descritos) == sorted(estados._GRAVEDAD), descritos
+
+
+def test_las_respuestas_traen_lo_que_la_descripcion_promete():
+    from capas import aplicacion, web
+
+    api = _openapi()
+    fases = api["components"]["schemas"]["Compilacion"]["properties"][
+        "phases"]["required"]
+    with _parche(web, version_de_node=lambda: None):
+        for fuente in (_VALIDO, "fn main() -> int { return q; }",
+                       "fn main( {"):
+            datos = aplicacion.compile_source(fuente)
+            assert set(_obligatorios(api, "Compilacion")) <= set(datos), datos
+            assert sorted(datos["phases"]) == sorted(fases), datos["phases"]
+            for nombre, fase in datos["phases"].items():
+                assert set(_obligatorios(api, "Fase")) <= set(fase), nombre
+                # sin artefacto, siempre hay un motivo
+                assert fase["ok"] or fase["reason"], (nombre, fase)
+            for diag in datos["diagnostics"]:
+                assert set(_obligatorios(api, "Diagnostico")) <= set(diag)
+            for proveedor in datos["providers"].values():
+                assert set(_obligatorios(api, "Proveedor")) <= set(proveedor)
+        assert set(_obligatorios(api, "Lexico")) <= \
+            set(aplicacion.lex_source("fn"))
+        assert set(_obligatorios(api, "Salud")) <= set(aplicacion.health())
+
+
+def test_el_servidor_publica_su_descripcion():
+    def comprobar(base):
+        codigo, _, datos = _pedir(base, "/api/openapi.json")
+        assert codigo == 200 and datos == _openapi()
+
+    _con_servidor(comprobar)
+
+
+def test_el_entorno_se_puede_comprobar_sin_levantar_el_servidor():
+    """``--check`` es para quien acaba de clonar: dice qué hay y qué falta,
+    y solo sale con 0 si está todo."""
+    import io
+    import server
+    from capas import web
+
+    def correr(node):
+        salida = io.StringIO()
+        with _parche(web, version_de_node=lambda: node), \
+                contextlib.redirect_stdout(salida):
+            return server.main(["--check"]), salida.getvalue()
+
+    codigo, texto = correr(None)
+    assert codigo == 1, texto
+    assert "compilador  ok" in texto and "no_disponible" in texto, texto
+    assert "node 22" in texto, texto
+    codigo, texto = correr(22)
+    assert codigo == 0 and "target web  ok" in texto, texto
+
+
+# --------------------------------------------------------------------------- #
+# las cotas, y la documentación de la configuración
+# --------------------------------------------------------------------------- #
+
+def test_el_target_web_no_lanza_mas_procesos_de_los_permitidos():
+    """Cada invocación es un node entero. Sin cota, N peticiones a la vez son
+    N procesos; con ella, la que no cabe espera y, si no le toca, lo dice."""
+    from capas import config, web
+
+    dentro, soltar = threading.Event(), threading.Event()
+    lanzados = []
+
+    def lanzar(cmd):
+        lanzados.append(cmd)
+        dentro.set()
+        soltar.wait(30)
+        return _proceso(cmd, 1, json.dumps({"diagnostics": [
+            {"code": "WEB101", "line": 1, "message": "x"}]}))
+
+    primero = []
+    with _con_node_falso(lanzar), \
+            _parche(web, _cupo=threading.BoundedSemaphore(1)), \
+            _parche(config, WEB_TIEMPO=1):
+        hilo = threading.Thread(
+            target=lambda: primero.append(web.bajar(b"x", {})))
+        hilo.start()
+        try:
+            assert dentro.wait(30), "el primero no llegó a lanzarse"
+            fases, diagnosticos, proveedor = web.bajar(b"x", {})
+        finally:
+            soltar.set()
+            hilo.join(30)
+    assert len(lanzados) == 1, "el segundo no debía lanzar otro proceso"
+    assert fases["wasm"]["status"] == "no_disponible", fases
+    assert "ocupado" in fases["wasm"]["reason"] and diagnosticos == []
+    assert primero[0][2]["status"] == "error_del_programa", primero
+
+
+def test_un_cliente_que_no_termina_de_enviar_no_ocupa_un_hilo_para_siempre():
+    import socket
+    import time
+    from capas import config
+
+    def comprobar(base):
+        puerto = int(base.rsplit(":", 1)[1])
+        inicio = time.monotonic()
+        with socket.create_connection(("127.0.0.1", puerto), timeout=30) as s:
+            # promete 50 bytes de cuerpo y no envía ninguno
+            s.sendall(b"POST /api/compile HTTP/1.1\r\nHost: x\r\n"
+                      b"Content-Type: application/json\r\n"
+                      b"Content-Length: 50\r\n\r\n")
+            assert s.recv(1024) == b"", "se esperaba que cerrase sin responder"
+        assert time.monotonic() - inicio < 15, "tardó de más en soltarlo"
+        codigo, _, _ = _pedir(base, "/api/health")
+        assert codigo == 200, "el servidor dejó de atender"
+
+    with _parche(config, ESPERA_CLIENTE=1):
+        _con_servidor(comprobar)
+
+
+def test_la_configuracion_documentada_es_la_que_se_lee():
+    """Tres sitios nombran las variables: el código que las lee, la plantilla
+    ``.env.example`` y la tabla del README. Una que falte en uno es una
+    variable que alguien no sabrá que existe."""
+    import re
+
+    def leer(*partes):
+        with open(os.path.join(_REPO_ROOT, *partes), encoding="utf-8") as fh:
+            return fh.read()
+
+    codigo = leer("playground", "capas", "config.py")
+    leidas = set(re.findall(r'(?:environ\.get|_entero)\("([A-Z_]+)"', codigo))
+    assert {"HOST", "PORT", "SURIAX_CORS_ORIGIN"} <= leidas, leidas
+
+    plantilla = set(re.findall(r"^([A-Z_]+)=", leer(".env.example"), re.M))
+    assert plantilla == leidas, plantilla ^ leidas
+
+    readme = leer("playground", "README.md")
+    tabla = readme[readme.index("### Configuración"):readme.index("## Publicarlo")]
+    documentadas = set(re.findall(r"^\| `([A-Z_]+)` \|", tabla, re.M))
+    assert documentadas == leidas, documentadas ^ leidas
+
+
+def test_el_procfile_publica_el_servidor():
+    """Se perdió una vez y el README lo seguía citando. En una plataforma hay
+    que escuchar en todas las interfaces: con el valor por defecto el
+    servidor arrancaría y nadie llegaría a él."""
+    with open(os.path.join(_REPO_ROOT, "Procfile"), encoding="utf-8") as fh:
+        orden = fh.read().strip()
+    assert orden == "web: HOST=0.0.0.0 python playground/server.py", orden
+
+
+# --------------------------------------------------------------------------- #
+# lo que se puede usar en el playground
+#
+# El playground corre con el perfil 'playground' del target web: ninguna
+# capacidad habilitada y una lista blanca de librerías. Qué entra y qué no se
+# decide en ``web/src/target/policy.ts``, como datos; aquí se fija que el
+# servidor lo PIDE y lo que eso significa para quien escribe un programa.
+# --------------------------------------------------------------------------- #
+
+def test_el_servidor_le_pide_al_target_el_perfil_del_playground():
+    """Sin pedirlo, el target usa el suyo, que deja importar cualquier
+    librería: el servidor creería estar contenido y no lo estaría."""
+    from server import compile_source
+
+    ordenes = []
+
+    def lanzar(cmd):
+        ordenes.append(cmd)
+        return _proceso(cmd, 1, json.dumps({"diagnostics": [
+            {"code": "WEB007", "line": 1, "message": "x"}]}))
+
+    with _con_node_falso(lanzar):
+        compile_source(_VALIDO)
+    cmd = ordenes[0]
+    assert cmd[cmd.index("--policy") + 1] == "playground", cmd
+
+
+def test_una_libreria_denegada_da_UN_diagnostico_que_dice_por_que():
+    """Con el perfil del target, un ``#import text`` daba cuarenta ``WEB002``
+    dentro de una librería que el usuario no escribió. Con el del playground
+    es uno, en su ``#import``, y distingue "nunca" de "todavía no"."""
+    if shutil.which("node") is None:
+        omitir("node no está instalado; el target web no corre")
+    from server import compile_source
+
+    casos = {
+        "#import sistema.archivos as arc": "no tiene archivos, procesos ni rutas",
+        "#import sistema.proceso as pro": "no tiene archivos, procesos ni rutas",
+        "#import text": "todavía no representa",
+        "#import mem": "runtime nativo",
+    }
+    for importe, motivo in casos.items():
+        datos = compile_source(f"#from io #import stdp\n{importe}\n"
+                               "fn main() -> int { return 0; }\n")
+        _frontend_intacto(datos)
+        denegadas = [d for d in datos["diagnostics"] if d["code"] == "WEB007"]
+        assert len(denegadas) == 1, (importe, datos["diagnostics"])
+        assert denegadas[0]["line"] == 2 and motivo in denegadas[0]["message"], \
+            denegadas
+        assert denegadas[0]["kind"] == "unsupported"
+        # y la librería no se revisa por dentro
+        assert not [d for d in datos["diagnostics"] if d["code"] == "WEB002"], \
+            (importe, datos["diagnostics"][:3])
+        assert datos["phases"]["wasm"]["status"] == "error_del_programa"
+
+
+def test_lo_que_el_target_sabe_ejecutar_si_pasa():
+    if shutil.which("node") is None:
+        omitir("node no está instalado; el target web no corre")
+    from server import compile_source
+
+    datos = compile_source(
+        "#from io #import stdp\n"
+        "#import math.basic as mb\n"
+        "#import excepciones\n"
+        "fn main() -> int {\n"
+        '    stdp.println(f"{mb.max(2.0, 3.0)}");\n'
+        "    return 0;\n"
+        "}\n")
+    assert datos["status"] == "ok", (datos["diagnostics"],
+                                     datos["phases"]["wasm"])
+    assert "(module" in datos["phases"]["wasm"]["wat"]
+
+
+def test_los_mensajes_no_publican_las_rutas_del_servidor():
+    """``SEM009`` enumera las rutas donde buscó. En la CLI ayudan; a un
+    visitante solo le cuentan cómo está montado el servidor."""
+    from capas import config, web
+    from server import compile_source
+
+    with _parche(web, version_de_node=lambda: None):
+        datos = compile_source("#import noexiste\n"
+                               "fn main() -> int { return 0; }\n")
+    mensaje = next(d["message"] for d in datos["diagnostics"]
+                   if d["code"] == "SEM009")
+    assert "<repo>" in mensaje, mensaje
+    todo = json.dumps(datos, ensure_ascii=False)
+    for ruta in (config.REPO, config.REPO.replace("\\", "/"),
+                 config.REPO.replace("\\", "\\\\")):
+        assert ruta not in todo, ruta
+
+
+# --------------------------------------------------------------------------- #
+# la página: de dónde puede cargar cosas
+# --------------------------------------------------------------------------- #
+
+def _estatico(nombre):
+    with open(os.path.join(_REPO_ROOT, "playground", "static", nombre),
+              encoding="utf-8") as fh:
+        return fh.read()
+
+
+def test_la_pagina_lleva_su_politica_de_contenido():
+    """Todo de este servidor, salvo lo que se nombra. Sin ella, un script
+    inyectado en la página podría cargar código de cualquier sitio."""
+    def comprobar(base):
+        with urllib.request.urlopen(f"{base}/", timeout=30) as r:
+            csp = r.headers["Content-Security-Policy"]
+        reglas = dict(parte.strip().split(" ", 1) for parte in csp.split(";"))
+        assert reglas["default-src"] == "'none'", csp
+        assert reglas["script-src"] == "'self' https://cdn.jsdelivr.net", csp
+        assert reglas["connect-src"] == "'self'", csp
+        assert "'unsafe-inline'" not in reglas["script-src"]
+        assert "'unsafe-eval'" not in csp
+        # los archivos que no son la página no la necesitan
+        with urllib.request.urlopen(f"{base}/app.js", timeout=30) as r:
+            assert r.headers["Content-Security-Policy"] is None
+
+    _con_servidor(comprobar)
+
+
+def test_lo_que_la_pagina_carga_de_fuera_tiene_la_version_fija():
+    """Mermaid es código de un tercero que entra en la página. Con un rango
+    (``@11``) cambia el día que publican otra versión, sin que nadie aquí lo
+    haya visto; con la versión exacta, subirla es una decisión."""
+    import re
+
+    fuentes = _estatico("app.js") + _estatico("grafo.js") + \
+        _estatico("index.html")
+    externos = set(re.findall(r'''(?:import\(\s*|src=|href=)["'](https?://[^"']+)''',
+                              fuentes))
+    scripts = {u for u in externos if "cdn." in u or u.endswith((".js", ".mjs"))}
+    assert scripts, "se esperaba al menos Mermaid"
+    for url in scripts:
+        assert url.startswith("https://cdn.jsdelivr.net/npm/"), url
+        assert re.search(r"@\d+\.\d+\.\d+/", url), f"versión sin fijar: {url}"
+    # y la página no trae scripts ni estilos escritos dentro del HTML
+    html = _estatico("index.html")
+    assert not re.search(r"<script(?![^>]*\bsrc=)", html), "script en línea"
+    assert " onclick=" not in html and "javascript:" not in html
+
+
+# --------------------------------------------------------------------------- #
+# lo que el frontend acepta, el target lo lee
+#
+# Tres cosas que un programa VÁLIDO hacía salir como un fallo que no era
+# suyo: una prueba (`test`/`expect`) era ".phir corrupto", una suma de cien
+# términos pasaba el frontend y el lector del target la rechazaba, y una de
+# trescientos tumbaba al emisor del HIR.
+# --------------------------------------------------------------------------- #
+
+_CON_PRUEBA = """\
+#from io #import stdp
+
+fn doble(int n) -> int { return n + n; }
+
+fn main() -> int {
+    stdp.println(f"{doble(21)}");
+    return 0;
+}
+
+test "doble" {
+    expect (doble(2) == 4) { stdp.println("bien"); };
+} errfinally {
+    stdp.println("fallo");
+} finally {
+    stdp.println("fin");
+}
+"""
+
+
+def test_un_programa_con_pruebas_compila_para_el_target_web():
+    """El target no corre pruebas —las quita y ejecuta el programa—, pero
+    tiene que leerlas: antes un `expect` era una sentencia "sin variante" y
+    el diagnóstico decía que el .phir estaba corrupto."""
+    if shutil.which("node") is None:
+        omitir("node no está instalado; el target web no corre")
+    from server import compile_source
+
+    datos = compile_source(_CON_PRUEBA)
+    assert datos["status"] == "ok", (datos["diagnostics"],
+                                     datos["phases"]["wasm"].get("reason"))
+    assert "doble" in datos["phases"]["wasm"]["pretty"]
+
+
+def _suma(terminos):
+    return ("#from io #import stdp\n"
+            "fn main() -> int {\n"
+            "    var int total = " + " + ".join(["1"] * terminos) + ";\n"
+            '    stdp.println(f"{total}");\n'
+            "    return 0;\n"
+            "}\n")
+
+
+def test_una_expresion_larga_que_cabe_llega_hasta_el_webassembly():
+    """Una suma de 400 términos no anida al escribirse, pero sí en el árbol
+    y en el HIR. Cabe en el límite del lenguaje, así que tiene que caber en
+    todos los que vienen después."""
+    if shutil.which("node") is None:
+        omitir("node no está instalado; el target web no corre")
+    from server import compile_source
+
+    datos = compile_source(_suma(400))
+    assert datos["status"] == "ok", (datos["providers"],
+                                     datos["phases"]["wasm"].get("reason"),
+                                     datos["phases"]["wasm"].get("detail"))
+
+
+def test_una_expresion_demasiado_larga_es_un_error_del_programa():
+    """...y la que no cabe es `PAR025`, con su línea: un error DEL PROGRAMA.
+    Era un `RecursionError` en el emisor del HIR, y el playground lo enseñaba
+    como un fallo interno del compilador."""
+    from capas import web
+    from server import compile_source
+
+    with _parche(web, version_de_node=lambda: None):
+        datos = compile_source(_suma(600))
+    assert datos["providers"]["compiler"]["status"] == "error_del_programa", \
+        datos["providers"]
+    assert [(d["code"], d["line"]) for d in datos["diagnostics"]] == \
+        [("PAR025", 3)], datos["diagnostics"]
+
+
+def test_el_lector_del_target_admite_lo_que_el_parser_deja_pasar():
+    """El tope del lector (mensajes anidados en el HIR) se calcula desde el
+    límite del lenguaje (niveles del árbol): cada nivel son como mucho dos
+    mensajes. Valía 200 "porque el frontend no produce árboles tan hondos",
+    y nadie comprobaba esa frase."""
+    import re
+    from src.frontend.parser.grammar.program import MAX_NESTING
+
+    with open(os.path.join(_REPO_ROOT, "web", "src", "hir", "wire.ts"),
+              encoding="utf-8") as fh:
+        tope = int(re.search(r"MAX_NESTING_DEPTH = (\d+);", fh.read()).group(1))
+    assert tope >= 2 * MAX_NESTING, (tope, MAX_NESTING)

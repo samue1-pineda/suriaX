@@ -93,6 +93,31 @@ def test_lib_sin_anotaciones_es_publica():
 # private: visible dentro del mismo paquete, oculto fuera
 # --------------------------------------------------------------------------- #
 
+_GEO = {
+    "lib/geo/main.libsrx": "#export package as geo\n",
+    "lib/geo/formas.libsrx": (
+        "public fn area(int v) -> int { return escalar(v) * 2; }\n"
+        "private fn escalar(int v) -> int { return v; }\n"
+        "#export as formas\n"),
+}
+
+
+def test_from_paquete_import_submodulo_no_destapa_sus_private():
+    """``#from geo #import formas`` traía el submódulo con TODOS sus
+    miembros: ``formas.escalar(2)`` compilaba desde otro paquete, aunque el
+    mismo acceso por ``#import geo.formas`` ya era SEM011. Era el ejemplo de
+    la documentación de librerías, que decía lo contrario."""
+    err = _err({**_GEO, "main.srcx":
+                "#from geo #import formas\n"
+                "fn main() -> int { return formas.escalar(2); }\n"})
+    assert "SEM011" in err and "'private'" in err, err
+    # lo público del submódulo sigue a la vista
+    assert_project_output({**_GEO, "main.srcx":
+                           W + "#from geo #import formas\n"
+                           'fn main() -> int { __write__(f"{formas.area(3)}\\n"); '
+                           "return 0; }\n"}, "6\n")
+
+
 def test_private_visible_same_package():
     assert_project_output(
         _same_pkg("#import mylib", '    __write__(f"{mylib.priv_fn()}\\n");'), "2\n")

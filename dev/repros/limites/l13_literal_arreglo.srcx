@@ -1,0 +1,1 @@
+fn main() -> int { var int xs[3]; return 0; }

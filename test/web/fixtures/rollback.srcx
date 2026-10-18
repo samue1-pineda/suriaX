@@ -1,0 +1,59 @@
+/- Fuente de los fixtures del ROLLBACK al esquema 1 del HIR.
+
+ El MISMO programa en los dos esquemas: 'rollback.phir' (esquema 2, con pool
+ de tipos) y 'rollback_v1.phir' (esquema 1, cada tipo inline). El lector web
+ tiene que decodificar los dos al MISMO módulo (test/web/schema_v1.test.ts).
+
+ Toca cada campo de tipo que cambió entre los dos esquemas: el tipo de una
+ expresión, de una variable, de un parámetro, el retorno de una función, el
+ campo de un struct, el retorno de una lambda y el payload de un enum.
+
+ El ORDEN importa: los índices del payload de 'Marca' dependen de en qué
+ orden entraron 'char' y 'float' al pool. El emisor registra el retorno de
+ una lambda ('char') ANTES que su cuerpo ('float'), aunque en el wire del
+ esquema 1 el cuerpo vaya antes; por eso 'main' (con la lambda) va antes que
+ todo lo demás que nombra esos tipos.
+
+ 'main' devuelve 53 en el intérprete (el target web rechaza las lambdas y los
+ enums con payload: aquí solo se prueba el decodificador).
+
+ Se regeneran con (desde esta carpeta; no importa nada, así que no toca los
+ .phir de IO):
+   python ../../../V0/main.py rollback.srcx --emit-hir rollback.phir
+   python ../../../V0/main.py rollback.srcx --emit-hir rollback_v1.phir --hir-schema 1
+-/
+
+fn main() -> int {
+    var int letra = probar(lambda (int v) -> char {
+        var float x = cast<float>(v);
+        if (x > 1.5) { return 'a'; }
+        return 'b';
+    }, 3);
+    var Punto p = Punto{ x: 3, y: 4 };
+    const int base = 10;
+    var int r = aplicar(lambda (int v) -> int: v + base, p.x);
+    var Forma c = Forma.Rect(p.x, p.y);
+    return r + area(&c) + 27 + letra;
+}
+
+fn probar(fn(int) -> char f, int v) -> int {
+    if (f(v) == 'a') { return 1; }
+    return 0;
+}
+
+struct { int x; int y; } Punto;
+
+enum Forma { Nada, Circulo(int), Rect(int, int) };
+
+enum Marca { Ninguna, Letra(char), Medida(float) };
+
+fn aplicar(fn(int) -> int f, int v) -> int { return f(v); }
+
+fn area(Forma ptr f) -> int {
+    match (f) {
+        case Forma.Circulo(r) { return 3 * r * r; };
+        case Forma.Rect(a, b) { return a * b; };
+        case Forma.Nada { return 0; };
+    };
+    return 0;
+}

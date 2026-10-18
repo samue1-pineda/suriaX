@@ -18,12 +18,13 @@ caliente.
 from __future__ import annotations
 
 import math
+import os
 import re
 from typing import Any, List, Optional
 
 from .enviroment.environment import Frame
 from .errors import (
-    DestructorThrewError, DivisionByZeroError, ExcepcionDelPrograma,
+    ConversionError, DestructorThrewError, DivisionByZeroError, ExcepcionDelPrograma,
     ShiftOutOfRangeError,
     FinallyThrewError,
     MissingReturnError,
@@ -37,10 +38,15 @@ from . import intrinsics
 from .memory.block import Block
 from .memory.pointer import Cell, CellState, Pointer
 from .values import (
-    EnumNamespace, EnumValue, FunctionValue, Namespace, StructValue,
+    EnumItem, EnumNamespace, EnumValue, FunctionValue, LambdaValue, Namespace,
+    StructValue,
     TypeValue, VariantCtor,
     copy_on_bind, format_value,
 )
+
+
+#: los primitivos que 'print(x)' escribe sin hook (el dueño de su HookRef)
+_PRINTABLE_PRIMITIVES = frozenset({"int", "float", "bool", "char", "str", "byte"})
 
 
 class _Return(Exception):
@@ -65,6 +71,10 @@ _ERROR_KIND = None
 _KINDS_TEXTO = None
 
 _M64 = (1 << 64) - 1
+
+#: el prefijo de la ruta PUBLICA de una libreria de la stdlib
+#: (``Module.source_file``), el mismo que escribe el linker
+_STDLIB_PREFIX = "<stdlib>/"
 
 #: escapes que se escriben en la representacion de una cadena o un char: los
 #: mismos que acepta el lexer
@@ -150,6 +160,33 @@ class _Continue(Exception):
     pass
 
 
+class ExpectFallido(Exception):
+    """Un ``expect`` que no se cumplio: la prueba en curso TERMINA.
+
+    No es un :class:`Thrown`: ningun ``catch`` lo atrapa (una prueba no puede
+    rescatarse de su propia comprobacion). Los ``finally`` que atraviesa si
+    corren, como con un ``return``. Lo recibe ``interpreter.run_tests``.
+
+    ``texto`` es la condicion como se escribio; ``valores``, los dos lados de
+    una comparacion (``None`` si la condicion no es una)."""
+
+    __slots__ = ("texto", "ln", "col", "valores")
+
+    def __init__(self, texto: str, ln: int = 0, col: int = 0, valores=None) -> None:
+        self.texto = texto
+        self.ln = ln
+        self.col = col
+        self.valores = valores
+
+    def mensaje(self) -> str:
+        detalle = ""
+        if self.valores is not None:
+            izquierda, derecha = self.valores
+            detalle = (f"  (izquierda: {format_value(izquierda)}, "
+                       f"derecha: {format_value(derecha)})")
+        return f"expect falló: {self.texto}{detalle}  [{self.ln}:{self.col}]"
+
+
 class Thrown(Exception):
     """Propagación de un ``throw`` por la pila (modelo de excepciones).
 
@@ -158,10 +195,10 @@ class Thrown(Exception):
     Si escapa hasta la raíz, ``interpreter.run`` la reporta como error de
     runtime no capturado."""
 
-    __slots__ = ("value", "ln", "col", "tipo")
+    __slots__ = ("value", "ln", "col", "tipo", "unit")
 
     def __init__(self, value: Any, ln: int = 0, col: int = 0,
-                 tipo=None) -> None:
+                 tipo=None, unit=None) -> None:
         self.value = value
         self.ln = ln
         self.col = col
@@ -169,12 +206,18 @@ class Thrown(Exception):
         #: Semantica), o None si el HIR no lo trae. Es lo que filtra el
         #: 'catch' — ver '_atrapa'.
         self.tipo = tipo
+        #: unidad (``loader.Unit``) del 'throw': ``ln``/``col`` son de SU
+        #: archivo, que puede ser una libreria. La pone ``exec_stmt``.
+        self.unit = unit
 
 
 # TypeKind del esquema (valores estables del .proto; ver hir.proto)
 _TK_BOOL, _TK_INT, _TK_FLOAT, _TK_CHAR, _TK_STR = 2, 3, 4, 5, 6
 _TK_BYTE = 12   # 'byte': un int de Python en 0..255
 _TK_NOMINAL = 9   # espejo de TypeKind.NOMINAL en el esquema del HIR
+_TK_POINTER, _TK_NULLABLE, _TK_META = 7, 8, 10
+_TK_FUNCTION = 13  # 'fn(A) -> R': args = parametros, inner = retorno
+_TK_ERROR = 11     # 'error T': transparente en la ruta de exito
 _SK_ENUM = 3      # espejo de SymbolKind.ENUM
 
 
@@ -182,13 +225,18 @@ class Evaluator:
     __slots__ = ("image", "trace", "trace_exec", "max_steps", "steps",
                  "events", "depth", "unit", "_stmt_dispatch", "_expr_dispatch",
                  "_index_kind", "_index_set_kind", "_eq_kind", "_free_kind", "_structs", "_len_kind",
-                 "_hash_kind",
-                 "_temporales", "_enums")
+                 "_hash_kind", "_print_kind", "_cmp_kind",
+                 "_temporales", "_enums", "_expect_expr", "_expect_valores",
+                 "depurador", "_user_call", "_stdlib_units")
 
     def __init__(self, image, *, trace: bool = False, max_steps: int = 0,
                  trace_exec: bool = False,
-                 events: Optional[List[str]] = None) -> None:
+                 events: Optional[List[str]] = None,
+                 depurador=None) -> None:
         self.image = image
+        # quien decide cuando parar (ver 'depurador.py'). None = nadie mira:
+        # el unico coste es la comparacion de 'exec_stmt'.
+        self.depurador = depurador
         self.trace = trace          # traza de MEMORIA (&, move, free, catch)
         self.trace_exec = trace_exec  # traza de EJECUCION (llamadas/sentencias)
         self.max_steps = max_steps
@@ -198,9 +246,20 @@ class Evaluator:
         # ademas de -- imprimirse. None = solo consola.
         self.events: Optional[List[str]] = events
         self.depth = 0
+        # la condicion del 'expect' en curso y, si es una comparacion, sus
+        # dos lados ya evaluados (para citarlos si falla sin evaluar dos veces)
+        self._expect_expr = None
+        self._expect_valores = None
         # temporales de la sentencia en curso: (valor, HookRef). Ver
         # 'exec_stmt' y '_registrar_temporal'.
         self._temporales: List[Any] = []
+        # (unidad, ln, col) de la llamada MAS INTERNA del codigo del usuario
+        # a la stdlib, o None fuera de la stdlib. Es la posicion que lleva una
+        # excepcion que la stdlib lanza (H03): ver 'call_function',
+        # 'set_error_unit' y '_thrown_at_user_call'.
+        self._user_call = None
+        # id(unidad) -> ¿es de la stdlib? (se pregunta en cada llamada)
+        self._stdlib_units: dict = {}
         # unidad cuyo codigo se esta ejecutando. Hace falta porque los tipos
         # de las expresiones viajan como INDICE en el pool de SU unidad
         # (Expr.type_id, esquema v2): resolverlos exige saber de que modulo
@@ -218,7 +277,9 @@ class Evaluator:
         self._index_set_kind = _hk.Value("INDEX_SET")
         self._len_kind = _hk.Value("LEN")
         self._hash_kind = _hk.Value("HASH")
+        self._print_kind = _hk.Value("PRINT")
         self._eq_kind = _hk.Value("EQ")
+        self._cmp_kind = _hk.Value("CMP")
         self._free_kind = _hk.Value("FREE")
 
         self._stmt_dispatch = {
@@ -236,6 +297,7 @@ class Evaluator:
             "expr_stmt": self._stmt_expr,
             "import_binding": self._stmt_import_binding,
             "throw_stmt": self._stmt_throw,
+            "expect_stmt": self._stmt_expect,
             "try_stmt": self._stmt_try,
         }
         self._expr_dispatch = {
@@ -253,6 +315,7 @@ class Evaluator:
             "cast_expr": self._expr_cast,
             "move_expr": self._expr_move,
             "struct_literal": self._expr_struct_literal,
+            "lambda_expr": self._expr_lambda,
         }
 
     # ------------------------------------------------------------------ #
@@ -302,6 +365,11 @@ class Evaluator:
         self.depth += 1
 
         frame = Frame(parent=unit.globals_frame)
+        # ¿esta llamada CRUZA del codigo del usuario a la stdlib? Entonces su
+        # posicion es la que llevara una excepcion lanzada ahi dentro (H03).
+        previous_user_call = self._user_call
+        if self._is_stdlib(unit) and not self._is_stdlib(self.unit):
+            self._user_call = (self.unit, ln, col)
         for param, value in zip(decl.params, args):
             # Semántica de VALOR: el llamado recibe SU copia, así que mutar
             # un parámetro no toca lo del llamador. Un parámetro declarado
@@ -311,11 +379,15 @@ class Evaluator:
             # quien lo dice en el lenguaje.
             frame.define(param.name,
                          Cell(value if self._es_prestamo(unit, param)
-                              else copy_on_bind(value), name=param.name))
+                              else self._as_declared(unit, param.type_id,
+                                                     copy_on_bind(value)),
+                              name=param.name))
         result = None
         devolvio = False
         previa = self.unit
         self.unit = unit
+        if self.depurador is not None:
+            self.depurador.entra(unit, decl, frame)
         try:
             # El cuerpo corre en el MISMO marco que los parámetros: la
             # Semántica los declara en el mismo scope FUNCTION (un local no
@@ -340,7 +412,10 @@ class Evaluator:
                 ln=ln, col=col,
             ) from None
         finally:
+            if self.depurador is not None:
+                self.depurador.sale()
             self.unit = previa
+            self._user_call = previous_user_call
             self.depth -= 1
         # Caerse por el final de una función con tipo de retorno entregaba
         # 'null' en silencio. El tipo de retorno viaja en el HIR, así que aquí
@@ -354,6 +429,70 @@ class Evaluator:
         if self.trace_exec:
             self.emit(f"[ret ] {decl.name} -> {format_value(result)}")
         return result
+
+    def call_lambda(self, lam: LambdaValue, args: List[Any], *,
+                    ln: int = 0, col: int = 0) -> Any:
+        """Ejecuta una ``lambda`` con ``args``, como una ``fn``: sus
+        parametros en un marco propio (con la misma semantica de valor), su
+        cuerpo, sus drops y su ``return``. Lo distinto es el PADRE del marco:
+        el de donde se escribio, asi que lo que lee del entorno (sus
+        capturas) lo encuentra vivo y sin copiar."""
+        node = lam.node
+        unit = lam.unit
+        if self.trace_exec:
+            self.emit(f"[call] {lam.name}("
+                      f"{', '.join(format_value(a) for a in args)})  {ln}:{col}")
+        self.depth += 1
+        frame = Frame(parent=lam.frame)
+        for param, value in zip(node.params, args):
+            frame.define(param.name,
+                         Cell(value if self._es_prestamo(unit, param)
+                              else self._as_declared(unit, param.type_id,
+                                                     copy_on_bind(value)),
+                              name=param.name))
+        result = None
+        returned = False
+        previous = self.unit
+        self.unit = unit
+        if self.depurador is not None:
+            self.depurador.entra(unit, lam, frame)
+        try:
+            self._exec_block(node.body, frame)
+        except _Return as ret:
+            result = ret.value
+            returned = True
+        except RecursionError:
+            raise StackOverflowError(
+                f"desbordamiento de pila al llamar a la lambda de la linea "
+                f"{lam.ln}: {self.depth} llamadas anidadas",
+                ln=ln, col=col,
+            ) from None
+        finally:
+            if self.depurador is not None:
+                self.depurador.sale()
+            self.unit = previous
+            self.depth -= 1
+        if not returned and self._devuelve_valor(unit, node):
+            raise MissingReturnError(
+                f"la lambda de la linea {lam.ln} termino sin devolver un valor "
+                "y su tipo de retorno no es 'void'",
+                ln=ln, col=col,
+            )
+        if self.trace_exec:
+            self.emit(f"[ret ] {lam.name} -> {format_value(result)}")
+        return result
+
+    @staticmethod
+    def _as_declared(unit, type_id: int, value: Any) -> Any:
+        """``value`` ligado a algo declarado de tipo ``type_id``: un
+        :class:`EnumItem` que entra en un ``int`` (``var int n =
+        Color.VERDE;``) deja de ser el item y es el entero. Si no, un
+        generico que recibiera ``n`` lo escribiria como ``VERDE`` (A08)."""
+        if type(value) is EnumItem and type_id:
+            types = unit.module.types
+            if type_id < len(types) and types[type_id].kind == _TK_INT:
+                return int(value)
+        return value
 
     @staticmethod
     def _es_prestamo(unit, param) -> bool:
@@ -438,7 +577,11 @@ class Evaluator:
                               "(por su tipo)")
                 continue
             bound = self.image.hooks.get(ref_key(drop.hook))
-            if bound is not None:
+            # un dueño 'R?' que vale null no tiene nada que destruir: 'T?' es
+            # un envoltorio y hereda la respuesta de lo que envuelve (A09).
+            # Antes se llamaba al '__free__' CON null: RT004 si leía un campo,
+            # o una destrucción contada de más.
+            if bound is not None and cell.value is not None:
                 self._destruir(bound, Pointer(cell, mut=True),
                                drop.hook.owner_type)
             cell.free()
@@ -468,7 +611,13 @@ class Evaluator:
         return cell
 
     def exec_stmt(self, stmt, frame: Frame) -> None:
-        self._tick(stmt.ln, stmt.col)
+        try:
+            self._tick(stmt.ln, stmt.col)
+        except SuriaXRuntimeError as fallo:
+            self.set_error_unit(fallo)
+            raise
+        if self.depurador is not None:
+            self.depurador.en_sentencia(self.unit, stmt, frame)
         which = stmt.WhichOneof("node")
         handler = self._stmt_dispatch.get(which)
         if handler is None:
@@ -484,9 +633,87 @@ class Evaluator:
         marca = len(self._temporales)
         try:
             handler(stmt, frame)
+        except (SuriaXRuntimeError, Thrown, ExpectFallido) as fallo:
+            # la sentencia MAS INTERNA que ve el error es la que fallo: su
+            # unidad es la del archivo de la posicion (antes un error en una
+            # libreria salia con su linea y sin decir de que archivo era).
+            self.set_error_unit(fallo)
+            # con un depurador: se detiene AQUI, en la sentencia que fallo y
+            # con la pila entera. Sin el, esta rama solo relanza.
+            if self.depurador is not None:
+                self._avisa_del_error(fallo, stmt, frame)
+            raise
         finally:
             if len(self._temporales) > marca:
                 self._soltar_temporales(marca)
+
+    def set_error_unit(self, fallo, unit=None) -> None:
+        """Situa ``fallo`` en ``unit`` (por defecto, la unidad activa): su
+        ``ln``/``col`` son de ESE archivo.
+
+        Solo la primera vez, y a un error de ejecucion solo si ya tiene
+        posicion: uno que nace sin ella (un intrinseco) la recibe despues con
+        ``ubicar`` en la sentencia que lo llamo, que es la que lo situa. Un
+        ``expect`` no se situa: solo existe en el programa principal."""
+        unit = unit if unit is not None else self.unit
+        if unit is None:
+            return
+        if isinstance(fallo, Thrown):
+            if fallo.unit is None:
+                fallo.unit = unit
+        elif isinstance(fallo, SuriaXRuntimeError):
+            if fallo.unit is None and isinstance(fallo, ExcepcionDelPrograma) \
+                    and self._user_call is not None and self._is_stdlib(unit):
+                # una excepcion que nace DENTRO de la stdlib (un intrinseco de
+                # 'sistema.archivos', 'text.parse_int', un indice de 'mem')
+                # lleva la posicion de la llamada del programa, como promete
+                # 'excepciones' (H03). Un error RT (no atrapable) conserva la
+                # de la libreria: ese es un fallo de ella, no del llamador.
+                caller, ln, col = self._user_call
+                fallo.ln, fallo.col = ln, col
+                fallo.set_file(caller, self.unit_file(caller))
+            elif fallo.ln and fallo.unit is None:
+                fallo.set_file(unit, self.unit_file(unit))
+
+    def _is_stdlib(self, unit) -> bool:
+        """¿``unit`` es de la stdlib (``<stdlib>/...``)? El programa y las
+        librerias del proyecto no: su posicion si le dice algo al usuario."""
+        if unit is None:
+            return False
+        key = id(unit)
+        known = self._stdlib_units.get(key)
+        if known is None:
+            known = unit is not self.image.main and \
+                (unit.module.source_file or "").startswith(_STDLIB_PREFIX)
+            self._stdlib_units[key] = known
+        return known
+
+    def unit_file(self, unit) -> Optional[str]:
+        """El archivo de ``unit`` para un mensaje de error: ``None`` si es el
+        programa principal (su posicion sale sin archivo, como al compilar).
+
+        De una libreria, su ruta PUBLICA (``Module.source_file``):
+        ``<stdlib>/array/vector.libsrx`` o relativa a la raiz del proyecto
+        (``lib/util.libsrx``). Es la que viaja en el ``.phir``: corta, dice si
+        es de la stdlib o del proyecto, y es la misma en cualquier maquina
+        que ejecute ese ``.phir``."""
+        if unit is None or unit is self.image.main:
+            return None
+        return unit.module.source_file or os.path.basename(unit.path)
+
+    def _avisa_del_error(self, fallo, stmt, frame: Frame) -> None:
+        if isinstance(fallo, Thrown):
+            atrapable, codigo = True, "throw"
+            descripcion = f"throw {format_value(fallo.value)}"
+        elif isinstance(fallo, ExpectFallido):
+            atrapable, codigo = False, "expect"
+            descripcion = f"expect falló: {fallo.texto}"
+        else:
+            atrapable = isinstance(fallo, ExcepcionDelPrograma)
+            codigo = getattr(fallo, "code", "") or type(fallo).__name__
+            descripcion = str(fallo)
+        self.depurador.en_error(fallo, atrapable, codigo, descripcion,
+                                self.unit, stmt, frame)
 
     def _soltar_temporales(self, marca: int) -> None:
         while len(self._temporales) > marca:
@@ -496,7 +723,8 @@ class Evaluator:
                 self._destruir_por_tipo(valor)
                 continue
             bound = self.image.hooks.get(ref_key(hook))
-            if bound is None:
+            if bound is None or valor is None:
+                # un temporal 'R?' que vale null: nada que destruir (A09)
                 continue
             self._destruir(bound, Pointer(Cell(valor), mut=True),
                            hook.owner_type)
@@ -517,13 +745,17 @@ class Evaluator:
         try:
             self.call_function(bound[0], bound[1], [puntero], ln=ln, col=col)
         except Thrown as lanzado:
-            raise DestructorThrewError(
+            error = DestructorThrewError(
                 f"el __free__ de '{dueno}' lanzó "
                 f"{format_value(lanzado.value)}: un destructor nunca puede "
                 "lanzar. Si liberar puede fallar, registra el fallo y deja "
                 "que el __free__ termine normalmente",
                 ln=lanzado.ln or ln, col=lanzado.col or col,
-            ) from None
+            )
+            if lanzado.ln:
+                # la posicion es la del 'throw', en el archivo del __free__
+                self.set_error_unit(error, lanzado.unit)
+            raise error from None
 
     def _destruir_por_tipo(self, valor, *, ln: int = 0, col: int = 0) -> None:
         """DESTRUIR POR TIPO (el 'drop glue'): ``valor`` muere, y lo que
@@ -567,9 +799,74 @@ class Evaluator:
                             pendientes.append(celda.value)
                         celda.free()
 
+    def destruir_global(self, globales: Frame, nombre: str, *,
+                        ln: int = 0, col: int = 0) -> None:
+        """Destruye la variable global ``nombre`` al terminar el programa (la
+        llama ``interpreter._destruir_globales``, en orden inverso).
+
+        Una global movida (``return move g;``) o ya liberada no tiene nada que
+        destruir: es la misma pregunta al estado de la celda que se hace al
+        cerrar un bloque. Tras destruirla, la celda queda LIBERADA: si el
+        destructor de otra global la leyera después, es un uso tras ``free``
+        que se dice, no un valor muerto que se lee en silencio."""
+        cell = globales.cells.get(nombre)
+        if cell is None or cell.state is not CellState.LIVE:
+            return
+        if not self._tiene_destructor(cell.value):
+            return
+        self._destruir_por_tipo(cell.value, ln=ln, col=col)
+        cell.free()
+        if self.trace:
+            self.emit(f"[mem] drop global '{nombre}' (fin del programa)")
+
+    def _tiene_destructor(self, valor) -> bool:
+        """¿Destruir ``valor`` por su tipo correría algún ``__free__``?
+
+        Es la pregunta de ``type_service.owns_resources`` hecha sobre el valor
+        y no sobre el tipo, porque al terminar el programa el intérprete no
+        tiene la lista que el frontend arma para un bloque. Recorre lo mismo
+        que ``_destruir_por_tipo``: un puntero no es dueño (no se sigue) y un
+        bloque de ``mem`` solo cuenta dentro de un campo (es el almacenamiento
+        de un contenedor); en una variable es un puntero."""
+        if not isinstance(valor, (StructValue, EnumValue)):
+            return False
+        pendientes = [valor]
+        while pendientes:
+            v = pendientes.pop()
+            if isinstance(v, StructValue):
+                if (v.type_name, self._free_kind, "") in self.image.hooks:
+                    return True
+                for celda in v.fields.values():
+                    if celda.state is CellState.LIVE:
+                        pendientes.append(celda.value)
+            elif isinstance(v, EnumValue):
+                for celda in v.fields:
+                    if celda.state is CellState.LIVE:
+                        pendientes.append(celda.value)
+            elif isinstance(v, Block):
+                for celda in v.cells:
+                    if celda.state is CellState.LIVE and celda.value is not None:
+                        pendientes.append(celda.value)
+        return False
+
     #: las expresiones que producen un valor NUEVO, que es de la llamada que
     #: lo recibe: si un argumento posterior lanza, nadie lo recibio y muere.
     _FRESCOS = frozenset(("struct_literal", "call", "move_expr", "cast_expr"))
+
+    #: las expresiones cuyo valor NADIE MAS tiene: un literal recien creado y
+    #: el resultado de una llamada (que ya es una copia o algo transferido:
+    #: ver '_stmt_return'; los intrinsecos entregan valores nuevos o sacados
+    #: con 'mem.take'). Ligarlas no necesita otra copia, y copiar un 'Vector'
+    #: copia su bloque entero: 'var Vector<int> c = v.get(0);' lo copiaba DOS
+    #: veces.
+    _NUEVOS = frozenset(("struct_literal", "call"))
+
+    def _ligado(self, expr, valor):
+        """El valor que se LIGA a un nombre, a un campo o a un elemento:
+        una copia, salvo que sea nuevo (``_NUEVOS``)."""
+        if expr.WhichOneof("node") in self._NUEVOS:
+            return valor
+        return copy_on_bind(valor)
 
     def _argumentos(self, exprs, frame: Frame) -> list:
         """Los valores de ``exprs``, en orden. Si uno LANZA, los ya evaluados
@@ -600,10 +897,14 @@ class Evaluator:
 
     def _stmt_var_decl(self, stmt, frame: Frame) -> None:
         vd = stmt.var_decl
-        value = self.eval_expr(vd.value, frame) if vd.HasField("value") else None
+        # Sin valor no llega: 'var T x;' es SEM040. Un .phir anterior a esa
+        # regla todavia puede traerlo, y entonces vale 'null', como antes.
+        value = self._ligado(vd.value, self.eval_expr(vd.value, frame)) \
+            if vd.HasField("value") else None
+        value = self._as_declared(self.unit, vd.type_id, value)
         # ...misma regla que en los parámetros: ligar un struct a un nombre
         # nuevo lo COPIA. El único tipo que refiere a otro sitio es 'ptr'.
-        frame.define(vd.name, Cell(copy_on_bind(value), name=vd.name))
+        frame.define(vd.name, Cell(value, name=vd.name))
 
     def _stmt_type_decl(self, stmt, frame: Frame) -> None:
         td = stmt.type_decl
@@ -648,11 +949,48 @@ class Evaluator:
     def _stmt_match(self, stmt, frame: Frame) -> None:
         node = stmt.match_stmt
         subject = self.eval_expr(node.subject, frame)
+        optional = self._es_opcional(node.subject)
         for arm in node.cases:
             propio = Frame(parent=frame)
+            if optional:
+                # sujeto 'T?': 'case null' mira el SUJETO, sin desreferenciar
+                # (en un 'T ptr?' es el puntero el que puede ser null), y
+                # ninguna otra rama encaja con null
+                if self._es_null(arm.pattern):
+                    if subject is None:
+                        self.exec_stmt(arm.body, propio)
+                        return
+                    continue
+                if subject is None:
+                    continue
+            if arm.binds:
+                # 'case v': liga el contenido tal cual —sin copiarlo: es el
+                # del sujeto, PRESTADO, como el payload de 'case E.A(x)'—
+                nombre = arm.pattern.identifier.name
+                propio.define(nombre, Cell(subject, name=nombre))
+                self.exec_stmt(arm.body, propio)
+                return
             if self._encaja(arm.pattern, subject, frame, propio):
                 self.exec_stmt(arm.body, propio)
                 return
+
+    def _es_opcional(self, expr) -> bool:
+        """¿El tipo ESTATICO de ``expr`` es un ``T?`` (``error T?`` incluido)?
+        Lo dice el HIR (``Expr.type_id``); sin tipo, no se supone."""
+        if not expr.type_id:
+            return False
+        tipos = self.unit.module.types
+        if expr.type_id >= len(tipos):
+            return False
+        tipo = tipos[expr.type_id]
+        while tipo.kind == _TK_ERROR and tipo.HasField("inner"):
+            tipo = tipo.inner
+        return tipo.kind == _TK_NULLABLE
+
+    @staticmethod
+    def _es_null(patron) -> bool:
+        return patron.WhichOneof("node") == "literal" \
+            and patron.literal.kind == "null"
 
     def _encaja(self, patron, subject, frame: Frame, propio: Frame) -> bool:
         """¿El patrón de una rama describe a ``subject``?
@@ -667,14 +1005,22 @@ class Evaluator:
         """
         ctor = self._constructor_de(patron, frame)
         if ctor is None:
+            # el sujeto se DESREFERENCIA solo también con un patrón de VALOR:
+            # 'match (p)' con 'p: int ptr' (o un enum sin payload) compara lo
+            # apuntado; antes comparaba el puntero y no coincidía nunca
+            subject = self._pointee(subject, ln=patron.ln, col=patron.col)
+            # 'case Forma.Punto' (variante sin datos de un enum suma): el
+            # loader crea UN 'EnumValue' por variante y nada lo copia (no
+            # tiene campos), asi que '==' de Python —la identidad— compara la
+            # VARIANTE. No pasa por el '__eq__' del enum: un 'match' elige la
+            # forma, no la igualdad que el programa haya declarado.
             return self.eval_expr(patron, frame) == subject
         # DEREF IMPLICITO, igual que en '.campo': un arbol recursivo se
         # escribe con punteros ('Suma(Expr ptr, Expr ptr)'), asi que el sujeto
         # de un match casi siempre LLEGA como puntero. Exigir un deref
         # explicito haria imposible escribir el caso que motiva los tipos
         # suma.
-        if isinstance(subject, Pointer):
-            subject = subject.deref(ln=patron.ln, col=patron.col)
+        subject = self._pointee(subject, ln=patron.ln, col=patron.col)
         if not isinstance(subject, EnumValue) or \
                 subject.variant != ctor.variant or \
                 subject.enum_name != ctor.enum_name:
@@ -685,6 +1031,22 @@ class Evaluator:
                 # la rama se ve fuera, igual que con un campo de struct.
                 propio.define(arg.identifier.name, celda)
         return True
+
+    @staticmethod
+    def _pointee(value: Any, *, ln: int, col: int) -> Any:
+        """Lo que hay DETRAS de un ``E ptr``: el deref implicito de ``match``
+        y de ``.campo``.
+
+        Un ``E ptr`` tiene dos formas en ejecucion: el prestamo de una celda
+        (``&x``, ``&b[0]``) y un BLOQUE de ``mem.reserve``. El bloque es su
+        elemento 0, igual que ``&b[0]``: antes solo se seguia el prestamo, y un
+        ``match`` sobre un nodo reservado con ``mem`` no entraba en ninguna
+        rama ni decia nada (un arbol calculaba 0)."""
+        if isinstance(value, Pointer):
+            return value.deref(ln=ln, col=col)
+        if isinstance(value, Block):
+            return value.element(0, ln=ln, col=col).read(ln=ln, col=col)
+        return value
 
     def _constructor_de(self, patron, frame: Frame):
         """El :class:`VariantCtor` que nombra un patrón, o ``None``.
@@ -718,6 +1080,14 @@ class Evaluator:
             # 'move_out' es la API que comparten los dos backends de memoria
             # (el nativo expone 'state' como solo lectura).
             cell.move_out(ln=stmt.ln, col=stmt.col)
+        elif node.value.WhichOneof("node") not in self._NUEVOS:
+            # DEVOLVER POR VALOR COPIA, igual que ligar a un nombre o pasar
+            # por parametro. Sin esto el llamador recibia el MISMO objeto que
+            # seguia guardado donde se leyo: 'dame().n = 5' cambiaba la global
+            # que 'dame' devolvio, y 'v.get(0).push(8)' el vector guardado en
+            # 'v'. Lo transferido (un local que se mueve, arriba) y lo recien
+            # creado no tienen a nadie con quien compartir: no se copian.
+            value = copy_on_bind(value)
         raise _Return(value)
 
     def _ruta_local(self, expr, frame: Frame) -> Optional[Cell]:
@@ -828,7 +1198,9 @@ class Evaluator:
             )
         if node.hook.owner_type:
             bound = self.image.hooks.get(ref_key(node.hook))
-            if bound is not None:
+            # lo apuntado es un 'R?' que vale null: no hay destructor que
+            # correr (A09); la celda se libera igual
+            if bound is not None and value.cell.value is not None:
                 self._destruir(bound, value, node.hook.owner_type,
                                ln=stmt.ln, col=stmt.col)
         value.cell.free(ln=stmt.ln, col=stmt.col)
@@ -855,7 +1227,33 @@ class Evaluator:
             # rama equivocada.
             if expr.WhichOneof("node") == "identifier":
                 tipo = frame.lanzado(expr.identifier.name) or tipo
+        if expr.WhichOneof("node") not in self._NUEVOS and \
+                expr.WhichOneof("node") != "move_expr":
+            # lo lanzado lo recibe el 'catch' por VALOR, como un 'return': una
+            # copia. Sin ella 'throw g;' le daba al 'catch' la global misma.
+            value = copy_on_bind(value)
+        if self._user_call is not None and self._is_stdlib(self.unit):
+            raise self._thrown_at_user_call(value, tipo)
         raise Thrown(value, ln=stmt.ln, col=stmt.col, tipo=tipo)
+
+    def _thrown_at_user_call(self, value, tipo) -> "Thrown":
+        """Un ``throw`` de la STDLIB, situado en la llamada del programa que
+        entro en ella (H03): la linea de ``vector.libsrx`` no le dice nada a
+        quien llamo a ``v.get(9)``, y sin atrapar el error tiene que nombrar
+        SU linea. Si lo lanzado es una excepcion con posicion
+        (``linea``/``columna``) que la libreria dejo en 0 porque no la conoce
+        (``IndiceFueraDeRango`` de ``Vector``), se rellena con la misma. Una
+        posicion distinta de 0 ya la puso quien la sabia (un ``catch`` que
+        relanza): no se toca."""
+        caller, ln, col = self._user_call
+        if isinstance(value, StructValue):
+            line = value.fields.get("linea")
+            column = value.fields.get("columna")
+            if line is not None and column is not None \
+                    and line.value == 0 and column.value == 0:
+                line.write(ln)
+                column.write(col)
+        return Thrown(value, ln=ln, col=col, tipo=tipo, unit=caller)
 
     @staticmethod
     def _es_desconocido(tipo) -> bool:
@@ -865,6 +1263,22 @@ class Evaluator:
             from V0.src.HIR.stubs import load_hir_pb2
             _ERROR_KIND = load_hir_pb2().TypeKind.Value("ERROR")
         return tipo is None or (tipo[0] == _ERROR_KIND and tipo[3] is None)
+
+    def _stmt_expect(self, stmt, frame: Frame) -> None:
+        """``expect (condicion) [bloque]``: si no se cumple, la prueba termina
+        (:class:`ExpectFallido`); si se cumple, corre su bloque y sigue."""
+        node = stmt.expect_stmt
+        previo = (self._expect_expr, self._expect_valores)
+        self._expect_expr, self._expect_valores = node.condition, None
+        try:
+            cumple = self.eval_expr(node.condition, frame)
+            valores = self._expect_valores
+        finally:
+            self._expect_expr, self._expect_valores = previo
+        if not cumple:
+            raise ExpectFallido(node.text, ln=stmt.ln, col=stmt.col, valores=valores)
+        if node.HasField("body"):
+            self._exec_block(node.body, Frame(parent=frame))
 
     def _stmt_try(self, stmt, frame: Frame) -> None:
         node = stmt.try_stmt
@@ -879,7 +1293,9 @@ class Evaluator:
         except (Thrown, ExcepcionDelPrograma) as en_vuelo:
             self._correr_finally(stmt, frame, en_vuelo)
             raise
-        except (_Return, _Break, _Continue):
+        except (_Return, _Break, _Continue, ExpectFallido):
+            # un 'expect' fallido sale como un salto: no lo atrapa nadie,
+            # pero el 'finally' corre
             self._correr_finally(stmt, frame, None)
             raise
         self._correr_finally(stmt, frame, None)
@@ -898,18 +1314,30 @@ class Evaluator:
             primera = en_vuelo if isinstance(en_vuelo, Thrown) \
                 else self._como_lanzado(en_vuelo)
             segunda = otra if isinstance(otra, Thrown) else self._como_lanzado(otra)
-            raise FinallyThrewError(
+            error = FinallyThrewError(
                 f"el 'finally' lanzó {format_value(segunda.value)} mientras ya "
                 f"viajaba {format_value(primera.value)}: un 'finally' no puede "
                 "lanzar durante un desenrollado. Si limpiar puede fallar, "
                 "registra el fallo y deja que el 'finally' termine",
                 ln=segunda.ln or stmt.ln, col=segunda.col or stmt.col,
-            ) from None
+            )
+            if segunda.ln:
+                self.set_error_unit(error, segunda.unit)
+            raise error from None
 
     def _try_catch(self, stmt, frame: Frame) -> None:
         node = stmt.try_stmt
+        # el depurador cuenta los 'try' que pueden atrapar algo: asi sabe,
+        # cuando se lanza un error, si alguien lo espera.
+        vigila = self.depurador is not None and len(node.catches) > 0
         try:
-            self._exec_block(node.try_block, Frame(parent=frame))
+            if vigila:
+                self.depurador.entra_try()
+            try:
+                self._exec_block(node.try_block, Frame(parent=frame))
+            finally:
+                if vigila:
+                    self.depurador.sale_try()
         except (Thrown, ExcepcionDelPrograma) as fallo:
             # una excepcion del runtime (EXCxxx) entra por las MISMAS ramas
             # que un 'throw': se convierte aqui, en el unico sitio que sabe
@@ -954,7 +1382,8 @@ class Evaluator:
             "columna": Cell(fallo.col, name="columna"),
         })
         return Thrown(valor, ln=fallo.ln, col=fallo.col,
-                      tipo=(_NOMINAL_KIND, nombre, False, None, ()))
+                      tipo=(_NOMINAL_KIND, nombre, False, None, ()),
+                      unit=fallo.unit)
 
     def _atrapa(self, rama, thrown: "Thrown") -> bool:
         """¿La rama ``catch`` acepta lo que se lanzó?
@@ -1060,11 +1489,12 @@ class Evaluator:
                mapa: Optional[dict] = None) -> str:
         """``format_value`` sabiendo el tipo estático del valor.
 
-        Una variante SIN payload es un entero en ejecución (``Color.Verde``
-        vale 1, ``OK = 200`` vale 200) y el entero solo no dice de qué enum
-        es: lo dice el tipo. Con él se escribe su NOMBRE, igual que una
-        variante con payload (``Circulo(2.5)``). La VM hace lo mismo con la
-        tabla de nombres del MIR.
+        Un item de un enum estilo C es un entero en ejecución (``Color.Verde``
+        vale 1, ``OK = 200`` vale 200): con el tipo se escribe su NOMBRE,
+        igual que una variante con payload (``Circulo(2.5)``). La VM hace lo
+        mismo con la tabla de nombres del MIR. Cuando el tipo estático no
+        describe el valor (un ``T`` de un genérico), decide el valor:
+        ver :meth:`_value_text`.
 
         Con ``repr_`` (``{x!r}``) se escribe la REPRESENTACION: una cadena con
         sus comillas y escapes, un ``char`` entre apostrofes y un enum con su
@@ -1097,6 +1527,10 @@ class Evaluator:
                 return _cadena_repr(valor, '"')
             if repr_ and tipo.kind == _TK_CHAR:
                 return _cadena_repr(valor, "'")
+            if tipo.kind != nominal:
+                # un tipo concreto que no es nominal ('int', un puntero...)
+                # manda: 'var int n = Color.VERDE;' escribe 1, no VERDE
+                return format_value(valor)
             if tipo.kind == nominal:
                 enum = self._enum_de(tipo.name, unidad)
                 if enum is not None:
@@ -1107,12 +1541,24 @@ class Evaluator:
                             if v == valor and not isinstance(v, VariantCtor):
                                 return prefijo + nombre
                     if isinstance(valor, EnumValue):
+                        # un enum GENERICO ('Res<int, str>'): su payload 'T'
+                        # se escribe como el argumento que lo sustituye
+                        propio = {}
+                        for param, arg in zip(decl.type_params, tipo.args):
+                            if mapa and arg.kind == nominal and not arg.args \
+                                    and arg.name in mapa:
+                                propio[param] = mapa[arg.name]
+                            else:
+                                propio[param] = (arg, unidad)
                         for item in decl.items:
                             if item.name != valor.variant:
                                 continue
+                            if not item.payload_type_ids:
+                                # variante SIN datos de un enum suma: su nombre
+                                return prefijo + valor.variant
                             campos = [
                                 self._texto(c.value, suya.module.types[t], suya,
-                                            repr_=repr_)
+                                            repr_=repr_, mapa=propio)
                                 for c, t in zip(valor.fields, item.payload_type_ids)]
                             return f"{prefijo}{valor.variant}({', '.join(campos)})"
                 struct = self._struct_de(tipo.name, unidad)
@@ -1135,7 +1581,74 @@ class Evaluator:
                         campos.append(f"{campo.name}: {texto}")
                     corto = valor.type_name.rsplit(".", 1)[-1]
                     return f"{corto}{{{', '.join(campos)}}}"
-        return format_value(valor)
+        # el tipo estatico no describe el valor (es un 'T' de un generico, o
+        # no hay tipo): lo dice el VALOR, que sabe de que tipo concreto es
+        return self._value_text(valor, unidad, repr_)
+
+    def _value_text(self, value: Any, unit, repr_: bool) -> str:
+        """El texto de ``valor`` decidido por el VALOR y no por el tipo
+        estatico (A08).
+
+        Dentro de un generico, ``f"{x}"`` con ``x: T`` tiene a ``T`` como tipo
+        estatico, y ``T`` no nombra ningun struct ni enum: el cuerpo es UNO
+        para todas las instancias. Lo que si sabe de que tipo es, es el valor:
+        un struct lleva su nombre, una variante su enum, y un item estilo C es
+        un :class:`EnumItem`. Con eso se escribe EXACTAMENTE igual que con el
+        tipo concreto: ``P{x: 3, s: "hi"}``, ``Dot``, ``VERDE``,
+        ``Ok(ROJO)``. Los campos y el payload se escriben con el tipo que
+        declara SU declaracion; si ese tipo es otra vez un parametro (un
+        ``Caja<T>`` dentro de un generico), vuelve a decidir el valor.
+
+        Lo que el valor NO distingue es un ``str`` de un ``char`` (aqui los
+        dos son una cadena): ``{x!r}`` de un ``T`` primitivo sigue saliendo
+        sin comillas, como antes."""
+        if isinstance(value, EnumItem):
+            return (f"{value.enum_of}." if repr_ else "") + value.variant
+        if isinstance(value, EnumValue):
+            enum = self._decl_of_value(self._enum_de, "_enums", value.enum_name, unit)
+            if enum is not None:
+                owner, decl = enum
+                prefix = f"{decl.name}." if repr_ else ""
+                for item in decl.items:
+                    if item.name != value.variant:
+                        continue
+                    if not item.payload_type_ids:
+                        return prefix + value.variant
+                    fields_text = [
+                        self._texto(c.value, owner.module.types[t], owner,
+                                    repr_=repr_)
+                        for c, t in zip(value.fields, item.payload_type_ids)]
+                    return f"{prefix}{value.variant}({', '.join(fields_text)})"
+        if isinstance(value, StructValue):
+            found = self._decl_of_value(self._struct_de, "_structs",
+                                        value.type_name, unit)
+            if found is not None:
+                owner, decl = found
+                fields_text = []
+                for field in decl.fields:
+                    cell = value.fields.get(field.name)
+                    text = self._texto(
+                        cell.value if cell is not None else None,
+                        owner.module.types[field.type_id], owner, repr_=True)
+                    fields_text.append(f"{field.name}: {text}")
+                short = value.type_name.rsplit(".", 1)[-1]
+                return f"{short}{{{', '.join(fields_text)}}}"
+        return format_value(value)
+
+    def _decl_of_value(self, lookup, table: str, name: str, unit):
+        """La declaracion del tipo que lleva un VALOR: la que resuelve
+        ``lookup`` (como un tipo escrito en ``unit``) o, si no, la UNICA de
+        cualquier unidad con ese nombre corto. Un valor creado dentro de una
+        libreria lleva el nombre con que esa libreria lo declara, y el
+        f-string que lo escribe puede estar en otra unidad. Con dos
+        candidatas no se adivina: ``None``, y se escribe sin tipo."""
+        found = lookup(name, unit)
+        if found is not None:
+            return found
+        short = name.rsplit(".", 1)[-1]
+        candidates = [v for (alias, n), v in getattr(self, table).items()
+                      if n == short]
+        return candidates[0] if len(candidates) == 1 else None
 
     def _struct_de(self, nombre: str, unidad):
         """La declaración del struct que nombra un tipo CANÓNICO (como
@@ -1189,6 +1702,31 @@ class Evaluator:
             return ~operand   # -x-1: con un int de 64 bits nunca desborda
         return self._arith(-operand)  # '-' (negar INT_MIN también desborda)
 
+    def _receptor(self, method, obj, frame: Frame) -> Any:
+        """El primer argumento de ``x.metodo()``.
+
+        Un objeto (un struct, un enum con payload) se COMPARTE tal cual: sus
+        campos son celdas, así que es su propio préstamo. Un ESCALAR —un enum
+        sin payload es un entero— no tiene campos que compartir: si el método
+        lo toma por ``T ptr``, recibe el préstamo de la celda que lo guarda,
+        como ``&x``. Antes recibía el valor y ``self[0]`` fallaba (``RT014``).
+        """
+        valor = self.eval_expr(obj, frame)
+        unit, decl = method
+        # solo un ESCALAR: un objeto ya es su préstamo, y un puntero YA es
+        # un préstamo (envolverlo daría un puntero a un puntero)
+        if not isinstance(valor, (int, float, str)) or not decl.params \
+                or not self._es_prestamo(unit, decl.params[0]):
+            return valor
+        which = obj.WhichOneof("node")
+        if which == "identifier":
+            return Pointer(frame.lookup(obj.identifier.name, ln=obj.ln, col=obj.col), mut=True)
+        if which == "member":
+            base = self.eval_expr(obj.member.obj, frame)
+            return Pointer(self._field_cell(base, obj.member.member, ln=obj.ln, col=obj.col),
+                           mut=True)
+        return valor
+
     def _expr_addr_of(self, expr, frame: Frame) -> Pointer:
         node = expr.addr_of
         operand = node.operand
@@ -1214,7 +1752,9 @@ class Evaluator:
             idx = self.eval_expr(operand.index.index, frame)
             cell = self._element_cell(base, idx, ln=expr.ln, col=expr.col)
             if isinstance(cell.value, (StructValue, EnumValue)):
-                return Pointer(cell, mut=node.mut)
+                # presta ESE objeto: si el contenedor lo reemplaza o lo saca,
+                # el prestamo muere con el (RT003, como en la VM)
+                return Pointer(cell, mut=node.mut, target=cell.value)
             raise UnsupportedNodeError(
                 "'&' sobre un elemento que no es un objeto: la dirección de "
                 "un escalar dentro de un bloque no tiene soporte de ejecución",
@@ -1259,8 +1799,20 @@ class Evaluator:
         if op == "or":
             return bool(self.eval_expr(node.left, frame)) or \
                 bool(self.eval_expr(node.right, frame))
+        if op == "??":
+            # 'x ?? d': el contenido de 'x' si no es null. El defecto SOLO se
+            # evalua si hace falta (cortocircuito, como 'or'): 'x ?? caro()'
+            # no llama a 'caro' cuando 'x' tiene valor. Ligar el resultado a
+            # un nombre lo copia, como cualquier lectura (la Semantica ya
+            # rechazo un contenido con destructor, SEM032).
+            valor = self.eval_expr(node.left, frame)
+            if valor is not None:
+                return valor
+            return self.eval_expr(node.right, frame)
         left = self.eval_expr(node.left, frame)
         right = self.eval_expr(node.right, frame)
+        if expr is self._expect_expr and op in ("==", "!=", "<", "<=", ">", ">="):
+            self._expect_valores = (left, right)
         if op == "+":
             return self._arith(left + right)
         if op == "-":
@@ -1339,18 +1891,23 @@ class Evaluator:
                     ln=expr.ln, col=expr.col)
             return self._wrap64(left << right) if op == "<<" else left >> right
         if op == "==":
-            eq = self._dispatch_eq(left, right, expr)
-            return (left == right) if eq is None else eq
+            return self._igual(left, right, expr)
         if op == "!=":
-            eq = self._dispatch_eq(left, right, expr)
-            return (left != right) if eq is None else (not eq)
-        if op == "<":
-            return left < right
-        if op == "<=":
-            return left <= right
-        if op == ">":
-            return left > right
-        if op == ">=":
+            # la negacion de '==', nunca otra comparacion: con un '__eq__'
+            # declarado, 'a != b' es 'not a.__eq__(b)'
+            return not self._igual(left, right, expr)
+        if op in ("<", "<=", ">", ">="):
+            if isinstance(left, (StructValue, EnumValue)):
+                # un tipo propio se ordena por su '__cmp__': los cuatro
+                # operadores salen del mismo entero
+                c = self._dispatch_cmp(left, right, expr)
+                left, right = c, 0
+            if op == "<":
+                return left < right
+            if op == "<=":
+                return left <= right
+            if op == ">":
+                return left > right
             return left >= right
         raise UnsupportedNodeError(f"operador binario '{op}' desconocido",
                                    ln=expr.ln, col=expr.col)
@@ -1359,7 +1916,8 @@ class Evaluator:
         """El hash de un valor, IGUAL al de la VM (el orden de las claves de
         un diccionario depende de el, y los dos motores lo imprimen igual):
 
-        - ``int``/``bool`` (y un enum sin payload): splitmix64 de sus 64 bits;
+        - ``int``/``bool`` (y un item de un enum estilo C): splitmix64 de sus
+          64 bits;
         - ``str`` y ``char``: FNV-1a de 64 bits sobre su UTF-8 (un ``char`` es
           un texto de un caracter aqui, y en la VM se hashea igual);
         - un struct o un enum con payload: su ``__hash__``.
@@ -1372,6 +1930,12 @@ class Evaluator:
             raise UnsupportedNodeError(
                 "un 'float' no tiene hash: NaN no es igual a si mismo",
                 ln=expr.ln, col=expr.col)
+        if isinstance(valor, FunctionValue):
+            # solo llega por un generico ('hash(k)' con K un tipo funcion):
+            # fuera de uno, la Semantica lo rechaza (AST006)
+            raise UnsupportedNodeError(
+                f"un valor funcion ({format_value(valor)}) no tiene hash: no "
+                "puede ser clave", ln=expr.ln, col=expr.col)
         tipo = getattr(valor, "type_name", None) or getattr(valor, "enum_name", None)
         bound = self.image.hooks.get(hook_key(tipo, self._hash_kind)) if tipo else None
         if bound is None:
@@ -1380,23 +1944,105 @@ class Evaluator:
         return self.call_function(bound[0], bound[1], [valor],
                                   ln=expr.ln, col=expr.col)
 
-    def _dispatch_eq(self, left: Any, right: Any, expr) -> Optional[bool]:
-        """'a == b' entre dos valores nominales del mismo tipo con hook __eq__:
-        devuelve su resultado; ``None`` si no aplica (se cae a la identidad)."""
-        if isinstance(left, StructValue) and isinstance(right, StructValue) \
-                and left.type_name == right.type_name:
-            bound = self.image.hooks.get(hook_key(left.type_name, self._eq_kind))
-            if bound is not None:
-                return bool(self.call_function(bound[0], bound[1], [left, right],
-                                               ln=expr.ln, col=expr.col))
-        return None
+    def _igual(self, left: Any, right: Any, expr) -> bool:
+        """``a == b`` con la semantica del lenguaje: igualdad de VALOR.
+
+        - un struct o un enum con payload con ``__eq__``: lo que diga el hook
+          (vale para un enum tambien: antes solo se miraba el struct, y el
+          ``__eq__`` de un enum se aceptaba al compilar y no se llamaba);
+        - sin ``__eq__``: campo a campo (un enum: la misma variante y su
+          payload, valor a valor), recursivo, y cada campo con SU igualdad
+          —un campo con ``__eq__`` propio lo usa—. Antes caia a la identidad
+          del objeto de Python: ``b = a`` COPIA el struct, y ``a == b`` daba
+          ``false`` justo cuando eran iguales;
+        - un puntero compara la DIRECCION (la celda), no lo apuntado: es el
+          valor del puntero, y seguirlo podria no terminar (una lista
+          circular) o confundir dos prestamos de cosas distintas que valen lo
+          mismo. Un bloque de ``mem`` en un campo, igual: el interprete no
+          sabe cuantas de sus celdas estan en uso (eso lo lleva otro campo,
+          por convencion), asi que el contenedor que si lo sabe declara su
+          ``__eq__`` (``Vector`` lo hace);
+        - lo demas (primitivos, null): la igualdad de Python, que en esos
+          valores es la del lenguaje.
+        """
+        # camino rapido: casi todo '==' es entre primitivos (el tipado fuerte
+        # garantiza que el otro lado es del mismo tipo)
+        tipo = type(left)
+        if tipo is int or tipo is str or tipo is bool or tipo is float:
+            return left == right
+        if isinstance(left, StructValue):
+            if not isinstance(right, StructValue) \
+                    or left.type_name != right.type_name:
+                return False
+            eq = self._dispatch_eq(left.type_name, left, right, expr)
+            if eq is not None:
+                return eq
+            return all(self._igual(celda.value, right.fields[nombre].value, expr)
+                       for nombre, celda in left.fields.items()
+                       if nombre in right.fields)
+        if isinstance(left, EnumValue):
+            if not isinstance(right, EnumValue) \
+                    or left.enum_name != right.enum_name:
+                return False
+            eq = self._dispatch_eq(left.enum_name, left, right, expr)
+            if eq is not None:
+                return eq
+            return left.variant == right.variant \
+                and len(left.fields) == len(right.fields) \
+                and all(self._igual(a.value, b.value, expr)
+                        for a, b in zip(left.fields, right.fields))
+        if isinstance(left, Pointer):
+            return isinstance(right, Pointer) and left.cell is right.cell
+        if isinstance(left, Block) or isinstance(right, Block) \
+                or isinstance(right, (StructValue, EnumValue, Pointer)):
+            return left is right
+        return left == right
+
+    def _dispatch_eq(self, tipo: str, left: Any, right: Any,
+                     expr) -> Optional[bool]:
+        """El ``__eq__`` de ``tipo`` sobre ``left``/``right``; ``None`` si el
+        tipo no lo declara (y entonces manda la igualdad de valor)."""
+        bound = self.image.hooks.get(hook_key(tipo, self._eq_kind))
+        if bound is None:
+            return None
+        return bool(self.call_function(bound[0], bound[1], [left, right],
+                                       ln=expr.ln, col=expr.col))
+
+    def _dispatch_cmp(self, left: Any, right: Any, expr) -> int:
+        """``a < b`` (y ``<=``, ``>``, ``>=``) entre dos valores de un tipo
+        propio: el entero que devuelve su ``__cmp__``.
+
+        La Semantica ya exigio el hook (AST006 directo, SEM039 a traves de un
+        generico), asi que no encontrarlo aqui es un HIR que no salio de este
+        frontend: se dice con posicion en vez de comparar dos objetos de
+        Python, que daria un orden inventado.
+        """
+        tipo = left.type_name if isinstance(left, StructValue) else left.enum_name
+        otro = getattr(right, "type_name", None) or getattr(right, "enum_name", None)
+        if otro != tipo:
+            raise UnsupportedNodeError(
+                f"comparación de orden entre '{tipo}' y '{otro}'",
+                ln=expr.ln, col=expr.col)
+        bound = self.image.hooks.get(hook_key(tipo, self._cmp_kind))
+        if bound is None:
+            raise UnsupportedNodeError(
+                f"'{tipo}' no define '__cmp__': no se puede ordenar",
+                ln=expr.ln, col=expr.col)
+        resultado = self.call_function(bound[0], bound[1], [left, right],
+                                       ln=expr.ln, col=expr.col)
+        if type(resultado) is not int:
+            raise UnsupportedNodeError(
+                f"el '__cmp__' de '{tipo}' devolvió "
+                f"'{format_value(resultado)}' y tiene que devolver un 'int'",
+                ln=expr.ln, col=expr.col)
+        return resultado
 
     def _expr_assignment(self, expr, frame: Frame) -> Any:
         node = expr.assignment
         # Un struct es un VALOR: asignarlo lo COPIA, igual que ligarlo con
         # 'var'. Antes 'b = a; b.v = 99' cambiaba tambien 'a', y
         # 'e.dentro = c' dejaba a 'e' y a 'c' compartiendo el mismo objeto.
-        value = copy_on_bind(self.eval_expr(node.value, frame))
+        value = self._ligado(node.value, self.eval_expr(node.value, frame))
         target = node.target
         which = target.WhichOneof("node")
         if which == "identifier":
@@ -1483,7 +2129,7 @@ class Evaluator:
                 method = self.image.dunders.get(
                     (node.hook.owner_type, callee.member.member))
                 if method is not None:
-                    args = [self.eval_expr(callee.member.obj, frame)]
+                    args = [self._receptor(method, callee.member.obj, frame)]
                     args.extend(self._argumentos(node.args, frame))
                     return self.call_function(method[0], method[1], args,
                                               ln=expr.ln, col=expr.col)
@@ -1491,12 +2137,30 @@ class Evaluator:
             # Llega como una HookRef con dueño 'str' (la marca el frontend),
             # así que se reconoce por TIPO y no por el nombre de la llamada —
             # una 'fn len' del usuario nunca pasa por aquí.
+            # 'print(5)': un PRIMITIVO se escribe como lo escribe un f-string
+            # ('{x}'), sin salto de linea, por el mismo canal que
+            # '__write__'. Es lo mismo que hace 'print(x)' con 'T: Print' y
+            # una instancia primitiva (ver '_call_by_runtime_type').
+            if node.hook.kind == self._print_kind and \
+                    node.hook.owner_type in _PRINTABLE_PRIMITIVES:
+                arg = node.args[0]
+                value = self.eval_expr(arg, frame)
+                typ = (self.unit.module.types[arg.type_id]
+                       if arg.type_id else None)
+                intrinsics.REGISTRY["__write__"](self._texto(value, typ,
+                                                             self.unit))
+                return None
             if node.hook.owner_type == "str" and \
                     node.hook.kind == self._len_kind:
                 receptor = (callee.member.obj
                             if callee.WhichOneof("node") == "member"
                             else node.args[0])
                 return len(self.eval_expr(receptor, frame))
+            # el dueño es un PARAMETRO DE TIPO ('print(x)' o 'x.area()' con
+            # 'x: T' y una cota 'T: Print' / 'T: Forma'): lo despacha el tipo
+            # que 'T' tenga en esta instancia, igual que 'hash(x)'
+            if node.hook.owner_type in self.image.type_params:
+                return self._call_by_runtime_type(expr, node, frame)
 
         callee_value = self._eval_callee(node.callee, frame)
         args = self._argumentos(node.args, frame)
@@ -1510,8 +2174,10 @@ class Evaluator:
                     f"{callee_value.arity} valor(es), se pasaron {len(args)}",
                     ln=expr.ln, col=expr.col,
                 )
-            celdas = [Cell(v, name=f"{callee_value.variant}.{i}")
-                      for i, v in enumerate(args)]
+            # ...y el payload se liga como un campo: una copia (ver
+            # '_expr_struct_literal')
+            celdas = [Cell(self._ligado(e, v), name=f"{callee_value.variant}.{i}")
+                      for i, (e, v) in enumerate(zip(node.args, args))]
             return EnumValue(callee_value.enum_name, callee_value.variant,
                              celdas)
         if isinstance(callee_value, FunctionValue):
@@ -1519,15 +2185,72 @@ class Evaluator:
                 else self.image.units[callee_value.unit_alias]
             return self.call_function(unit, callee_value.decl, args,
                                       ln=expr.ln, col=expr.col)
+        if isinstance(callee_value, LambdaValue):
+            return self.call_lambda(callee_value, args,
+                                    ln=expr.ln, col=expr.col)
+        if callee_value is None:
+            # un '(fn(...) -> R)?' que vale null: como leer un campo por un
+            # puntero nulo (la Semantica deja llamarlo, ver 'NotCallableError')
+            raise NullDereferenceError(
+                "llamada a una funcion que vale null (un '(fn(...) -> R)?' "
+                "sin valor)", ln=expr.ln, col=expr.col)
         raise NotCallableError(
             f"'{format_value(callee_value)}' no es invocable",
             ln=expr.ln, col=expr.col,
         )
 
+    def _call_by_runtime_type(self, expr, node, frame: Frame) -> Any:
+        """Una llamada que la Semantica comprobo contra una COTA y no contra
+        un tipo: ``print(x)`` con ``T: Print`` o ``x.metodo(...)`` con un
+        trait de las cotas de ``T``. El cuerpo generico es uno solo para todas
+        las instancias, asi que el destino sale del valor: su ``__print__`` o
+        su metodo ``(tipo, nombre)``.
+
+        Un primitivo cumple ``Print`` sin hook: se escribe como lo escribe un
+        f-string (``{x}``), sin salto de linea, por el mismo canal que
+        ``__write__``. Lo que no tiene destino es un error EXPLICITO: la
+        Semantica no deberia dejarlo llegar, y si llega no se adivina."""
+        callee = node.callee
+        es_miembro = callee.WhichOneof("node") == "member"
+        receptor = callee.member.obj if es_miembro else node.args[0]
+        valor = self.eval_expr(receptor, frame)
+        objeto = valor.deref(ln=expr.ln, col=expr.col) \
+            if isinstance(valor, Pointer) else valor
+        tipo = getattr(objeto, "type_name", None) \
+            or getattr(objeto, "enum_name", None)
+        if node.hook.kind == self._print_kind:
+            if tipo:
+                bound = self.image.hooks.get(hook_key(tipo, self._print_kind))
+                if bound is not None:
+                    return self.call_function(bound[0], bound[1], [valor],
+                                              ln=expr.ln, col=expr.col)
+            elif isinstance(objeto, (bool, int, float, str)):
+                intrinsics.REGISTRY["__write__"](self._texto(objeto, None,
+                                                             self.unit))
+                return None
+            raise UnsupportedNodeError(
+                f"'print' sobre un valor de tipo '{tipo or format_value(objeto)}' "
+                f"(el '{node.hook.owner_type}' de una cota 'Print') que no "
+                "define '__print__'", ln=expr.ln, col=expr.col)
+        member = callee.member.member if es_miembro else ""
+        method = self.image.dunders.get((tipo, member)) if tipo else None
+        if method is None:
+            raise UnsupportedNodeError(
+                f"'{member}' sobre un valor de tipo "
+                f"'{tipo or format_value(objeto)}' (el "
+                f"'{node.hook.owner_type}' de una cota): el tipo no lo define",
+                ln=expr.ln, col=expr.col)
+        args = [valor]
+        args.extend(self._argumentos(node.args, frame))
+        return self.call_function(method[0], method[1], args,
+                                  ln=expr.ln, col=expr.col)
+
     def _eval_callee(self, callee, frame: Frame) -> Any:
         """El callee de una llamada: soporta 'IO.printf' (miembro de un
         namespace) ademas de cualquier expresión que produzca una fn."""
         if callee.WhichOneof("node") == "member":
+            if self._is_method_value(callee):
+                return self._method_value(callee)
             base = self.eval_expr(callee.member.obj, frame)
             if isinstance(base, Namespace):
                 return self._namespace_member(base, callee.member.member,
@@ -1578,7 +2301,7 @@ class Evaluator:
         """
         objetivo = base
         if isinstance(base, Pointer):
-            objetivo = base.cell.read(ln=ln, col=col)
+            objetivo = base.deref(ln=ln, col=col)
         if not isinstance(objetivo, StructValue):
             return None
         bound = self.image.hooks.get(hook_key(objetivo.type_name, kind))
@@ -1586,8 +2309,43 @@ class Evaluator:
             return None
         return bound, base
 
+    def _is_method_value(self, expr) -> bool:
+        """¿``expr`` (un MemberAccess) es ``Tipo.metodo``? Lo marca la
+        Semantica: el ``obj`` lleva el tipo META (nombra un tipo, no es un
+        valor que evaluar) y el acceso, un tipo FUNCTION."""
+        obj = expr.member.obj
+        if not expr.type_id or not obj.type_id:
+            return False
+        types = self.unit.module.types
+        return types[expr.type_id].kind == _TK_FUNCTION \
+            and types[obj.type_id].kind == _TK_META
+
+    def _method_value(self, expr) -> FunctionValue:
+        """El valor de ``Tipo.metodo``: el cuerpo del metodo de ``@impl``.
+
+        El dueño sale del RECEPTOR, el primer parametro del tipo funcion (ya
+        canonico), y no del nombre escrito, que puede ir cualificado por un
+        alias del modulo que solo existe en esta unidad."""
+        fn_type = self.unit.module.types[expr.type_id]
+        receiver = fn_type.args[0] if fn_type.args else None
+        while receiver is not None and receiver.kind in (
+                _TK_POINTER, _TK_NULLABLE) and receiver.HasField("inner"):
+            receiver = receiver.inner
+        owner = receiver.name if receiver is not None else ""
+        method = self.image.dunders.get((owner, expr.member.member))
+        if method is None:
+            raise NotCallableError(
+                f"'{owner}' no tiene el metodo '{expr.member.member}' en "
+                "ejecucion", ln=expr.ln, col=expr.col)
+        unit, decl = method
+        return FunctionValue(unit.alias, decl,
+                             display_name=f"{owner.rsplit('.', 1)[-1]}."
+                                    f"{expr.member.member}")
+
     def _expr_member(self, expr, frame: Frame) -> Any:
         node = expr.member
+        if self._is_method_value(expr):
+            return self._method_value(expr)
         base = self.eval_expr(node.obj, frame)
         if isinstance(base, Namespace):
             return self._namespace_member(base, node.member,
@@ -1604,11 +2362,21 @@ class Evaluator:
                                 ln=expr.ln, col=expr.col).read(
                                     ln=expr.ln, col=expr.col)
 
+    def _expr_lambda(self, expr, frame: Frame) -> LambdaValue:
+        """Una ``lambda`` vale su cuerpo y el marco ACTUAL: lo que captura
+        (``LambdaExpr.captures``) se lee de ahi cuando se la llama. No se
+        copia nada al crearla, y no hace falta: no escapa."""
+        return LambdaValue(self.unit, expr.lambda_expr, frame, expr.ln, expr.col)
+
     def _expr_struct_literal(self, expr, frame: Frame) -> Any:
         node = expr.struct_literal
         valores = self._argumentos(node.values, frame)
-        fields: dict = {name: Cell(valor, name=name)
-                        for name, valor in zip(node.field_names, valores)}
+        # un CAMPO se liga como una variable: 'Caja{ c: x }' guarda una copia
+        # de 'x'. Antes guardaba el mismo objeto, y quien recibia la caja sin
+        # copiarla (un 'return', un receptor) compartia su campo con 'x'.
+        fields: dict = {name: Cell(self._ligado(expr, valor), name=name)
+                        for name, expr, valor in zip(node.field_names,
+                                                     node.values, valores)}
         return StructValue(node.type_name, fields)
 
     def _expr_sizeof(self, expr, frame: Frame) -> Any:
@@ -1637,6 +2405,15 @@ class Evaluator:
         elif kind == _TK_FLOAT and isinstance(value, (int, float)):
             return float(value)
         elif kind == _TK_CHAR and isinstance(value, int):
+            # un 'char' es un valor escalar de Unicode: 0..0x10FFFF sin los
+            # sustitutos (0xD800..0xDFFF), que solo existen en UTF-16 y no se
+            # pueden escribir. Antes: un fallo interno ('chr()'), o un
+            # sustituto que reventaba al imprimirlo.
+            if not 0 <= value <= 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+                raise ConversionError(
+                    f"{value} no es un carácter: un 'char' va de 0 a 1114111 "
+                    "(0x10FFFF), sin 55296..57343 (0xD800..0xDFFF)",
+                    ln=expr.ln, col=expr.col)
             return chr(value)
         elif kind == _TK_BOOL and isinstance(value, bool):
             return value
@@ -1663,7 +2440,9 @@ class Evaluator:
         # un '__cast__' que no haria nada.
         if self._es_enum(node.type) and isinstance(value, int) \
                 and not isinstance(value, bool):
-            return value
+            # ...salvo darle su nombre al valor: el item que lo lleva, para
+            # que un genérico lo escriba como 'VERDE' y no como '1' (A08)
+            return self._enum_item_of(node.type.name, value)
 
         destino = type_key(node.type)
         bound = self.image.casts.get((self._tipo_de(node.value), destino))
@@ -1702,6 +2481,18 @@ class Evaluator:
             return False
         # con payload el enum es un tipo suma: sus valores no son enteros.
         return not any(m.param_types for m in sym.members.values())
+
+    def _enum_item_of(self, name: str, value: int) -> int:
+        """El :class:`EnumItem` de valor ``valor`` del enum ``nombre`` (o el
+        mismo entero si ninguno vale eso: la Semántica ya comprobó el literal,
+        así que no debería pasar)."""
+        enum = self._enum_de(name, self.unit)
+        if enum is not None:
+            owner, decl = enum
+            for item in owner.enum_values.get(decl.name, {}).values():
+                if isinstance(item, EnumItem) and item == value:
+                    return item
+        return value
 
     def _es_byte(self, expr) -> bool:
         """¿El tipo estatico de ``expr`` es ``byte``?"""
@@ -1755,7 +2546,7 @@ class Evaluator:
         if isinstance(base, Block):
             return base.element(index, ln=ln, col=col)
         if isinstance(base, Pointer):
-            block = base.cell.read(ln=ln, col=col)
+            block = base.deref(ln=ln, col=col)
             if isinstance(block, Block):  # puntero al bloque reservado
                 return block.element(index, ln=ln, col=col)
             if index == 0:  # puntero a una sola celda: solo [0]
@@ -1773,8 +2564,7 @@ class Evaluator:
     def _field_cell(self, base: Any, field: str, *, ln: int, col: int) -> Cell:
         """Celda del campo ``base.field`` con DEREF IMPLÍCITO de punteros
         (``s.text`` con ``s: String ptr`` — secc. 8.2)."""
-        if isinstance(base, Pointer):
-            base = base.deref(ln=ln, col=col)
+        base = self._pointee(base, ln=ln, col=col)
         if base is None:
             raise NullDereferenceError(
                 f"acceso a '.{field}' sobre null", ln=ln, col=col,
@@ -1803,4 +2593,4 @@ class Evaluator:
                 )
 
 
-__all__ = ["Evaluator"]
+__all__ = ["Evaluator", "ExpectFallido", "Thrown"]

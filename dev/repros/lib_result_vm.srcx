@@ -1,0 +1,6 @@
+#from io #import stdp
+#import result
+fn main() -> int {
+    stdp.println("no uso result");
+    return 0;
+}

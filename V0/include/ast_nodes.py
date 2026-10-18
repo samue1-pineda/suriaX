@@ -30,7 +30,7 @@ Convenciones:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 try:
     from include.types_ast import Type
@@ -142,6 +142,23 @@ class ErrorTypeExpr(TypeExpr):
     inner: Optional[TypeExpr] = None
 
 
+@dataclass(slots=True)
+class FunctionTypeExpr(TypeExpr):
+    """``fn(int, str) -> bool``: el TIPO de una funcion usada como valor.
+
+    Reusa la palabra ``fn``: en posicion de tipo la sigue un ``(``, y en una
+    declaracion, un nombre (``fn doble(...)``). Esa diferencia de UN token es
+    lo que permite distinguirlas sin retroceder.
+
+    Sin flecha el retorno es ``void``, igual que en una declaracion. Los
+    sufijos que siguen a la flecha son del RETORNO (``fn(int) -> int?``
+    devuelve un ``int?``); una funcion que puede faltar se escribe entre
+    parentesis: ``(fn(int) -> int)?``.
+    """
+    params: List[TypeExpr] = field(default_factory=list)
+    ret: Optional[TypeExpr] = None
+
+
 # ============================================================================
 # expresiones
 # ============================================================================
@@ -193,6 +210,10 @@ class FormattedValue(Expression):
 class Identifier(Expression):
     name: str
     restype: Optional[Type] = None
+    type_args: List[TypeExpr] = field(default_factory=list)
+    """Los ARGUMENTOS DE TIPO escritos tras el nombre de un enum GENERICO
+    cuando nombra una variante: ``Res<int, str>.Ok(5)`` (el ``obj`` del
+    acceso es ``Res`` con ``[int, str]``). Vacio en cualquier otro uso."""
 
 
 @dataclass(slots=True)
@@ -271,6 +292,12 @@ class Call(Expression):
     es un hook invocable por convencion (``print(x)`` -> ``__print__`` del
     tipo de ``x``, ``len(x)`` -> ``__len__``). ``None`` si es una llamada
     normal. Ver ``semantic/hooks.py``."""
+    ambiguity_hint: str = ""
+    """La llamada se leyo como GENERICA en un sitio donde tambien eran dos
+    comparaciones: ``dos(a < b, c > (d))`` es ``a<b, c>(d)``. La lectura
+    generica se mantiene (decision del mantenedor); el parser deja aqui la
+    explicacion con la sugerencia de parentesis, y la Semantica la pega al
+    primer error que salga de esta llamada. Vacio en cualquier otra."""
 
 
 @dataclass(slots=True)
@@ -285,6 +312,9 @@ class MemberAccess(Expression):
     obj: Expression
     member: str
     restype: Optional[Type] = None
+    type_args: List[TypeExpr] = field(default_factory=list)
+    """Como :attr:`Identifier.type_args`, para un enum generico de una
+    libreria: ``lib.Res<int, str>.Ok(5)``."""
     nombre_de_item: Optional[str] = None
     """``TType.PLUS.name`` -> ``"PLUS"``, resuelto al COMPILAR.
 
@@ -479,6 +509,10 @@ class TypeDecl(Statement):
     """PARAMETROS DE TIPO del generico: ``const type Caja<T>;`` -> ``["T"]``.
     Van con el NOMBRE, al final, que es donde el lenguaje pone siempre lo que
     identifica una declaracion. Vacio en un tipo corriente."""
+    type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """COTAS de sus parametros de tipo (``<T: Ord + Hash>`` ->
+    ``{"T": [Ord, Hash]}``). Solo aparecen los parametros que llevan alguna;
+    vacio en un generico sin cotas y en una declaracion corriente."""
 
 
 @dataclass(slots=True)
@@ -519,6 +553,11 @@ class CaseArm(Statement):
     expresion: la gramatica de suriaX no define un lenguaje de patrones aparte."""
     pattern: Expression
     body: Statement
+    binds: bool = False
+    """El patron es un NOMBRE que LIGA el contenido del sujeto: ``case v`` en
+    un ``match`` sobre un ``T?`` (``v`` es un ``T`` dentro de la rama y solo
+    encaja si el sujeto no es null). Lo decide la Semantica: sintacticamente
+    ``case v`` es la misma expresion que comparar con una variable ``v``."""
 
 
 @dataclass(slots=True)
@@ -570,12 +609,65 @@ class MoveExpr(Expression):
     """
     operand: Expression
     restype: Optional[Type] = None
+    azucar: str = ""
+    """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
+    ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
+    ``--emit-stage desugar``."""
+
+
+@dataclass(slots=True)
+class Lambda(Expression):
+    """``lambda (int ptr x) -> bool: x[0] > 3`` o ``lambda (...) -> R { ... }``.
+
+    Una funcion SIN nombre, escrita donde se usa, con TODOS sus tipos
+    escritos (no hay inferencia). Solo vale como ARGUMENTO de una llamada,
+    en un parametro cuyo tipo esta escrito como ``fn(...) -> R``: no se
+    guarda, no se devuelve y no se compara, asi que NO ESCAPA de la llamada
+    que la recibe. Eso es lo que permite que lea los locales y parametros de
+    su entorno sin copiarlos ni moverlos (captura implicita de SOLO
+    LECTURA): la lambda muere antes de que termine la llamada, y lo que lee
+    sigue vivo mientras tanto.
+
+    La forma CORTA (``: expresion``) es azucar: el parser la convierte en un
+    ``body`` de una sola sentencia (``return expresion;``, o la expresion
+    sola si el retorno es ``void``) y lo anota en ``short``. Asi el resto
+    del pipeline solo conoce una forma.
+    """
+    params: List["Parameter"] = field(default_factory=list)
+    return_type: Optional[TypeExpr] = None
+    body: Optional["Block"] = None
+    short: bool = False
+    """Se escribio en la forma corta (``: expresion``)."""
+    restype: Optional[Type] = None
+    return_restype: Optional[Type] = None
+    captures: List[str] = field(default_factory=list)
+    """Los locales y parametros del ENTORNO que lee el cuerpo, en orden de
+    primer uso. Los anota la Semantica y viajan al HIR (``Lambda.captures``):
+    una captura es implicita, y lo implicito tiene que verse."""
 
 
     azucar: str = ""
     """De qué AZÚCAR salió este nodo (``"'+=': ..."``, ``"with: ..."``), o
     ``""`` si se escribió tal cual. No viaja al HIR: lo lee la vista
     ``--emit-stage desugar``."""
+@dataclass(slots=True)
+class ExpectStmt(Statement):
+    """``expect (condicion) [bloque]`` -- la comprobacion de un ``test``.
+
+    Solo vale dentro del cuerpo de un ``test``. Si la condicion se cumple
+    corre ``body`` (si lo hay) y la prueba sigue; si no, la prueba TERMINA
+    ahi como fallida. No es una excepcion: ningun ``catch`` la atrapa (los
+    ``finally`` que atraviesa si corren), para que una prueba no pueda
+    rescatarse de su propia comprobacion.
+
+    ``text`` es la condicion tal como se escribio: el mensaje del fallo la
+    cita (``expect fallo: a + b == 4``) sin que el motor tenga que volver al
+    fuente."""
+    condition: Expression
+    body: Optional[Block] = None
+    text: str = ""
+
+
 @dataclass(slots=True)
 class ThrowStmt(Statement):
     """``throw expression;`` -- inicia la propagacion de un error.
@@ -648,6 +740,18 @@ class Parameter(ASTNode):
 
 
 @dataclass(slots=True)
+class TypeBound(ASTNode):
+    """Una COTA de un parametro de tipo: el ``Ord`` de ``<T: Ord + Hash>``.
+
+    ``name`` es lo escrito: un trait del usuario o un concepto nativo
+    (``Eq``, ``Ord``, ``Hash``, ``Print``). Que nombra lo decide la Semantica
+    (``semantic/bounds.py``); el parser solo transporta el nombre y su
+    posicion, para que el diagnostico de una cota desconocida senale donde se
+    escribio."""
+    name: str
+
+
+@dataclass(slots=True)
 class FunctionDecl(Declaration):
     name: str
     params: List[Parameter]
@@ -663,12 +767,19 @@ class FunctionDecl(Declaration):
     ``["T"]``. Van tras el NOMBRE, igual que en un ``struct``/``type``: el
     lenguaje pone siempre junto al nombre lo que identifica la declaracion.
     Vacio en una funcion corriente."""
+    type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """COTAS de sus parametros de tipo (``<T: Ord + Hash>`` ->
+    ``{"T": [Ord, Hash]}``). Solo aparecen los parametros que llevan alguna;
+    vacio en un generico sin cotas y en una declaracion corriente."""
     impl_type_params: List[str] = field(default_factory=list)
     """Los parametros del ``@impl Vector<T>`` de un METODO (el parser aplana el
     bloque en sus metodos). Van aparte de ``type_params`` para no cambiar la
     firma que ve la Semantica; el HIR los emite juntos en
     ``FunctionDecl.type_params``, que es lo que necesita un backend para
     saber que ``T`` es un parametro y no un tipo desconocido."""
+    impl_type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """Las COTAS del ``@impl Vector<T: Ord>`` de un METODO, aparte de las
+    propias por la misma razon que ``impl_type_params``."""
     dunder: Optional[str] = None
     """Nombre "dunder" SIN guiones (p. ej. ``"free"`` para ``fn __free__``)
     cuando ``name`` vino de un token ``DUNDER``; ``None`` para una funcion con
@@ -713,6 +824,10 @@ class StructDecl(Declaration):
     """PARAMETROS DE TIPO del generico: ``... Vector<T>;`` -> ``["T"]``. Van
     con el NOMBRE, al final, que es donde el lenguaje pone siempre lo que
     identifica una declaracion. Vacio en un tipo corriente."""
+    type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """COTAS de sus parametros de tipo (``<T: Ord + Hash>`` ->
+    ``{"T": [Ord, Hash]}``). Solo aparecen los parametros que llevan alguna;
+    vacio en un generico sin cotas y en una declaracion corriente."""
 
 
 
@@ -742,6 +857,15 @@ class EnumDecl(Declaration):
     items: List[EnumItem] = field(default_factory=list)
     visibility: Optional[str] = None
     """Reserva de visibilidad (ver ``FunctionDecl.visibility``)."""
+    type_params: List[str] = field(default_factory=list)
+    """PARAMETROS de un enum GENERICO (``enum Res<T, E> { Ok(T), Err(E) }``),
+    en orden. Sus variantes se escriben siempre con los argumentos
+    (``Res<int, str>.Ok(5)``): sin ellos no se sabria de que ``Res`` se
+    trata."""
+    type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """COTAS de sus parametros de tipo (``<T: Ord + Hash>`` ->
+    ``{"T": [Ord, Hash]}``). Solo aparecen los parametros que llevan alguna;
+    vacio en un generico sin cotas y en una declaracion corriente."""
 
     @property
     def es_suma(self) -> bool:
@@ -793,6 +917,10 @@ class ImplDecl(Declaration):
     """``@impl Vector<T> { ... }``: los parametros del tipo, para que los
     metodos puedan nombrar ``T`` en su firma. Se declaran como tipos opacos
     igual que los del ``struct``, y por el mismo motivo."""
+    type_bounds: Dict[str, List["TypeBound"]] = field(default_factory=dict)
+    """COTAS de sus parametros de tipo (``<T: Ord + Hash>`` ->
+    ``{"T": [Ord, Hash]}``). Solo aparecen los parametros que llevan alguna;
+    vacio en un generico sin cotas y en una declaracion corriente."""
 
 
 @dataclass(slots=True)
@@ -828,13 +956,23 @@ class TraitDecl(Declaration):
 
 @dataclass(slots=True)
 class TestDecl(Declaration):
-    """``test STRING_LIT block`` -- bloque de prueba nombrado (estilo Zig).
+    """``test STRING_LIT block [errfinally block] [finally block]`` -- una
+    prueba con nombre (estilo Zig).
 
     Declaracion de primer nivel: el runner de pruebas ejecuta su cuerpo; la
     compilacion normal lo VALIDA (scope/tipos) pero no lo ejecuta. No es una
-    funcion (no se invoca, no tiene firma): ``name`` es su etiqueta legible."""
+    funcion (no se invoca, no tiene firma): ``name`` es su etiqueta legible.
+
+    El cuerpo comprueba con ``expect`` (:class:`ExpectStmt`): al menos uno, o
+    la prueba no comprueba nada. ``errfinally`` corre SOLO si la prueba fallo
+    (un ``expect`` que no se cumple, un ``throw`` sin atrapar, un error de
+    ejecucion); ``finally``, SIEMPRE, y despues del ``errfinally``. Cada
+    clausula es un bloque con su propio ambito: no ve los locales del cuerpo,
+    que ya murieron (como el ``finally`` de un ``try``)."""
     name: str
     body: Block
+    errfinally: Optional[Block] = None
+    finally_block: Optional[Block] = None
 
 
 # ============================================================================
@@ -893,15 +1031,15 @@ class Program(ASTNode):
 __all__ = [
     "ASTNode", "Expression", "Statement", "Declaration", "TypeExpr",
     "PrimitiveTypeExpr", "NominalTypeExpr", "PointerTypeExpr", "NullableTypeExpr",
-    "ErrorTypeExpr", "SelfTypeExpr",
+    "ErrorTypeExpr", "SelfTypeExpr", "FunctionTypeExpr",
     "Literal", "InterpolatedString", "Identifier", "UnaryOp", "AddrOf",
     "BinaryOp", "Assignment",
     "Call", "Index", "MemberAccess", "StructLiteral", "CastExpr", "SizeofExpr",
     "Block", "Drop", "VarDecl", "ImportBinding",
     "IfStmt", "WhileStmt", "CaseArm",
     "MatchStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "MoveStmt",
-    "ThrowStmt", "TryStmt", "CatchClause", "FreeStmt", "ExprStmt",
-    "Parameter", "FunctionDecl", "Field", "StructDecl", "EnumItem", "EnumDecl",
+    "ThrowStmt", "ExpectStmt", "TryStmt", "CatchClause", "FreeStmt", "ExprStmt",
+    "Parameter", "TypeBound", "FunctionDecl", "Field", "StructDecl", "EnumItem", "EnumDecl",
     "DecoratorDecl", "TraitMethod", "TraitDecl", "TestDecl",
     "ImportDirective", "ExportDirective", "FromDirective", "ExternBlock",
     "Program",

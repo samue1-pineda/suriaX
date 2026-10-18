@@ -1,0 +1,7 @@
+#from io #import stdp
+#import text
+fn main() -> int {
+    stdp.println(f"{text.is_digit('٣')}");
+    var int n = text.parse_int("٣");
+    return 0;
+}

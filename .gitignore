@@ -17,6 +17,10 @@ env/
 build/
 build-*/
 dist/
+# paquetes de la extension de VS Code ('tooling/vscode/empaquetar.py' los
+# deja en tooling/vscode/dist/, que 'dist/' ya cubre; este por si se escriben
+# en otro sitio con --salida)
+*.vsix
 *.o
 *.exe
 # modulos nativos ya construidos (CMake los deja en runtime/**/build/, que
@@ -54,6 +58,10 @@ V0/src/HIR/gen/
 # la prueba en "el lector entiende sus propios bytes", que no prueba nada.
 !test/web/fixtures/*.phir
 
+# ...y la SEMILLA (la V2: el compilador compilado por si mismo) tambien: es lo
+# que reconstruye el compilador sin la V0 (src/semilla/readme.md)
+!src/semilla/*.phir
+
 # --- documentacion generada ---
 documentation/build/
 documentation/web/
@@ -85,8 +93,13 @@ node_modules/
 .web/*
 !.web/readme.md
 .env
+Procfile
+DockerFile
+.dockerignore
 
 # --- calidad (docs/quality) ---
 # las salidas crudas de cada herramienta se regeneran con quality.py; los
 # documentos de docs/quality/cumplimiento/ SI se versionan.
 docs/quality/reports/
+docs/tesis
+tooling/

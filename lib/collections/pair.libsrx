@@ -1,0 +1,32 @@
+/- collections.pair — un PAR: dos valores juntos, con nombre.
+
+     #import collections.pair as pr
+
+     var pr.Pair<str, int> p = pr.Pair<str, int>{ key: "ana", value: 31 };
+     p.key;      // "ana"
+     p.value;    // 31
+
+ Es lo que da 'Dictionary.items()' (una clave con su valor), y sirve para
+ cualquier función que tenga que devolver dos cosas. Los campos se llaman
+ 'key' y 'value' porque ese es su uso principal; un par sin ese sentido
+ los usa igual (el primero y el segundo).
+
+ Es un struct genérico corriente, sin métodos: se construye con su literal
+ (los argumentos de tipo se escriben, como en todo literal genérico) y se
+ copia, se compara ('==' campo a campo) y se escribe en un f-string como
+ cualquier struct. La propiedad la deciden 'K' y 'V': un 'Pair<str, R>' con
+ 'R' que tiene destructor destruye su 'R' y no se copia (SEM032).
+
+ POR QUÉ VIVE AQUÍ Y NO JUNTO A 'result.Result': 'Dictionary' lo usa, y
+ todo programa que importa el diccionario carga también el módulo donde
+ vive 'Pair'. 'Result' es un ENUM GENÉRICO, que la VM todavía rechaza en
+ cualquier unidad cargada (VM002): juntos, ningún programa con un
+ diccionario —la V1 incluida— correría en la VM.
+-/
+
+public struct {
+    K key;      // el primero (en 'items()', la clave)
+    V value;    // el segundo (en 'items()', su valor)
+} Pair<K, V>;
+
+#export as pair

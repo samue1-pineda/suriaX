@@ -1,0 +1,15 @@
+struct { int v; } Box;
+@trait struct { fn __next__(self ptr) -> int?; } iterable;
+@trait struct { fn __next__(self ptr) -> int?; } iterable;
+fn ROJO() -> int { return 1; }
+enum Color { ROJO, VERDE };
+struct { int x; } T;
+fn id<T>(int x) -> int { return x; }
+fn main() -> int {
+    var int a = 1;
+    if (true) { var int a = 2; var int a = 3; }
+    const type L;
+    const type L;
+    var int L = 4;
+    return a;
+}

@@ -263,6 +263,9 @@ class InvalidValueTypeError(SemanticError):
     posiciones de valor (``TypeBinder.bind``), no en cada una — así no puede
     quedar una sin cubrir, que es como ``struct { void v; }`` llegó a
     compilar.
+
+    También un ARGUMENTO DE TIPO ``void`` (``Vector<void>``, ``make<void>``):
+    el parámetro de tipo nombra el tipo de unos valores.
     """
 
     severity = Severity.PANIC
@@ -359,6 +362,10 @@ class NotIndexableError(SemanticError):
     tener ``__index__``. Un tipo nominal sin el hook se deja pasar — puede
     declararlo una libreria que esta pasada aun no vio, y el contrato de cero
     falsos positivos manda.
+
+    Tambien ESCRIBIR por indice en un ``str`` (``s[0] = 'x'``): una cadena se
+    lee por indice (nativo, da un ``char``) pero es inmutable. Era ``RT014``
+    al ejecutar.
     """
 
     def __init__(self, message: Any = "el tipo no es indexable", **kwargs: Any):
@@ -380,6 +387,14 @@ class ImplicitOwnershipCopyError(SemanticError):
     Solo se rechaza cuando el valor ligado NOMBRA a otro dueño (una variable,
     un campo): un literal o el retorno de una función no tienen un segundo
     dueño del que hablar.
+
+    ``return g;`` con ``g`` una variable GLOBAL es la misma copia: devolver
+    por valor entrega una copia al llamador, y la global sigue siendo dueña
+    del original hasta que el programa termina. Antes compilaba y el recurso
+    se destruía dos veces (una por cada copia). Devolver un LOCAL no copia,
+    lo mueve: el local muere al salir y no queda un segundo dueño. Para
+    entregar la global, ``return move g;`` (la global queda movida); para
+    dejarla leer, que la función devuelva un puntero (``R ptr``) y ``&g``.
     """
 
     def __init__(self, message: Any = "copia implícita de un valor con dueño",
@@ -491,6 +506,270 @@ class GenericOwnerCopyError(SemanticError):
         super().__init__(message, code="SEM038", **kwargs)
 
 
+class GenericNotOrderableError(SemanticError):
+    """Un GENÉRICO que ORDENA su ``T`` (``a < b``), instanciado con un tipo
+    que no se ordena.
+
+    Dentro de ``fn menor<T>(T a, T b)`` o de ``Vector.sort``, ``a < b`` no se
+    puede decidir: depende de con qué se instancie. Con ``T = int`` o ``T =
+    str`` el orden es el nativo; con un tipo propio, el que da su ``__cmp__``.
+    Un tipo sin orden —un ``struct`` sin ``__cmp__``, un ``T?``, un ``bool``—
+    hace imposible ESTA instancia, y por eso el error sale en la llamada (no
+    en el cuerpo del genérico, que no está mal) y dice dónde ordena.
+
+    Se arregla declarando el orden del tipo, ``hook fn __cmp__(P ptr a, P ptr
+    b) -> int``: negativo si ``a`` va antes, cero si empatan, positivo si va
+    después. Es la regla de Rust (``T: Ord``) dicha en el sitio de la
+    instancia, como ``SEM038``.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM039", **kwargs)
+
+
+class UninitializedVariableError(SemanticError):
+    """``var T x;`` sin valor: toda variable nace con un valor de su tipo.
+
+    Antes se aceptaba y ``x`` valía ``null`` aunque su tipo no lo admitiera:
+    ``x + 1`` con ``var int x;`` era un fallo interno del intérprete y un
+    ``bool`` sin valor tomaba la rama falsa de un ``if`` en silencio. El tipo
+    prometía un ``int`` y entregaba otra cosa.
+
+    Se rechaza en vez de dar un valor por defecto (``0``, ``false``, ``""``)
+    porque un valor inventado esconde el olvido: el programa corre, con un
+    dato que nadie escribió. Escribirlo cuesta tres caracteres y deja claro
+    con qué empieza: ``var int x = 0;``. Si "todavía no hay valor" es un
+    estado legítimo, se dice en el tipo: ``var int? x = null;``.
+
+    No afecta a ``const type T;`` (eso declara un TIPO, no una variable) ni a
+    los nombres que liga el lenguaje (``catch (e)``, ``case A(x)``, ``with``),
+    que siempre nacen con un valor.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM040", **kwargs)
+
+
+class TemporaryMutationError(SemanticError):
+    """Escribir en una COPIA temporal: el cambio se perdería al terminar la
+    sentencia.
+
+    ``v[i]`` sobre un tipo con ``__index__`` (un ``Vector``) y la llamada a una
+    función que devuelve por valor entregan una COPIA, como al ligarla a una
+    variable. Escribir en ella (``v[i].n = 5``, ``dame().n = 5``) o llamar
+    sobre ``v[i]`` a un método que modifica su receptor (``v[i].push(x)``, que
+    declara ``ptr mutable self``) cambiaría la copia, y la copia muere al
+    terminar la sentencia: el programa compilaría y no haría nada.
+
+    Antes funcionaba por accidente: el valor devuelto quedaba enlazado al
+    original y la escritura llegaba al elemento guardado. Desde que devolver
+    por valor copia, la única forma de modificar un elemento es pedirlo
+    PRESTADO y mutable, de forma explícita: ``v.at_mut(i).n = 5`` o
+    ``v.at_mut(i).push(x)`` (un ``T ptr mutable``). Un ``Dictionary`` tiene lo
+    mismo por clave (``d.at_mut(k)``).
+
+    Llamar a un método que modifica sobre el RESULTADO de una llamada
+    (``abrir(...).write(...)``) sí se acepta: ese valor es nuevo y no es copia
+    de nada guardado, y el método puede hacer algo más que cambiarlo (escribir
+    un archivo).
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM041", **kwargs)
+
+
+class NotCallableError(SemanticError):
+    """Llamar a algo que no es una función: ``n(3)`` con ``n`` un ``int``,
+    ``p.noexiste()`` sobre un tipo que no declara ese método, ``s.k(1)`` con
+    ``k`` un campo que no es de tipo función.
+
+    Antes se aceptaba en silencio: la llamada no tenía tipo y la Semántica
+    "no rechaza lo que no sabe". Pero aquí sí se sabe —el tipo del valor, o
+    los métodos del tipo—, y el programa fallaba al ejecutar (``RT011``) lejos
+    de la causa, o hacía otra cosa. Lo único que se puede llamar es una
+    función: la declarada por su nombre, un valor de tipo ``fn(...) -> R``
+    (una variable, un parámetro, un campo, un elemento) o un método del tipo
+    del receptor.
+
+    Un ``(fn(...) -> R)?`` SÍ se puede llamar: si vale ``null`` es un error
+    de ejecución, como leer un campo a través de un puntero nulo.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM042", **kwargs)
+
+
+class UnboundedGenericMemberError(SemanticError):
+    """Un método, un campo o ``[]`` sobre un valor de un parámetro de tipo
+    SIN cota: ``x.aplica(1)``, ``x.campo``, ``x[i]`` con ``x: T``.
+
+    El cuerpo de un genérico se comprueba UNA vez, sin saber con qué se
+    instanciará, y un ``T`` sin cota no promete nada: ningún método, ningún
+    campo, ningún ``__index__``. Antes se dejaba pasar y cada instancia
+    fallaba a su manera: ``RT011`` al ejecutar con un tipo que no lo tenía, o
+    —peor— el tipo equivocado pasaba en silencio (``map<str>(&v, "hola")``
+    metía los caracteres de la cadena en un ``Vector<int>``).
+
+    Lo que el LENGUAJE hace por su cuenta sobre un ``T`` sigue valiendo, porque
+    cada instancia lo comprueba con su tipo concreto: ``==`` (``__eq__``),
+    ``<`` (``__cmp__``, ``SEM039``), ``hash`` (``__hash__``), copiar
+    (``SEM038``), destruir (``__free__``) y escribirlo en un f-string. Lo que
+    se rechaza es pedirle a ``T`` algo por su NOMBRE. Cuando el lenguaje tenga
+    cotas (``fn f<T: trait>``), una cota dirá qué métodos tiene ``T``; hasta
+    entonces, para pasar comportamiento a un genérico se pasa una función
+    (``fn(T) -> R``). El indexado crudo de un bloque (``T ptr``) no entra
+    aquí: ``self.datos[i]`` es memoria, no un método de ``T``.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM043", **kwargs)
+
+
+class InvalidFunctionValueError(SemanticError):
+    """Un nombre de función que no puede usarse como VALOR.
+
+    Son valores las funciones del módulo, las de una librería (``lib.f``) y
+    los métodos de ``@impl`` escritos ``Tipo.metodo`` (el receptor ya es
+    explícito: ``Punto.distancia`` es un ``fn(Punto ptr) -> int``). No lo son:
+
+    - un ``hook``/``dunder`` (``__free__``, ``__aplica__``): los invoca el
+      lenguaje o se llaman sobre su receptor, no se pasan;
+    - un PROTOTIPO (``fn f(int x) -> int;``): su cuerpo lo pone el host o un
+      ``#extern``, y no hay una función del programa que entregar;
+    - una función GENÉRICA, ni siquiera instanciada: el valor tendría que
+      llevar sus tipos y el HIR todavía no los transporta (se envuelve en una
+      función con los tipos escritos);
+    - un método de un tipo genérico (``Vector.push``), por lo mismo;
+    - un método cuyo receptor se recibe por VALOR y tiene destructor: llamado
+      como función, el llamador le cedería un dueño que el método no destruye.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM044", **kwargs)
+
+
+class GlobalUsedTooEarlyError(SemanticError):
+    """Una sentencia de nivel superior (el valor inicial de una global) usa
+    una global que se declara MÁS ABAJO.
+
+    El nivel superior se ejecuta en el orden en que se escribe. Al iniciar
+    ``var int a = b + 1;``, una ``b`` declarada después todavía no tiene
+    valor: compilaba y era ``RT006`` al ejecutar ("'b' no está ligado"), lejos
+    de la causa y en cada programa que la usara. Es la misma regla que en C y
+    en Python (en C, ni siquiera se puede nombrar algo antes de declararlo).
+    Una función sí puede usar una global declarada después: cuando se la
+    llama, el nivel superior ya terminó.
+
+    Se ve el uso DIRECTO. Una función llamada desde el valor inicial que lee
+    una global posterior sigue siendo ``RT006``: decidirlo exigiría saber qué
+    camino toma la función al ejecutar.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM045", **kwargs)
+
+
+class DuplicateCaseError(SemanticError):
+    """Dos ramas de un ``match`` con el MISMO patrón.
+
+    Gana la primera rama que encaja y el ``match`` no sigue: la segunda no se
+    ejecuta nunca. Compilaba en silencio, y casi siempre es un patrón copiado
+    al que le faltó cambiar algo. Se compara lo que se puede afirmar igual sin
+    ejecutar: el mismo literal, la misma variante de un enum (escrita
+    ``ROJO`` o ``Color.ROJO``, con o sin nombres que ligar) o el mismo nombre.
+    Decisión del mantenedor: las construcciones dudosas son ERROR.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM046", **kwargs)
+
+
+class ExpressionWithoutEffectError(SemanticError):
+    """Una sentencia que solo calcula un valor y lo tira.
+
+    ``f;`` nombra la función sin llamarla, y ``a == b;`` compara y descarta
+    el resultado (casi siempre se quería ``a = b;``): compilaban y no hacían
+    nada. También un nombre, un campo o un literal sueltos (``x;``, ``5;``).
+    No entra lo que puede hacer algo: una llamada, una asignación, un
+    indexado o una división (pueden lanzar), ``and``/``or`` (el lado derecho
+    puede ser una llamada). Decisión del mantenedor: las construcciones
+    dudosas son ERROR.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM047", **kwargs)
+
+
+class UnreachableCodeWarning(SemanticError):
+    """**Aviso**: sentencias detrás de un ``return``, ``throw``, ``break`` o
+    ``continue`` del mismo bloque. Nunca se ejecutan.
+
+    Es un AVISO (decisión del mantenedor), no un error: el programa es válido
+    y hace lo que dice. Solo se mira el mismo bloque, que es lo que se ve sin
+    analizar el flujo; un ``if`` cuyas dos ramas devuelven no cuenta. Se
+    avisa una vez por bloque, en la primera sentencia muerta.
+    """
+
+    severity = Severity.WARNING
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM048", **kwargs)
+
+
+class NarrowerTypeInSignatureWarning(SemanticError):
+    """**Aviso**: una función de una librería se ve más que un tipo de su
+    firma (``fn f() -> P`` con ``private struct P``, o un ``internal``).
+
+    Quien puede llamar a ``f`` no puede NOMBRAR ``P``: como suriaX no tiene
+    inferencia, ni siquiera puede guardar el resultado en una variable; solo
+    usarlo de paso (``lib.f().n``). Es un aviso y no un error, como el lint
+    ``private_interfaces`` de Rust (fue el error E0446 hasta que se vio que
+    rechazaba programas correctos): el programa es válido, pero la API casi
+    nunca es la que se quería. Solo en librerías; un hook no cuenta (se
+    despacha por su tipo, no se llama por nombre).
+    """
+
+    severity = Severity.WARNING
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM049", **kwargs)
+
+
+class LambdaOutOfPlaceError(SemanticError):
+    """Una ``lambda`` fuera del UNICO sitio donde vale: el argumento de una
+    llamada cuyo parametro esta ESCRITO como ``fn(...) -> R``.
+
+    Una lambda lee los locales y parametros de quien la escribe sin copiarlos
+    ni moverlos (captura de solo lectura). Eso es seguro sin analizar vidas
+    porque NO ESCAPA: muere antes de que termine la llamada que la recibe, y
+    lo que lee sigue vivo mientras tanto. Guardarla en una variable, un campo
+    o un vector, devolverla, compararla, o pasarla a un parametro que no es un
+    tipo funcion escrito (un ``T``, un ``(fn(...) -> R)?``, un prototipo del
+    host) la dejaria vivir mas que sus capturas. Lo que si puede escapar es
+    una funcion con NOMBRE, que no captura nada.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM050", **kwargs)
+
+
+class FunctionParameterEscapeError(SemanticError):
+    """Un parametro de tipo ``fn(...) -> R`` usado de otra forma que
+    LLAMARLO o PASARLO a otro parametro de tipo funcion.
+
+    Es la otra mitad de que una lambda no escape: la lambda llega a la
+    funcion por un parametro de tipo funcion, y si la funcion pudiera
+    guardarlo (en un campo, una global, un vector), devolverlo o pasarlo a un
+    ``T``, la lambda viviria mas que los locales que lee. Por eso un
+    parametro asi es PRESTADO, como un ``ptr``: se usa durante la llamada y
+    nada mas. Quien necesite guardar una funcion que recibe declara el
+    parametro ``(fn(...) -> R)?``, que no admite lambdas.
+    """
+
+    def __init__(self, message: str, **kwargs):
+        super().__init__(message, code="SEM051", **kwargs)
+
+
 class MissingHandlerError(SemanticError):
     """Un nodo del AST llegó a una pasada que no sabe recorrerlo.
 
@@ -522,6 +801,8 @@ __all__ = [
     "NotIndexableError",
     "ImplicitOwnershipCopyError",
     "MissingHandlerError",
+    "LambdaOutOfPlaceError",
+    "FunctionParameterEscapeError",
     "UndefinedSymbolError",
     "DuplicateSymbolError",
     "ImmutableAssignmentError",
@@ -544,4 +825,21 @@ __all__ = [
     "VisibilityViolationError",
     "TraitNotSatisfiedError",
     "InvalidDunderSignatureError",
+    "ContainerOverflowError",
+    "ThrowInDestructorError",
+    "LiteralDivisionByZeroError",
+    "MoveOutOfBorrowError",
+    "DanglingAddressError",
+    "GenericOwnerCopyError",
+    "GenericNotOrderableError",
+    "UninitializedVariableError",
+    "TemporaryMutationError",
+    "NotCallableError",
+    "UnboundedGenericMemberError",
+    "InvalidFunctionValueError",
+    "GlobalUsedTooEarlyError",
+    "DuplicateCaseError",
+    "ExpressionWithoutEffectError",
+    "UnreachableCodeWarning",
+    "NarrowerTypeInSignatureWarning",
 ]

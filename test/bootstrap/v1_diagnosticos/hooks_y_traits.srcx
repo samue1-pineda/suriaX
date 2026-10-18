@@ -1,0 +1,26 @@
+#import array.vector as vec
+struct { int v; } R;
+struct { R ptr r; int n; } Caja;
+hook fn __banana__(R ptr a) -> int { return 1; }
+hook fn __print__(R ptr a, int b) -> void { }
+hook fn __print__(R a) -> void { }
+hook fn __len__(R ptr a) -> str { return ""; }
+hook fn __cast__(int a) -> int { return a; }
+hook fn __print__(vec.Vector<int> ptr a) -> void { }
+hook fn __print__(R ptr a) -> void { }
+hook fn __print__(R ptr b) -> void { }
+hook fn __cast__(int a) -> R { return R{ v: a }; }
+hook fn __cast__(int b) -> R { return R{ v: b }; }
+hook fn __free__(R ptr a) -> void { }
+hook fn __free__(Caja ptr c) -> void {
+    if (c.n > 0) { free c.r; } else { free c.r; };
+}
+dunder fn __x__(int a) -> int { return a; }
+dunder fn __next__(R ptr self) -> int? { return null; }
+dunder fn __sig__(R ptr self, int a) -> int { return a; }
+@trait struct { fn __next__(self ptr) -> int?; fn mal(self ptr) -> int; } iterable;
+@trait struct { fn __next__(self ptr) -> int?; } iterable;
+@trait struct { fn __sig__(self ptr, str) -> int; fn __otro__(self ptr) -> void; } firmado;
+@impl(iterable, firmado, fantasma) struct { int w; } R2;
+@impl(iterable) struct { int z; } R3;
+fn main() -> int { return 0; }

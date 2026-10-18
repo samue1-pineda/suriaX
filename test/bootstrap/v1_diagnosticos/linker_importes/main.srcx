@@ -1,0 +1,17 @@
+#import fantasma
+#import calc
+#import calc
+#from calc #import nada
+#from calc #import secreto
+#from calc #import privado
+#from fantasma2 #import algo
+#import otra as calc
+fn main() -> int {
+    var int a = fantasma.f(1);
+    var int b = calc.nada(1);
+    var int c = calc.secreto();
+    var fantasma.T t = 0;
+    var calc.Nada n = 0;
+    var int d = algo(2);
+    return a;
+}

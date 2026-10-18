@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - ejecucion directa
     import SemanticError  # type: ignore
 
 from ... import linker_p
+from . import bounds as _bounds
 from . import traits as _traits
 from .context import SemanticContext
 from .hooks import HOOK_SPECS, HookKind, validate_hook
@@ -72,6 +73,101 @@ def run(program: ast.Program, ctx: SemanticContext) -> None:
 
     for trait_names, impl_type, ln, col in pending_impls:
         _traits.check_impl(trait_names, impl_type, ctx, ln, col)
+        _record_conformance(trait_names, impl_type, ctx)
+
+    # las COTAS se resuelven al final: nombran traits, y un trait puede
+    # declararse despues del generico que lo pide
+    _resolve_bounds(program, ctx)
+    _hooks_de_valor_en_enums_simples(program, ctx)
+
+
+def _record_conformance(trait_names, impl_type: str, ctx: SemanticContext) -> None:
+    """``@impl(Contrato) struct ... T;``: el Symbol de ``T`` guarda los traits
+    que DECLARA cumplir. Es lo que mira una cota de trait (la conformidad de
+    un trait del usuario es explicita). Se guarda aunque ``check_impl`` haya
+    dado ``SEM021``: ese error ya se dijo, y no guardarlo sumaria un segundo
+    error, en cada instancia, por la misma causa."""
+    symbol = ctx.scope.resolve_type(impl_type)
+    if symbol is None:
+        return
+    refs = list(symbol.traits)
+    for name in trait_names:
+        if name in ctx.table.traits:
+            ref = _bounds.BoundRef(_bounds.TRAIT, ctx.qualify(name))
+            if ref not in refs:
+                refs.append(ref)
+    symbol.traits = tuple(refs)
+
+
+def _resolve_bounds(program: ast.Program, ctx: SemanticContext) -> None:
+    """Resuelve las cotas escritas de cada declaracion generica y las guarda
+    en su Symbol (``Symbol.type_bounds``)."""
+    reported: set = set()
+    for item in program.items:
+        decl = item.target if isinstance(item, ast.DecoratorDecl) else item
+        if isinstance(decl, ast.FunctionDecl):
+            if not decl.type_bounds and not decl.impl_type_bounds:
+                continue
+            symbol = ctx.fn_symbols.get(id(decl))
+            resolved = _bounds.resolve(decl.impl_type_bounds,
+                                       list(decl.impl_type_params), ctx,
+                                       decl.name, reported)
+            resolved.update(_bounds.resolve(decl.type_bounds,
+                                            list(decl.type_params), ctx,
+                                            decl.name, reported))
+            if symbol is not None:
+                symbol.type_bounds = tuple(resolved.items())
+        elif isinstance(decl, (ast.StructDecl, ast.EnumDecl, ast.TypeDecl)):
+            if not decl.type_bounds:
+                continue
+            resolved = _bounds.resolve(decl.type_bounds, list(decl.type_params),
+                                       ctx, decl.name, reported)
+            symbol = ctx.scope.resolve_type(decl.name)
+            if symbol is not None and symbol.type_params:
+                symbol.type_bounds = tuple(resolved.items())
+
+
+#: hooks que un enum SIN payload no puede declarar: lo que harian ya lo hace
+#: el entero que es.
+_NATIVOS_DE_ENUM_SIMPLE = frozenset({"eq", "cmp", "hash"})
+
+
+def _hooks_de_valor_en_enums_simples(program: ast.Program,
+                                     ctx: SemanticContext) -> None:
+    """``__eq__``/``__cmp__``/``__hash__`` sobre un enum sin payload: SEM006.
+
+    En ejecucion un enum sin payload ES un entero (``Color.AZUL`` vale 2), en
+    los dos motores. Dentro de un generico nada distingue ese entero de un
+    ``int``, asi que ningun motor puede llamar al hook: se comparaba, se
+    ordenaba y se hasheaba como el entero que es y el hook no corria nunca,
+    sin que nada lo dijera. Un hook que se acepta y no se llama es un error
+    silencioso; se rechaza al declararlo. Se mira al terminar la pasada
+    porque el ``enum`` puede declararse despues que su hook.
+    """
+    simples = set()
+    for item in program.items:
+        decl = item.target if isinstance(item, ast.DecoratorDecl) else item
+        if isinstance(decl, ast.EnumDecl) and not any(
+                it.payload for it in decl.items):
+            simples.add(decl.name)
+    if not simples:
+        return
+    for item in program.items:
+        fn = item.target if isinstance(item, ast.DecoratorDecl) else item
+        if not isinstance(fn, ast.FunctionDecl) or fn.specifier != "hook" \
+                or fn.dunder not in _NATIVOS_DE_ENUM_SIMPLE or not fn.params:
+            continue
+        receptor = fn.params[0].type
+        inner = getattr(receptor, "inner", None)
+        if isinstance(inner, ast.NominalTypeExpr) and inner.name in simples:
+            ctx.error(SemanticError.InvalidHookSignatureError(
+                f"'{fn.name}' sobre '{inner.name}', un enum sin datos: en "
+                "ejecucion es un entero, y se compara, se ordena y se hashea "
+                "como uno (por el valor de su variante). El hook no se "
+                "llamaria nunca; si el orden o la igualdad tienen que ser "
+                "otros, dale datos a una variante o envuelvelo en un struct",
+                line=fn.ln, column=fn.col,
+            ))
 
 
 # ------------------------------------------------------------------ #
@@ -101,6 +197,7 @@ def _collect_function(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
         name=fn.name, kind=SymbolKind.FUNCTION, ln=fn.ln, col=fn.col,
         type=fn.return_restype, param_types=param_types,
         visibility=fn.visibility, type_params=tuple(fn.type_params),
+        prototype=fn.body is None,
     )
     if not ctx.scope.define_value(symbol):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -164,6 +261,18 @@ def _collect_dunder(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
             line=fn.ln, column=fn.col,
         ))
         return
+    # METODO GENERICO ('fn map<U>(...)' dentro de '@impl Caja<T>'): sus
+    # parametros propios se declaran como los de una funcion. No pueden
+    # repetir los del '@impl': 'T' ya nombra el argumento del receptor, y un
+    # segundo 'T' ligaria a otra cosa con el mismo nombre.
+    repetidos = set(fn.type_params) & set(fn.impl_type_params or ())
+    for nombre in sorted(repetidos):
+        ctx.error(SemanticError.DuplicateSymbolError(
+            f"el parametro de tipo '{nombre}' de '{fn.name}' ya lo declara su "
+            f"'@impl' (es el argumento del receptor): usa otro nombre",
+            line=fn.ln, column=fn.col,
+        ))
+    _declarar_parametros(fn, ctx)
     param_types: Tuple[Type, ...] = tuple(
         p.restype for p in fn.params if p.restype is not None
     )
@@ -171,6 +280,7 @@ def _collect_dunder(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
         name=fn.name, kind=SymbolKind.DUNDER, ln=fn.ln, col=fn.col,
         type=fn.return_restype, param_types=param_types,
         hook_owner=owner, visibility=fn.visibility,
+        type_params=tuple(p for p in fn.type_params if p not in repetidos),
     )
     if not ctx.table.register_dunder(owner, fn.name, symbol):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -182,15 +292,15 @@ def _collect_dunder(fn: ast.FunctionDecl, ctx: SemanticContext) -> None:
 
 
 def _collect_trait(trait: ast.TraitDecl, ctx: SemanticContext) -> None:
-    """``@trait`` -> registra el contrato (conjunto de firmas). Los métodos
-    deben tener nombre dunder (``__x__``): un método de trait siempre se
-    satisface con un ``dunder fn`` homónimo."""
-    for m in trait.methods:
-        if not (m.name.startswith("__") and m.name.endswith("__") and len(m.name) > 4):
-            ctx.error(SemanticError.TraitNotSatisfiedError(
-                f"el método '{m.name}' del trait '{trait.name}' debe tener "
-                "nombre dunder ('__x__')", line=m.ln, column=m.col,
-            ))
+    """``@trait`` -> registra el contrato (conjunto de firmas). Un método con
+    nombre dunder (``__x__``) se satisface con un ``dunder fn`` homónimo, y
+    uno con nombre LLANO (``area``) con un método de un bloque ``@impl Tipo
+    { fn area(...) }``: los dos se registran por ``(tipo, nombre)``, y la
+    forma del nombre ya dice cuál es cuál (un ``dunder fn`` no puede tener
+    nombre llano ni un método de ``@impl`` nombre dunder).
+
+    Antes un método de trait solo podía ser un dunder: un contrato no podía
+    pedir los métodos de nombre llano, que son los que un tipo publica."""
     if trait.name in ctx.table.traits:
         ctx.error(SemanticError.DuplicateSymbolError(
             f"el trait '{trait.name}' ya está declarado",
@@ -338,7 +448,19 @@ def _declarar_parametros(node, ctx: SemanticContext) -> None:
     Se declara en el scope de la DECLARACION (el archivo de la libreria): el
     consumidor nunca ve ``T``, ve ``Vector<int>``.
     """
+    vistos = set()
     for nombre in getattr(node, "type_params", ()):
+        if nombre in vistos:
+            # 'Par<T, T>': el segundo tapaba al primero en silencio y
+            # 'Par<int, str>' ligaba 'T' a 'str' (el ultimo argumento)
+            ctx.error(SemanticError.DuplicateSymbolError(
+                f"el parametro de tipo '{nombre}' aparece dos veces en "
+                f"'{node.name}<{', '.join(node.type_params)}>': cada parametro "
+                "nombra un argumento distinto. Usa otro nombre",
+                line=node.ln, column=node.col,
+            ))
+            continue
+        vistos.add(nombre)
         param = Symbol(name=nombre, kind=SymbolKind.TYPE, ln=node.ln,
                        col=node.col, type=nominal(nombre), visibility="internal")
         if not ctx.scope.define_type(param):
@@ -453,6 +575,9 @@ def _valor_de_item(item, siguiente: int) -> Optional[int]:
 
 def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
     enum_type = nominal(ctx.qualify(node.name))
+    # 'enum Res<T, E>': 'T' y 'E' son tipos opacos del archivo, como los de
+    # un struct generico, para que el payload ('Ok(T)') resuelva
+    _declarar_parametros(node, ctx)
     members: Dict[str, Symbol] = {}
     siguiente = 0
     for item in node.items:
@@ -490,7 +615,7 @@ def _collect_enum(node: ast.EnumDecl, ctx: SemanticContext) -> None:
     symbol = Symbol(
         name=node.name, kind=SymbolKind.ENUM, ln=node.ln, col=node.col,
         type=enum_type, members=members, visibility=node.visibility,
-        type_name=enum_type.name,
+        type_name=enum_type.name, type_params=tuple(node.type_params),
     )
     if not _registrar_tipo(symbol, ctx):
         ctx.error(SemanticError.DuplicateSymbolError(
@@ -640,11 +765,23 @@ def define_import(name: str, source, ctx: SemanticContext, *, mutable: bool,
                 # export (misma firma), expuesto bajo el nombre local. Lleva
                 # sus PARAMETROS DE TIPO: sin ellos 'reserve<int>(3)' no
                 # sustituia nada y devolvia un 'T ptr mutable'.
+                sub_miembros, sub_ocultos = member.members, None
+                if member.kind is SymbolKind.IMPORT and member.members is not None:
+                    # '#from paquete #import submodulo': el submodulo llega
+                    # con TODOS sus miembros, y sus 'private' quedaban a la
+                    # vista de un consumidor de otro paquete. Se filtran
+                    # igual que en '#import paquete.submodulo'.
+                    sub_miembros = _visible_members(member.members, same_pkg)
+                    sub_ocultos = {n: "private" for n in member.members
+                                   if n not in sub_miembros}
                 imported = Symbol(
                     name=name, kind=member.kind, ln=source.ln, col=source.col,
                     type=member.type, param_types=member.param_types,
-                    members=member.members, mutable=mutable, visibility=visibility,
+                    members=sub_miembros, mutable=mutable, visibility=visibility,
                     type_name=member.type_name, type_params=member.type_params,
+                    ocultos=sub_ocultos or member.ocultos,
+                    prototype=member.prototype,
+                    type_bounds=member.type_bounds, traits=member.traits,
                 )
                 if member.kind in (SymbolKind.STRUCT, SymbolKind.ENUM):
                     # un TIPO entra al namespace de TIPOS, como uno propio:

@@ -12,6 +12,8 @@ import { loadModule } from "../../web/src/hir/decode.ts";
 import { linkImage } from "../../web/src/hir/link.ts";
 import {
   Capability,
+  PLAYGROUND_POLICY,
+  POLICIES,
   UNRESTRICTED_POLICY,
   WEB_V1_POLICY,
   withCapabilities,
@@ -97,9 +99,110 @@ test("una librería fuera de la allowlist se rechaza con su posición", () => {
   assert.ok(report.deniedUnits.includes("MATH"));
   const first = report.diagnostics[0]!;
   assert.match(first.message, /solo puede ejecutarse/);
-  // la referencia de 'Module.libraries' también se revisa (import transitivo).
-  assert.equal(report.diagnostics.length, 2);
-  assert.ok(report.diagnostics.some((d) => d.line === 1 && d.column === 1));
+  // UNA vez, y en su '#import': la referencia de 'Module.libraries' nombra la
+  // misma unidad y antes salía otra vez, sin línea.
+  assert.equal(report.diagnostics.length, 1);
+  assert.ok(first.line === 1 && first.column === 1);
+});
+
+test("una librería que entra sin '#import' propio también se rechaza", () => {
+  // La referencia de 'Module.libraries' es por donde llega un import
+  // transitivo: no hay declaración que señalar, pero no puede colarse.
+  const bytes = buildModule((w) => {
+    w.message(5, (lib) => {
+      lib.string(1, "MATH");
+      lib.string(2, "MATH.phir");
+    });
+  });
+  const soloIO: Policy = { ...WEB_V1_POLICY, allowAllUnits: false };
+  const report = checkModule(loadModule(bytes), soloIO);
+  assert.ok(!report.ok);
+  assert.deepEqual(report.deniedUnits, ["MATH"]);
+  assert.equal(report.diagnostics.length, 1);
+});
+
+/** Módulo con un único `#import <lib>` que resuelve a la unidad `unit`. */
+function importa(lib: string, unit: string) {
+  return buildModule((w) => {
+    w.message(4, (d) => {
+      d.uint32(1, 3);
+      d.uint32(2, 1);
+      d.message(15, (imp) => {
+        imp.string(1, lib);
+        imp.string(3, unit);
+        imp.string(4, lib);
+      });
+    });
+    w.message(5, (ref) => {
+      ref.string(1, unit);
+      ref.string(2, `${unit}.phir`);
+    });
+  });
+}
+
+test("el perfil del playground deja pasar solo lo que el target sabe ejecutar", () => {
+  for (const unit of ["IO", "IO.stdp", "IO.stdpf", "math", "math.basic",
+                      "math.constants", "excepciones"]) {
+    const report = checkModule(loadModule(importa(unit, unit)), PLAYGROUND_POLICY);
+    assert.deepEqual(report.diagnostics, [], unit);
+  }
+  // el perfil del target, en cambio, sigue sin mirar el nombre
+  assert.ok(checkModule(loadModule(importa("text", "text")), WEB_V1_POLICY).ok);
+});
+
+test("el perfil del playground dice POR QUÉ deniega cada librería", () => {
+  const casos: [string, RegExp][] = [
+    ["sistema.archivos", /no tiene archivos, procesos ni rutas/],
+    ["sistema.proceso", /no tiene archivos, procesos ni rutas/],
+    ["sistema.rutas", /no tiene archivos, procesos ni rutas/],
+    ["text", /todavía no representa/],
+    ["array.vector", /todavía no representa/],
+    ["collections.dictionary", /todavía no representa/],
+    ["d_types", /__sizeof__/],
+    ["mem", /runtime nativo/],
+  ];
+  for (const [unit, motivo] of casos) {
+    const report = checkModule(loadModule(importa(unit, unit)), PLAYGROUND_POLICY);
+    assert.ok(!report.ok, unit);
+    assert.equal(report.diagnostics.length, 1, unit);
+    const diag = report.diagnostics[0]!;
+    assert.equal(diag.code, WebCode.LIBRARY_DENIED, unit);
+    assert.equal(diag.line, 3, unit);
+    assert.match(diag.message, motivo, unit);
+    assert.match(diag.message, /'playground'/, unit);
+  }
+});
+
+test("una librería que el playground no conoce nace denegada", () => {
+  // Lista blanca: lo nuevo no entra hasta que alguien lo habilite a propósito.
+  const report = checkModule(loadModule(importa("math.trig", "math.trig")),
+                             PLAYGROUND_POLICY);
+  assert.deepEqual(report.deniedUnits, ["math.trig"]);
+});
+
+test("una unidad denegada no se revisa por dentro", () => {
+  // Antes un '#import' de una librería con punteros daba decenas de WEB002
+  // en un archivo que el usuario no escribió; con la unidad ya denegada en
+  // su '#import', revisarla por dentro no le dice nada nuevo.
+  const image = linkImage(fixture("prog.phir"), fixturePath("prog.phir"), fixtureResolver);
+  const sinIO: Policy = {
+    ...WEB_V1_POLICY,
+    allowAllUnits: false,
+    allowedUnits: new Set(),
+    trustedUnits: new Map(),
+  };
+  const report = checkImage(image, sinIO);
+  assert.ok(!report.ok);
+  assert.ok(!codes(report).includes(WebCode.POINTER_TYPE), codes(report).join(" "));
+  // y sin denegarla, la misma unidad sin confianza SÍ da sus punteros
+  const sinConfianza: Policy = { ...WEB_V1_POLICY, trustedUnits: new Map() };
+  assert.ok(codes(checkImage(image, sinConfianza)).includes(WebCode.POINTER_TYPE));
+});
+
+test("los perfiles se piden por nombre", () => {
+  assert.deepEqual([...POLICIES.keys()].sort(),
+                   ["playground", "unrestricted", "web-v1"]);
+  assert.equal(POLICIES.get("playground"), PLAYGROUND_POLICY);
 });
 
 test("el perfil v1 no rechaza una librería por su nombre", () => {
@@ -350,4 +453,48 @@ test("intLiteral/identifier del helper producen HIR que el lector entiende", () 
     }));
   });
   assert.deepEqual(checkModule(loadModule(bytes), WEB_V1_POLICY).diagnostics, []);
+});
+
+// --------------------------------------------------------------------------- //
+// funciones como valores (TypeKind.FUNCTION_TYPE = 13): WEB103, siempre
+// --------------------------------------------------------------------------- //
+
+const FUNCTION_VALUE_MESSAGE =
+  "usa una función como valor (tipo 'fn(int) -> int'): el target web todavía " +
+  "no ejecuta funciones como valores; ejecútalo con el intérprete " +
+  "(python V0/main.py <fuente>.srcx --run interpreter)";
+
+test("una función como valor se rechaza con WEB103, con posición y mensaje exacto", () => {
+  const image = linkImage(fixture("funciones_valor.phir"),
+                          fixturePath("funciones_valor.phir"), fixtureResolver);
+  const report = checkImage(image, WEB_V1_POLICY);
+  assert.ok(!report.ok);
+  // un diagnóstico por línea: el parámetro (que delata también 'f(v)'), las
+  // dos variables y el argumento 'g' de la llamada
+  assert.deepEqual(
+    report.diagnostics.map((d) => [d.code, d.line, d.column]),
+    [
+      [WebCode.FUNCTION_VALUE, 7, 1],
+      [WebCode.FUNCTION_VALUE, 10, 5],
+      [WebCode.FUNCTION_VALUE, 11, 5],
+      [WebCode.FUNCTION_VALUE, 12, 19],
+    ],
+  );
+  assert.equal(report.diagnostics[0]!.message,
+               `el parámetro 'f' de 'aplica' ${FUNCTION_VALUE_MESSAGE}`);
+  // el anidado en un nullable se nombra por la función de adentro
+  assert.equal(report.diagnostics[2]!.message, `la variable 'h' ${FUNCTION_VALUE_MESSAGE}`);
+  assert.equal(report.diagnostics[3]!.message, `la expresión ${FUNCTION_VALUE_MESSAGE}`);
+  // no es una capacidad de la política: no se apunta como denegada
+  assert.equal(report.denied.size, 0);
+});
+
+test("WEB103 no depende de la política: ni 'unrestricted' deja pasar una función como valor", () => {
+  const image = linkImage(fixture("funciones_valor.phir"),
+                          fixturePath("funciones_valor.phir"), fixtureResolver);
+  for (const policy of [UNRESTRICTED_POLICY, PLAYGROUND_POLICY]) {
+    const report = checkImage(image, policy);
+    assert.ok(!report.ok, policy.name);
+    assert.deepEqual([...new Set(codes(report))], [WebCode.FUNCTION_VALUE], policy.name);
+  }
 });

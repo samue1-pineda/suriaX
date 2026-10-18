@@ -1,0 +1,7 @@
+#import sintaxis
+#import sinexport
+#import alias
+#import dup
+#import script
+#import dup
+fn main() -> int { return dup.f() + script.g(); }

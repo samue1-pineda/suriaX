@@ -1,0 +1,81 @@
+/- func: herramientas FUNCIONALES sobre 'Vector' (map y fold).
+
+ El comportamiento se pasa como una FUNCIÓN con nombre (un valor de tipo
+ 'fn(...) -> R': una del módulo, una de una librería o un 'Tipo.metodo').
+ No hay lambdas ni capturas: lo que la función necesita lo recibe por sus
+ parámetros.
+
+     #import array.vector as vec
+     #import func
+
+     fn label(int ptr x) -> str { return f"<{x[0]}>"; }
+     fn add(int acc, int ptr x) -> int { return acc + x[0]; }
+
+     fn main() -> int {
+         var vec.Vector<int> v = vec.dynamic<int>(4);
+         v.push(1); v.push(2); v.push(3);
+         var vec.Vector<str> labels = func.map<int, str>(&v, label);  // <1> <2> <3>
+         var int total = func.fold<int, int>(&v, 0, add);              // 6
+         return 0;
+     }
+
+ LOS ARGUMENTOS DE TIPO SE DEDUCEN: 'func.map(&v, label)' liga 'T' desde
+ 'Vector<T> ptr' y 'U' desde 'fn(T ptr) -> U', sin conversiones (el tipo
+ tiene que ser el mismo). La forma escrita ('map<int, str>') sigue valiendo:
+ o se escriben todos o ninguno.
+
+ Cambian el tipo del elemento ('map' de 'Vector<int>' a 'Vector<str>',
+ 'fold' a un 'A'). Nacieron aquí porque un método no podía tener parámetros
+ de tipo propios; desde el paso 4 sí ('fn map<U>' en '@impl Vector<T>'), y
+ podrían ser métodos de 'Vector' como 'sort_by' y 'filter' (sin mover aún).
+
+ Cada elemento llega a 'f' como PUNTERO ('T ptr', el mismo contrato que
+ 'filter' y 'sort_by'): para leer un 'int' se escribe 'x[0]'; un struct se
+ lee por sus campos ('p.name'). Hoy 'f' recibe un puntero a una COPIA del
+ elemento, no al del vector: '&' sobre un elemento de un bloque solo presta
+ objetos (un escalar es RT011), y la copia vale para todo 'T'. Por eso, con
+ un 'T' que tiene destructor, 'map' y 'fold' son SEM038 (la copia y el
+ original serían dos dueños), como 'get'. La firma no cambia el día que el
+ préstamo de un escalar exista: entonces la copia sobra y la restricción
+ desaparece.
+-/
+
+#import array.vector as vec
+
+// un vector NUEVO con 'f' aplicada a cada elemento de 'v', en el mismo
+// orden. 'v' no cambia. El nuevo es dinámico (crece) y empieza con la
+// capacidad justa.
+//
+//   func.map<Person, str>(&people, Person.name_of)   // un método también vale
+public fn map<T, U>(vec.Vector<T> ptr v, fn(T ptr) -> U f) -> vec.Vector<U> {
+    var vec.Vector<U> out = vec.dynamic<U>(v.len());
+    var int i = 0;
+    while (i < v.len()) {
+        var T copy = v.get(i);
+        out.push(f(&copy));
+        i = i + 1;
+    }
+    return out;
+}
+
+// RESUME 'v' en un valor: empieza con 'init' y, de izquierda a derecha,
+// 'acc = f(acc, elemento)'. Con 'v' vacío devuelve 'init'. 'v' no cambia.
+//
+//   func.fold<int, int>(&v, 0, add)          // la suma
+//   func.fold<str, int>(&words, 0, longest)  // el largo mayor
+//
+// El acumulador va y vuelve POR VALOR (se mueve a 'f' y 'f' devuelve el
+// nuevo): así sirve también un 'A' con destructor, que tiene un solo dueño
+// en cada momento.
+public fn fold<T, A>(vec.Vector<T> ptr v, A init, fn(A, T ptr) -> A f) -> A {
+    var A acc = move init;
+    var int i = 0;
+    while (i < v.len()) {
+        var T copy = v.get(i);
+        acc = f(move acc, &copy);
+        i = i + 1;
+    }
+    return acc;
+}
+
+#export package as func
