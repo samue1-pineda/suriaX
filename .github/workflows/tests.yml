@@ -43,7 +43,7 @@ jobs:
       # él esos tests se OMITEN (visibles en el informe, nunca como pasados),
       # pero aquí SÍ lo queremos: es parte de lo que hay que probar.
       - name: Preparar node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "24"
 
