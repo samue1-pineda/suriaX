@@ -78,7 +78,7 @@ jobs:
         run: python -c "from runtime import cxx_api; print(cxx_api.__name__, 'ok')"
 
       - name: Guardar los módulos
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nativo-${{ matrix.os }}
           path: |
@@ -164,7 +164,7 @@ jobs:
           echo "el paquete compila por su cuenta"
 
       - name: Guardar el paquete
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: paquete
           path: |
