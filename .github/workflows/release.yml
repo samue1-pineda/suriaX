@@ -192,7 +192,7 @@ jobs:
 
       # Crea la etiqueta 'vX.Y.Z' sobre este commit si no existe, y publica.
       - name: Publicar
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.comprobar.outputs.version }}
           target_commitish: ${{ github.sha }}
