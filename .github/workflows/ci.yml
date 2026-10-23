@@ -234,7 +234,7 @@ jobs:
           echo "huella en Python ${{ matrix.python }}: $sha"
 
       - name: Guardar la huella
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: huella-py${{ matrix.python }}
           path: huella/ci_programa.srcx.phir
