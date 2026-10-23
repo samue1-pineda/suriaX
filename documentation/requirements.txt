@@ -1,10 +1,16 @@
 # Dependencias de la documentación (Sphinx). No son dependencias del
 # compilador: 'requirements.txt' de la raíz sigue siendo el del proyecto.
-sphinx>=8.1
+#
+# Versiones EXACTAS: son las del último build verde de docs.yml. Con cotas
+# (>=) cada build instalaba la última publicada y, con '-W', una advertencia
+# nueva de Sphinx o MyST rompe la documentación sin cambiar nada del repo.
+# Sphinx 9.2 exige Python 3.13 y docs.yml usa 3.12: subirlo es subir también
+# el Python del workflow. Los bumps los propone Dependabot.
+sphinx==9.1.0
 # La documentación del repo está en Markdown (ARCHITECTURE.md, docs/*.md):
 # MyST deja incluirla tal cual, sin reescribirla a reStructuredText.
-myst-parser[linkify]>=4.0
+myst-parser[linkify]==5.1.0
 # Tema moderno, con búsqueda y modo oscuro. Cambiarlo es una línea en conf.py.
-furo>=2024.8.6
+furo==2025.12.19
 # Los diagramas del pipeline (ARCHITECTURE.md) son mermaid: se renderizan.
-sphinxcontrib-mermaid>=1.0
+sphinxcontrib-mermaid==2.1.1

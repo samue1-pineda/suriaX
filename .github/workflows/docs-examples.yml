@@ -49,7 +49,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
           python -m pip install --upgrade pip
-          pip install protobuf pyyaml
+          pip install -c requirements.txt protobuf pyyaml
 
       # El informe legible, no el test: en un fallo el log del job ya trae el
       # documento, la linea y el diagnostico, sin tener que reproducirlo local.

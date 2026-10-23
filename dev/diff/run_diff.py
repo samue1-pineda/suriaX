@@ -24,14 +24,18 @@ intercuartílico. Si la corrida de calentamiento dice que una celda pasaría de
 ``--cell-budget`` segundos, esa celda (y solo esa) hace menos corridas, y se
 dice en ``RESULTS.md``.
 
-Escribe ``dev/diff/RESULTS.md`` y ``dev/diff/results.json``; los artefactos van
-a ``dev/diff/work/`` (ignorado por git).
+Escribe ``dev/diff/results.json`` (los datos crudos) y, desde esos mismos
+datos y siempre juntos, ``dev/diff/RESULTS.md`` y las figuras ``figure.svg``,
+``size_change.svg`` y ``methodology.svg`` (ver ``figure.py`` y
+``methodology.py``): todo sale de la misma corrida. Los artefactos van a
+``dev/diff/work/`` (ignorado por git).
 
 Uso (desde la raíz del repositorio):
     python dev/diff/run_diff.py --reps 3          # prueba rápida
     python dev/diff/run_diff.py                   # la corrida completa (30)
     python dev/diff/run_diff.py --only 01 08      # solo esos programas
-    python dev/diff/run_diff.py --render-only     # rehace RESULTS.md sin medir
+    python dev/diff/run_diff.py --render-only     # rehace RESULTS.md y las
+                                                  # figuras sin medir
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ import argparse
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -49,6 +54,10 @@ import subprocess
 import sys
 import time
 from typing import Callable, Optional
+
+# Hermanos de este script (dev/diff/): al correrlo, su carpeta es sys.path[0].
+import figure
+import methodology
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -703,6 +712,192 @@ def pct(a, b) -> str:
     return f"{(b - a) / a * 100:+.1f} %"
 
 
+# --------------------------------------------------------------------------
+# pruebas estadísticas (biblioteca estándar; el proyecto no añade scipy)
+# --------------------------------------------------------------------------
+
+#: hasta este n la Wilcoxon es exacta (la distribución de W+ se cuenta entera)
+EXACT_WILCOXON_MAX_N = 20
+#: por debajo, una U de Mann-Whitney con aproximación normal se marca dudosa
+SMALL_SAMPLE_N = 8
+
+
+def average_ranks(values: list) -> list:
+    """Rangos 1..n de ``values``; los empates reciben el rango promedio."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    ranks = [0.0] * len(values)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            ranks[order[k]] = (i + j) / 2 + 1
+        i = j + 1
+    return ranks
+
+
+def tie_sizes(values: list) -> list:
+    """Tamaño de cada grupo de valores repetidos (para corregir la varianza)."""
+    counts: dict = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    return [c for c in counts.values() if c > 1]
+
+
+def two_sided_normal_p(z: float) -> float:
+    return math.erfc(abs(z) / math.sqrt(2))
+
+
+def wilcoxon_signed_rank(diffs: list) -> Optional[dict]:
+    """Wilcoxon de rangos con signo, bilateral, sobre diferencias pareadas.
+
+    Exacta hasta ``EXACT_WILCOXON_MAX_N`` diferencias: se cuenta cuántas de
+    las 2^n asignaciones de signo dan cada W+ (con rangos promedio si hay
+    empates). Con más, aproximación normal corregida por empates. Las
+    diferencias 0 se descartan, como manda la prueba, y se informa cuántas.
+    ``None`` si no queda ninguna."""
+    nonzero = [d for d in diffs if d != 0]
+    n = len(nonzero)
+    if n == 0:
+        return None
+    ranks = average_ranks([abs(d) for d in nonzero])
+    w_plus = sum(r for r, d in zip(ranks, nonzero) if d > 0)
+    total = n * (n + 1) / 2
+    if n <= EXACT_WILCOXON_MAX_N:
+        # los rangos promedio son múltiplos de 1/2: se cuentan en mitades
+        dist = {0: 1}
+        for half in (round(r * 2) for r in ranks):
+            step = dict(dist)
+            for s, c in dist.items():
+                step[s + half] = step.get(s + half, 0) + c
+            dist = step
+        obs = round(w_plus * 2)
+        low = sum(c for s, c in dist.items() if s <= obs) / 2 ** n
+        high = sum(c for s, c in dist.items() if s >= obs) / 2 ** n
+        p, method = min(1.0, 2 * min(low, high)), "exacta"
+    else:
+        var = (n * (n + 1) * (2 * n + 1) / 24
+               - sum(t ** 3 - t for t in tie_sizes([abs(d) for d in nonzero])) / 48)
+        p = two_sided_normal_p((w_plus - total / 2) / math.sqrt(var))
+        method = "aproximación normal"
+    return {"n": n, "zeros": len(diffs) - n, "w_plus": w_plus, "w_minus": total - w_plus,
+            "p": p, "method": method,
+            # correlación biserial de rangos: -1 = todas las diferencias negativas
+            "rank_biserial": (2 * w_plus - total) / total}
+
+
+def mann_whitney_u(a: list, b: list) -> Optional[dict]:
+    """U de Mann-Whitney, bilateral, con aproximación normal corregida por
+    empates y por continuidad. ``prob_b_lower`` es la probabilidad de que una
+    corrida de ``b`` tarde menos que una de ``a`` (los empates cuentan la
+    mitad): el tamaño del efecto en palabras. ``None`` si falta un grupo."""
+    n1, n2 = len(a), len(b)
+    if not n1 or not n2:
+        return None
+    ranks = average_ranks(list(a) + list(b))
+    u = sum(ranks[:n1]) - n1 * (n1 + 1) / 2     # pares con a > b (+ empates / 2)
+    big_n = n1 + n2
+    var = n1 * n2 / 12 * ((big_n + 1) - sum(t ** 3 - t for t in tie_sizes(list(a) + list(b)))
+                          / (big_n * (big_n - 1)))
+    if var <= 0:                                # todas las corridas iguales
+        p = 1.0
+    else:
+        p = two_sided_normal_p(max(abs(u - n1 * n2 / 2) - 0.5, 0.0) / math.sqrt(var))
+    return {"n1": n1, "n2": n2, "u": u, "p": p, "prob_b_lower": u / (n1 * n2)}
+
+
+def holm(pvalues: list) -> list:
+    """Corrección de Holm-Bonferroni (controla el error de familia)."""
+    m = len(pvalues)
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, i in enumerate(sorted(range(m), key=lambda k: pvalues[k])):
+        running = max(running, min(1.0, (m - rank) * pvalues[i]))
+        adjusted[i] = running
+    return adjusted
+
+
+def fmt_p(p: float) -> str:
+    return "< 0.001" if p < 0.001 else f"{p:.3f}"
+
+
+def render_tests(progs: list, w: Callable[[str], None]) -> None:
+    """Las pruebas estadísticas del esquema 1 frente al 2, con los mismos
+    datos que las tablas de la sección (sin volver a medir)."""
+    w("### Pruebas estadísticas: esquema 1 frente a esquema 2\n")
+    w("El criterio de ruido de arriba describe; estas pruebas contrastan. Salen de los mismos "
+      "datos, sin volver a medir; son bilaterales y con α = 0.05.\n")
+
+    pairs = [(p["sizes"]["s1"]["main_bytes"], p["sizes"]["s2"]["main_bytes"])
+             for p in progs if p["sizes"]["s1"] and p["sizes"]["s2"]]
+    wx = wilcoxon_signed_rank([b - a for a, b in pairs])
+    w("**Tamaño del `.phir` del programa**: Wilcoxon de rangos con signo, pareada por programa "
+      "(el mismo programa con los dos esquemas). El tamaño es exacto, así que aquí no hay "
+      "ruido que separar: la prueba dice si el cambio va en la misma dirección en los "
+      "programas más de lo que daría el azar.\n")
+    if wx is None:
+        w("Ningún programa cambia de tamaño: no hay nada que contrastar.\n")
+    else:
+        smaller = sum(1 for a, b in pairs if b < a)
+        larger = sum(1 for a, b in pairs if b > a)
+        w(f"- {len(pairs)} programas: el esquema 2 es más pequeño en {smaller}, más grande en "
+          f"{larger} e igual en {wx['zeros']} (los iguales no entran en la prueba).")
+        w(f"- W+ = {wx['w_plus']:g}, W− = {wx['w_minus']:g}, n = {wx['n']}; "
+          f"p = {fmt_p(wx['p'])} ({wx['method']}); correlación biserial de rangos "
+          f"{wx['rank_biserial']:+.2f} (−1: todas las diferencias a favor del esquema 2).")
+        decision = "se rechaza" if wx["p"] < 0.05 else "no se rechaza"
+        w(f"- Con α = 0.05 {decision} la hipótesis nula (las diferencias se reparten "
+          "simétricas alrededor de 0).\n")
+
+    w("**Lectura** (cargar, decodificar y ligar): U de Mann-Whitney por celda (programa × "
+      "target), las corridas del esquema 1 contra las del 2. Los p-valores van corregidos con "
+      "Holm sobre todas las celdas comparadas (las rechazadas no cuentan, como arriba). "
+      "**P(2 < 1)** es la probabilidad de que una corrida del esquema 2 tarde menos que una "
+      "del 1: 0.5 es que no hay diferencia; 1, que siempre es más rápido. En negrita, lo "
+      "significativo.\n")
+    rows = []
+    for p in progs:
+        for t in TARGETS:
+            a, b = p["cells"].get(f"s1/{t}"), p["cells"].get(f"s2/{t}")
+            if not a or not b or "NOT SUPPORTED" in (cell_status(p, f"s1/{t}")[0],
+                                                     cell_status(p, f"s2/{t}")[0]):
+                continue
+            mw = mann_whitney_u(a["read"]["times_ms"], b["read"]["times_ms"])
+            if mw:
+                rows.append((p["program"], t, mw))
+    tested = {(prog, t): (mw, adj)
+              for (prog, t, mw), adj in zip(rows, holm([mw["p"] for _, _, mw in rows]))}
+    w("| Programa | " + " | ".join(TARGET_NAMES[t] for t in TARGETS) + " |\n|---|---|---|---|")
+    for p in progs:
+        row = []
+        for t in TARGETS:
+            got = tested.get((p["program"], t))
+            if got is None:
+                row.append("—")
+                continue
+            mw, adj = got
+            bold = "**" if adj < 0.05 else ""
+            small = " (n pequeño)" if min(mw["n1"], mw["n2"]) < SMALL_SAMPLE_N else ""
+            row.append(f"{bold}p {fmt_p(adj)}{bold} · P(2 < 1) {mw['prob_b_lower']:.2f}{small}")
+        w(f"| `{p['program']}` | " + " | ".join(row) + " |")
+    w("")
+    faster = sum(1 for mw, adj in tested.values() if adj < 0.05 and mw["prob_b_lower"] > 0.5)
+    slower = sum(1 for mw, adj in tested.values() if adj < 0.05 and mw["prob_b_lower"] < 0.5)
+    same = len(tested) - faster - slower
+    w(f"Con α = 0.05 tras Holm, el esquema 2 lee más rápido en {faster} de {len(tested)} "
+      f"celdas, más lento en {slower} y sin diferencia significativa en {same}.\n")
+    w("**Límites de estas pruebas** (se leen con ellas):\n")
+    w("- Los programas se eligieron a mano, por cobertura del lenguaje, no al azar: la "
+      "Wilcoxon habla de ESTOS programas, no de cualquier programa de suriaX.")
+    w("- Mann-Whitney supone corridas independientes. Aquí son consecutivas, en una sola "
+      "máquina, y todas las del esquema 1 de un programa se hacen ANTES que las del 2 (el "
+      "orden no se alterna): una deriva de la máquina (temperatura, caché, otro proceso) puede "
+      "pasar por efecto del esquema. Los p-valores son, por eso, optimistas.")
+    w("- Los tiempos incluyen arrancar el proceso (ver los arranques en \"Cómo se mide\"): en "
+      "los programas pequeños el arranque domina y la diferencia del esquema queda diluida.\n")
+
+
 def render(results: dict, path_md: str) -> None:
     env = results["environment"]
     progs = results["programs"]
@@ -817,6 +1012,7 @@ def render(results: dict, path_md: str) -> None:
     for k, vs in verdicts.items():
         w(f"| {k} | {vs.count('mejor')} | {vs.count('peor')} | {vs.count('ruido')} |")
     w("")
+    render_tests(progs, w)
 
     # ---- entorno y método ---------------------------------------------
     w("## Entorno\n")
@@ -1092,6 +1288,28 @@ def from_json(obj, key: str = ""):
     return obj
 
 
+#: las figuras que salen de cada corrida, junto a RESULTS.md
+FIGURES = ("figure.svg", "size_change.svg", "methodology.svg")
+
+
+def write_report(results: dict, out_dir: str) -> list:
+    """``RESULTS.md`` y las figuras, SIEMPRE juntos y desde el mismo
+    ``results``: así el informe y lo que se muestra (el póster, el QR) no
+    pueden venir de corridas distintas. Devuelve las rutas escritas."""
+    render(results, os.path.join(out_dir, "RESULTS.md"))
+    programs = results["programs"]
+    svgs = {"figure.svg": figure.estados(programs, cell_status),
+            "size_change.svg": figure.tamanos(programs),
+            "methodology.svg": methodology.diagrama(results)}
+    written = [os.path.join(out_dir, "RESULTS.md")]
+    for name in FIGURES:
+        path = os.path.join(out_dir, name)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(svgs[name])
+        written.append(path)
+    return written
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Diferencial de suriaX (dev/diff).")
     ap.add_argument("--reps", type=int, default=30,
@@ -1107,10 +1325,11 @@ def main() -> int:
                     help="segundos máximos de UNA corrida (por defecto 3600)")
     ap.add_argument("--vm", default=None, help="ruta de suriax-hir")
     ap.add_argument("--node", default=None, help="ruta de node")
-    ap.add_argument("--out", default=HERE, help="carpeta de RESULTS.md y results.json")
+    ap.add_argument("--out", default=HERE,
+                    help="carpeta de results.json, RESULTS.md y las figuras (.svg)")
     ap.add_argument("--render-only", action="store_true",
-                    help="no mide: vuelve a escribir RESULTS.md desde el results.json "
-                         "existente (p. ej. tras cambiar el texto del informe)")
+                    help="no mide: vuelve a escribir RESULTS.md y las figuras desde el "
+                         "results.json existente (p. ej. tras cambiar el texto del informe)")
     args = ap.parse_args()
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -1121,8 +1340,9 @@ def main() -> int:
         register_paths(find_vm(args.vm), find_node(args.node))
         with open(os.path.join(args.out, "results.json"), encoding="utf-8") as fh:
             results = from_json(json.load(fh))
-        render(results, os.path.join(args.out, "RESULTS.md"))
-        print("RESULTS.md reescrito desde results.json (sin medir)")
+        for path in write_report(results, args.out):
+            print(f"escrito {repo_relative(path)}")
+        print("(desde results.json, sin medir)")
         return 0
     if args.reps < 2:
         ap.error("--reps tiene que ser >= 2 (la primera se descarta)")
@@ -1160,9 +1380,9 @@ def main() -> int:
         env["load_after"] = cpu_load()
         with open(os.path.join(args.out, "results.json"), "w", encoding="utf-8") as fh:
             json.dump(to_json(results), fh, ensure_ascii=False, indent=1)
-        render(results, os.path.join(args.out, "RESULTS.md"))
+        write_report(results, args.out)
     log(f"listo en {(time.time() - started) / 60:.1f} min -> "
-        f"{os.path.join(args.out, 'RESULTS.md')}")
+        f"{os.path.join(args.out, 'RESULTS.md')} y las figuras ({', '.join(FIGURES)})")
     return 0
 
 

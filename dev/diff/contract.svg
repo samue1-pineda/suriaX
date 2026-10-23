@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" role="img" aria-labelledby="title desc">
+  <title id="title">El .phir como contrato entre frontend y backends</title>
+  <desc id="desc">El frontend en Python genera un archivo .phir en Protocol Buffers (esquemas 1 y 2), que funciona como contrato. Lo leen tres backends: intérprete en Python, máquina virtual en C++ y web en TypeScript/WASM. La salida de cada uno se compara con la salida esperada (prueba diferencial). Abajo, qué representa cada IR: LLVM IR y WebAssembly son de bajo nivel, Substrait solo representa consultas y esta HIR representa programas completos.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4B5563"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: "Segoe UI", Arial, Helvetica, sans-serif; fill: #1F2937; }
+    .title { font-size: 32px; font-weight: 700; }
+    .head { font-size: 30px; font-weight: 700; }
+    .sub { font-size: 28px; fill: #4B5563; }
+    .phir { font-size: 52px; font-weight: 700; fill: #1E40AF; }
+    .badge { font-size: 22px; font-weight: 700; fill: #FFFFFF; letter-spacing: 2px; }
+    .check { font-size: 34px; font-weight: 700; fill: #14532D; }
+    .note { font-size: 26px; font-style: italic; fill: #166534; }
+    .label { font-size: 28px; font-weight: 700; fill: #374151; }
+    .flow { fill: none; stroke: #4B5563; stroke-width: 3; }
+  </style>
+
+  <rect width="1000" height="640" fill="#FFFFFF"/>
+  <text class="title" x="500" y="48" text-anchor="middle">El .phir como contrato entre frontend y backends</text>
+
+  <!-- Frontend -->
+  <rect x="20" y="80" width="300" height="100" rx="14" fill="#F3F4F6" stroke="#6B7280" stroke-width="2.5"/>
+  <text class="head" x="170" y="124" text-anchor="middle">Frontend</text>
+  <text class="sub" x="170" y="160" text-anchor="middle">Python</text>
+  <line class="flow" x1="170" y1="180" x2="170" y2="212" marker-end="url(#arrow)"/>
+
+  <!-- Contrato: .phir -->
+  <rect x="20" y="232" width="300" height="200" rx="14" fill="#E8F0FC" stroke="#2563C9" stroke-width="4"/>
+  <rect x="90" y="215" width="160" height="34" rx="17" fill="#2563C9"/>
+  <text class="badge" x="170" y="240" text-anchor="middle">CONTRATO</text>
+  <text class="phir" x="170" y="312" text-anchor="middle">.phir</text>
+  <text class="sub" x="170" y="356" text-anchor="middle" style="fill:#1F2937">Protocol Buffers</text>
+  <text class="sub" x="170" y="398" text-anchor="middle">esquemas 1 y 2</text>
+
+  <!-- Del contrato a cada backend -->
+  <path class="flow" d="M320,332 C346,332 340,128 364,128" marker-end="url(#arrow)"/>
+  <path class="flow" d="M320,332 C346,332 340,256 364,256" marker-end="url(#arrow)"/>
+  <path class="flow" d="M320,332 C346,332 340,384 364,384" marker-end="url(#arrow)"/>
+
+  <!-- Backends -->
+  <rect x="372" y="80" width="290" height="96" rx="14" fill="#FFFFFF" stroke="#6B7280" stroke-width="2.5"/>
+  <text class="head" x="517" y="122" text-anchor="middle">Intérprete</text>
+  <text class="sub" x="517" y="158" text-anchor="middle">Python</text>
+
+  <rect x="372" y="208" width="290" height="96" rx="14" fill="#FFFFFF" stroke="#6B7280" stroke-width="2.5"/>
+  <text class="head" x="517" y="250" text-anchor="middle">Máquina virtual</text>
+  <text class="sub" x="517" y="286" text-anchor="middle">C++</text>
+
+  <rect x="372" y="336" width="290" height="96" rx="14" fill="#FFFFFF" stroke="#6B7280" stroke-width="2.5"/>
+  <text class="head" x="517" y="378" text-anchor="middle">Web</text>
+  <text class="sub" x="517" y="414" text-anchor="middle">TypeScript / WASM</text>
+
+  <!-- De cada backend a la comparación -->
+  <path class="flow" d="M662,128 C690,128 680,212 704,212" marker-end="url(#arrow)"/>
+  <path class="flow" d="M662,256 L704,256" marker-end="url(#arrow)"/>
+  <path class="flow" d="M662,384 C690,384 680,300 704,300" marker-end="url(#arrow)"/>
+
+  <!-- Comparación con la salida esperada -->
+  <rect x="712" y="146" width="268" height="220" rx="14" fill="#ECF8EE" stroke="#1A9A1A" stroke-width="3"/>
+  <text class="check" x="846" y="208" text-anchor="middle">¿Igual a la</text>
+  <text class="check" x="846" y="248" text-anchor="middle">salida</text>
+  <text class="check" x="846" y="288" text-anchor="middle">esperada?</text>
+  <line x1="742" y1="310" x2="950" y2="310" stroke="#1A9A1A" stroke-width="1.5"/>
+  <text class="note" x="846" y="346" text-anchor="middle">prueba diferencial</text>
+
+  <!-- Qué representa cada IR -->
+  <line x1="20" y1="468" x2="980" y2="468" stroke="#D1D5DB" stroke-width="2" stroke-dasharray="8 8"/>
+  <text class="label" x="20" y="512">Qué representa cada IR</text>
+
+  <rect x="20" y="532" width="300" height="92" rx="14" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="2"/>
+  <text class="head" x="170" y="570" text-anchor="middle">LLVM IR · Wasm</text>
+  <text class="sub" x="170" y="606" text-anchor="middle">bajo nivel</text>
+
+  <rect x="350" y="532" width="300" height="92" rx="14" fill="#F3F4F6" stroke="#9CA3AF" stroke-width="2"/>
+  <text class="head" x="500" y="570" text-anchor="middle">Substrait</text>
+  <text class="sub" x="500" y="606" text-anchor="middle">solo consultas</text>
+
+  <rect x="680" y="532" width="300" height="92" rx="14" fill="#E8F0FC" stroke="#2563C9" stroke-width="4"/>
+  <text class="head" x="830" y="570" text-anchor="middle" style="fill:#1E40AF">Esta HIR</text>
+  <text class="sub" x="830" y="606" text-anchor="middle" style="fill:#1F2937">programas completos</text>
+</svg>

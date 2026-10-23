@@ -1,0 +1,45 @@
+# Dependabot: propone por PR las subidas de las versiones EXACTAS (==) de los
+# tres manifiestos de pip. Se fijaron exactas porque, sin versión o con una
+# cota (>=), el escáner de vulnerabilidades de OpenSSF Scorecard (OSV) supone
+# la más antigua permitida y la reporta como vulnerable.
+#
+# Ninguno es dependencia del compilador (corre con la biblioteca estándar):
+# - requirements.txt: desarrollo (protobuf para comparar el códec, pybind11,
+#   pyyaml). La CI instala con '-c requirements.txt'.
+# - documentation/requirements.txt: Sphinx (docs.yml, con Python 3.12; una
+#   versión que exija 3.13 obliga a subir también el workflow).
+# - docs/quality/requirements.txt: herramientas de calidad.
+#
+# Un PR de Dependabot NO se fusiona sin mirar que la CI pase: subir una
+# versión puede cambiar advertencias de Sphinx ('-W') o los números de calidad.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/documentation"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/docs/quality"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Las acciones de los workflows (.github/workflows/*.yml). Motivo: GitHub
+  # dejó de dar soporte a Node 20 en los runners, y actions/checkout@v4,
+  # setup-python@v5, setup-node@v4 y upload-artifact@v4 corren forzadas en
+  # Node 24 con un aviso en cada job. Las versiones mayores nuevas ya usan
+  # Node 24. Una subida MAYOR de una acción puede cambiar sus entradas: se
+  # revisa el changelog de la acción antes de fusionar.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

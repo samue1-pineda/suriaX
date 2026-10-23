@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz" viewBox="0 0 1000 808" width="1000" height="808" role="img" aria-labelledby="t d">
+<title id="t">Estado de cada programa en cada target</title>
+<desc id="d">11 programas por 3 targets (Python, C++ y web) con el esquema 2: OK 29 de 33, no soportado 2 de 33 y error 2 de 33. Con el esquema 1 los estados son idénticos.</desc>
+<style>
+.viz { --surface:#ffffff; --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#8a8984;
+       --grid:#e6e5e0; --menos:#2a78d6; --mas:#eb6834;
+       --good:#0ca30c; --warn:#fab219; --crit:#d03b3b; }
+.fondo { fill: var(--surface); }
+text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: var(--ink); }
+.ok   { fill: var(--good); } .ns { fill: var(--warn); } .err { fill: var(--crit); }
+.ok-b { stroke: var(--good); } .ns-b { stroke: var(--warn); } .err-b { stroke: var(--crit); }
+.menos { fill: var(--menos); } .mas { fill: var(--mas); }
+.rejilla { stroke: var(--grid); stroke-width: 1; }
+.eje { stroke: var(--ink-3); stroke-width: 1.5; }
+.mediana { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 5 4; }
+</style>
+<rect class="fondo" x="0" y="0" width="1000" height="808"/>
+<text x="40" y="38" font-size="29" font-weight="700">Con el esquema 1 y con el 2, los estados son idénticos</text>
+<text x="405" y="88" font-size="28" font-weight="700" style="fill:#52514e" text-anchor="middle">Python</text>
+<text x="563" y="88" font-size="28" font-weight="700" style="fill:#52514e" text-anchor="middle">C++</text>
+<text x="796" y="88" font-size="28" font-weight="700" style="fill:#52514e" text-anchor="middle">Web</text>
+<text x="40" y="141" font-size="28">Hola mundo</text>
+<g><title>Hola mundo · Python: OK</title>
+<rect class="ok-b" x="330" y="102" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="102" width="8" height="58" rx="3"/>
+<text x="350" y="141" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Hola mundo · C++: OK</title>
+<rect class="ok-b" x="488" y="102" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="102" width="8" height="58" rx="3"/>
+<text x="508" y="141" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Hola mundo · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="102" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="102" width="8" height="58" rx="3"/>
+<text x="666" y="141" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="200" font-size="28">Aritmética</text>
+<g><title>Aritmética · Python: OK</title>
+<rect class="ok-b" x="330" y="161" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="161" width="8" height="58" rx="3"/>
+<text x="350" y="200" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Aritmética · C++: OK</title>
+<rect class="ok-b" x="488" y="161" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="161" width="8" height="58" rx="3"/>
+<text x="508" y="200" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Aritmética · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="161" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="161" width="8" height="58" rx="3"/>
+<text x="666" y="200" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="259" font-size="28">Control de flujo</text>
+<g><title>Control de flujo · Python: OK</title>
+<rect class="ok-b" x="330" y="220" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="220" width="8" height="58" rx="3"/>
+<text x="350" y="259" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Control de flujo · C++: OK</title>
+<rect class="ok-b" x="488" y="220" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="220" width="8" height="58" rx="3"/>
+<text x="508" y="259" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Control de flujo · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="220" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="220" width="8" height="58" rx="3"/>
+<text x="666" y="259" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="318" font-size="28">Vector</text>
+<g><title>Vector · Python: OK</title>
+<rect class="ok-b" x="330" y="279" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="279" width="8" height="58" rx="3"/>
+<text x="350" y="318" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Vector · C++: OK</title>
+<rect class="ok-b" x="488" y="279" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="279" width="8" height="58" rx="3"/>
+<text x="508" y="318" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Vector · Web: No soportado — web: WEB002, WEB003, WEB006, WEB103</title>
+<rect class="ns-b" x="646" y="279" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ns" x="646" y="279" width="8" height="58" rx="3"/>
+<text x="666" y="304" font-size="27" font-weight="700">No soportado</text>
+<text x="666" y="328" font-size="26" style="fill:#52514e">usa punteros</text>
+</g>
+<text x="40" y="377" font-size="28">Funciones y recursión</text>
+<g><title>Funciones y recursión · Python: OK</title>
+<rect class="ok-b" x="330" y="338" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="338" width="8" height="58" rx="3"/>
+<text x="350" y="377" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Funciones y recursión · C++: OK</title>
+<rect class="ok-b" x="488" y="338" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="338" width="8" height="58" rx="3"/>
+<text x="508" y="377" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Funciones y recursión · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="338" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="338" width="8" height="58" rx="3"/>
+<text x="666" y="377" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="436" font-size="28">Sintético 10</text>
+<g><title>Sintético 10 · Python: OK</title>
+<rect class="ok-b" x="330" y="397" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="397" width="8" height="58" rx="3"/>
+<text x="350" y="436" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 10 · C++: OK</title>
+<rect class="ok-b" x="488" y="397" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="397" width="8" height="58" rx="3"/>
+<text x="508" y="436" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 10 · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="397" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="397" width="8" height="58" rx="3"/>
+<text x="666" y="436" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="495" font-size="28">Sintético 1.000</text>
+<g><title>Sintético 1.000 · Python: OK</title>
+<rect class="ok-b" x="330" y="456" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="456" width="8" height="58" rx="3"/>
+<text x="350" y="495" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 1.000 · C++: OK</title>
+<rect class="ok-b" x="488" y="456" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="456" width="8" height="58" rx="3"/>
+<text x="508" y="495" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 1.000 · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="456" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="456" width="8" height="58" rx="3"/>
+<text x="666" y="495" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="554" font-size="28">Sintético 10.000</text>
+<g><title>Sintético 10.000 · Python: OK</title>
+<rect class="ok-b" x="330" y="515" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="515" width="8" height="58" rx="3"/>
+<text x="350" y="554" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 10.000 · C++: OK</title>
+<rect class="ok-b" x="488" y="515" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="515" width="8" height="58" rx="3"/>
+<text x="508" y="554" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Sintético 10.000 · Web: OK — formato: `\n` en vez de `\r\n`; marca `[wasm] main() -&gt; N` en stderr</title>
+<rect class="ok-b" x="646" y="515" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="646" y="515" width="8" height="58" rx="3"/>
+<text x="666" y="554" font-size="27" font-weight="700">OK</text>
+</g>
+<text x="40" y="613" font-size="28">División por cero</text>
+<g><title>División por cero · Python: OK</title>
+<rect class="ok-b" x="330" y="574" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="574" width="8" height="58" rx="3"/>
+<text x="350" y="613" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>División por cero · C++: OK — formato: otro texto en stderr: `error de ejecucion: excepción no capturada — EXC001: división por cero (11:17)`</title>
+<rect class="ok-b" x="488" y="574" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="574" width="8" height="58" rx="3"/>
+<text x="508" y="613" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>División por cero · Web: Error — trap de wasm sin traducir (`RuntimeError: divide by zero`); antes imprime iguales 1 de 1 líneas; código 1 en vez de 70</title>
+<rect class="err-b" x="646" y="574" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="err" x="646" y="574" width="8" height="58" rx="3"/>
+<text x="666" y="599" font-size="27" font-weight="700">Error</text>
+<text x="666" y="623" font-size="26" style="fill:#52514e">falla: división por 0</text>
+</g>
+<text x="40" y="672" font-size="28">Desbordamiento</text>
+<g><title>Desbordamiento · Python: OK</title>
+<rect class="ok-b" x="330" y="633" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="633" width="8" height="58" rx="3"/>
+<text x="350" y="672" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Desbordamiento · C++: OK</title>
+<rect class="ok-b" x="488" y="633" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="633" width="8" height="58" rx="3"/>
+<text x="508" y="672" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Desbordamiento · Web: Error — trap de wasm sin traducir (`RuntimeError: divide result unrepresentable`); antes imprime iguales 12 de 13 líneas; código 1 en vez de 0</title>
+<rect class="err-b" x="646" y="633" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="err" x="646" y="633" width="8" height="58" rx="3"/>
+<text x="666" y="658" font-size="27" font-weight="700">Error</text>
+<text x="666" y="682" font-size="26" style="fill:#52514e">falla: MIN / −1</text>
+</g>
+<text x="40" y="731" font-size="28">Structs</text>
+<g><title>Structs · Python: OK</title>
+<rect class="ok-b" x="330" y="692" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="330" y="692" width="8" height="58" rx="3"/>
+<text x="350" y="731" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Structs · C++: OK</title>
+<rect class="ok-b" x="488" y="692" width="150" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ok" x="488" y="692" width="8" height="58" rx="3"/>
+<text x="508" y="731" font-size="27" font-weight="700">OK</text>
+</g>
+<g><title>Structs · Web: No soportado — web: WEB100, WEB101</title>
+<rect class="ns-b" x="646" y="692" width="300" height="58" rx="7" fill="none" stroke-width="2.5"/>
+<rect class="ns" x="646" y="692" width="8" height="58" rx="3"/>
+<text x="666" y="717" font-size="27" font-weight="700">No soportado</text>
+<text x="666" y="741" font-size="26" style="fill:#52514e">structs</text>
+</g>
+<rect class="ok" x="40" y="763" width="22" height="22" rx="4"/>
+<text x="72" y="783" font-size="27">OK: 29 de 33</text>
+<rect class="ns" x="286" y="763" width="22" height="22" rx="4"/>
+<text x="318" y="783" font-size="27">No soportado: 2 de 33</text>
+<rect class="err" x="658" y="763" width="22" height="22" rx="4"/>
+<text x="690" y="783" font-size="27">Error: 2 de 33</text>
+</svg>

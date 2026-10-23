@@ -515,6 +515,18 @@ junto al `for`, en una versión posterior.
 
 ### Cambiado
 
+- **El diferencial (`dev/diff/run_diff.py`) escribe el informe y las
+  figuras en el mismo paso**: `RESULTS.md`, `figure.svg`, `size_change.svg`
+  y `methodology.svg` salen del mismo `results.json` (también con
+  `--render-only`), así que lo que se muestra no puede venir de otra corrida
+  que el informe. `RESULTS.md` suma las pruebas estadísticas del esquema 1
+  frente al 2 (Wilcoxon de rangos con signo para el tamaño; U de
+  Mann-Whitney con Holm para la lectura), calculadas sin dependencias y con
+  sus límites escritos al lado.
+- **`backend.yml` y `bootstrap.yml` corren solo a mano** mientras la VM y la
+  V1 están atrasadas respecto de la V0 (ver `c_errorstfix.md`, sección 12):
+  fallaban en cada push por algo ya documentado y tapaban cualquier fallo
+  nuevo. `release.yml` las sigue exigiendo antes de publicar.
 - **Las cotas `Ord` y `Hash` de un TIPO se comprueban por instancia**, como
   las de una función: `Box<U>` con `struct Box<T: Ord>`, dentro de una
   función genérica cuyo `U` no promete `Ord`, ya no es `SEM043`; la llamada
@@ -756,6 +768,22 @@ junto al `for`, en una versión posterior.
 
 ### Corregido
 
+- **Las 10 vulnerabilidades que reportaba OpenSSF Scorecard** (black,
+  protobuf y pyyaml) no eran del código de suriaX, sino de dependencias
+  opcionales sin versión o con solo una cota mínima: el escáner (OSV) supone
+  la versión más antigua que el manifiesto permite, y las viejas tienen CVE.
+  Los tres manifiestos de pip (`requirements.txt`,
+  `documentation/requirements.txt` y `docs/quality/requirements.txt`) fijan
+  ahora versiones exactas sin vulnerabilidades conocidas (comprobado contra
+  OSV), Dependabot propone las subidas por PR y la CI instala con
+  `-c requirements.txt`, así que prueba las mismas versiones que se
+  declaran. El compilador sigue sin depender de ninguna.
+- **El sitio de documentación vuelve a construirse**: `docs.yml` falla con
+  cualquier advertencia (`-W`) y había tres. `conf.py` no reescribía un
+  enlace relativo cuyo texto es una imagen (la medalla de ROADMAP.md que
+  enlaza a `version.py`); ahora lo lleva al archivo en GitHub, como hace con
+  el resto. Y dos bloques de `type_system.rst` pedían el lexer `suriax`, que
+  no existe: el de suriaX se registra como `srcx`.
 - **Documentación al día con la 0.4.1**: la versión ya no se escribe a mano
   en `c_errorstfix.md`, el ROADMAP ni el CHANGELOG (el badge sale de
   `version.py`). El ejemplo de `.suriaX_config.yaml` de `usage.rst` usaba

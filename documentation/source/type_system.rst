@@ -898,7 +898,7 @@ Un concepto nativo
    nada nuevo: la semántica lo descompone en ``print`` de un argumento y
    ``print(" ")`` entre ellos (``--emit-stage desugar`` lo muestra).
 
-   .. code-block:: suriax
+   .. code-block:: srcx
 
       fn main() -> int {
           var int n = 42;
@@ -933,7 +933,7 @@ funciones acotadas: ``Ord`` y ``Hash`` se comprueban **por instancia**
 tipo (``struct { Box<U> b; } Outer<U>;``) no hay una instancia de función
 que lo decida, y cualquier cota que falte es ``SEM043``.
 
-.. code-block:: suriax
+.. code-block:: srcx
 
    struct { T v; } Box<T: Ord>;
 

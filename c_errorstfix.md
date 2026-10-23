@@ -443,14 +443,39 @@ El detalle está en [playground/ARQUITECTURA.md](playground/ARQUITECTURA.md).
 
 ## 12. Repositorio
 
-- **Tres workflows de GitHub fallarán con el estado de hoy**:
-  `backend.yml` (las 17 pruebas de `backend` de la sección 1), `bootstrap.yml`
-  (las 20 de la sección 3) y, por eso mismo, `release.yml`: corre
-  `python test/main.py --todo`, que incluye las dos categorías, así que la
-  0.4.1 no se publicará hasta que pasen. `tests.yml`, `ci.yml`,
-  `docs-examples.yml` y `docs.yml` deberían pasar (comprobado en local salvo
-  Sphinx, que no está instalado, y la comparación del códec con
-  `google.protobuf`, que solo corre en la CI).
+- **`backend.yml` y `bootstrap.yml` solo corren a mano** (Actions → "Run
+  workflow") hasta que la VM y la V1 se pongan al día: fallan por las 17
+  pruebas de `backend` de la sección 1 y las 20 de la sección 3, y en cada
+  push salían rojos por algo ya sabido. Sus disparadores están comentados en
+  el propio workflow, con la nota de restaurarlos. **No es que pasen**: siguen
+  fallando si se lanzan, y `release.yml` (corre `python test/main.py --todo`,
+  que incluye las dos categorías) no publicará la 0.4.1 hasta que pasen.
+- **`tests.yml` falla en GitHub y no en local, por archivos que no se
+  versionan**: en el commit `130b528` la CI dio 1811 de 1858 pasadas, 38
+  fallidas y 9 omitidas; en local, 1850 pasadas y 0 fallidas. Las 38 tienen
+  la misma causa: ese commit añadió `tooling/` al `.gitignore` (y `Procfile`
+  ya estaba), así que en un checkout limpio no existen, y dependen de ellos:
+  - `test_extension_vscode` (14) y `test_paquete_vsix` (5): leen
+    `tooling/vscode/` (`package.json`, la gramática, los fragmentos,
+    `generar.py`, `empaquetar.py`, `lanzar.py`);
+  - `test_lsp_consultas` (6) y `test_servidor_lsp` (11): importan
+    `tooling.lsp`. **No es solo de las pruebas**: `python V0/main.py --lsp`
+    en un clon del repositorio termina en `ICE000` (`ModuleNotFoundError:
+    No module named 'tooling'`, `V0/cli/__init__.py:200`);
+  - `test_depurador_dap` (1): lanza `tooling/vscode/depurar.py`;
+  - `test_playground::test_el_procfile_publica_el_servidor` (1): lee el
+    `Procfile`.
+
+  Hay que elegir entre versionar `tooling/` (y el `Procfile`) o sacar del
+  clon público lo que depende de ellos (la bandera `--lsp` y esas pruebas);
+  hoy el repositorio publicado promete un `--lsp` que no tiene.
+- `docs.yml` fallaba en el commit `130b528` por tres advertencias que `-W`
+  convierte en errores: un enlace de ROADMAP.md a `version.py` dentro de una
+  medalla, que `conf.py` no reescribía, y dos bloques `code-block:: suriax`
+  en `type_system.rst` (el lexer se registra como `srcx`). Corregido en el
+  árbol de trabajo y **sin verificar con Sphinx** (no está instalado en la
+  máquina del mantenedor): se confirma en el próximo push.
+- `ci.yml` y `docs-examples.yml` pasan en la CI.
 - **Aviso del compilador en `backend/src/vm.cpp:213`**: el orden de
   inicialización de `limite_bytes_` y `traza_` (`-Wreorder-ctor` en Clang,
   `-Wreorder` en GCC). Inofensivo, pero ensucia el build.

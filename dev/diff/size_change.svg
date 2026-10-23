@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" class="viz" viewBox="0 0 1000 581" width="1000" height="581" role="img" aria-labelledby="t d">
+<title id="t">Cambio de tamaño del .phir del programa, esquema 2 frente a 1</title>
+<desc id="d">El .phir del programa con el esquema 2 cambia entre −11,2 % y +1,7 % respecto del esquema 1 en los 11 programas; mediana −7,3 %.</desc>
+<style>
+.viz { --surface:#ffffff; --ink:#0b0b0b; --ink-2:#52514e; --ink-3:#8a8984;
+       --grid:#e6e5e0; --menos:#2a78d6; --mas:#eb6834;
+       --good:#0ca30c; --warn:#fab219; --crit:#d03b3b; }
+.fondo { fill: var(--surface); }
+text { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; fill: var(--ink); }
+.ok   { fill: var(--good); } .ns { fill: var(--warn); } .err { fill: var(--crit); }
+.ok-b { stroke: var(--good); } .ns-b { stroke: var(--warn); } .err-b { stroke: var(--crit); }
+.menos { fill: var(--menos); } .mas { fill: var(--mas); }
+.rejilla { stroke: var(--grid); stroke-width: 1; }
+.eje { stroke: var(--ink-3); stroke-width: 1.5; }
+.mediana { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 5 4; }
+</style>
+<rect class="fondo" x="0" y="0" width="1000" height="581"/>
+<text x="30" y="36" font-size="28" font-weight="700">Cambio de tamaño del .phir del programa, esquema 2 frente a 1</text>
+<text x="30" y="70" font-size="24" style="fill:#52514e">Solo la unidad del programa, sin las librerías (negativo = más pequeño)</text>
+<line class="rejilla" x1="295.0" x2="295.0" y1="124" y2="535"/>
+<text x="295.0" y="114" font-size="24" style="fill:#52514e" text-anchor="middle">−12 %</text>
+<line class="rejilla" x1="541.0" x2="541.0" y1="124" y2="535"/>
+<text x="541.0" y="114" font-size="24" style="fill:#52514e" text-anchor="middle">−6 %</text>
+<line class="rejilla" x1="787.0" x2="787.0" y1="124" y2="535"/>
+<text x="787.0" y="114" font-size="24" style="fill:#52514e" text-anchor="middle">0 %</text>
+<text x="30" y="154" font-size="26">Hola mundo</text>
+<g><title>Hola mundo: 288 → 293 B (+1.7 %)</title>
+<rect class="mas" x="787.0" y="130.0" width="71.2" height="29" rx="3"/>
+<text x="866.2" y="153.0" font-size="24" font-weight="700">+1,7 %</text>
+</g>
+<text x="30" y="190" font-size="26">Aritmética</text>
+<g><title>Aritmética: 4.102 → 3.797 B (−7.4 %)</title>
+<rect class="menos" x="482.1" y="167.0" width="304.9" height="29" rx="3"/>
+<text x="779.0" y="190.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−7,4 %</text>
+</g>
+<text x="30" y="228" font-size="26">Control de flujo</text>
+<g><title>Control de flujo: 2.655 → 2.461 B (−7.3 %)</title>
+<rect class="menos" x="487.4" y="204.0" width="299.6" height="29" rx="3"/>
+<text x="779.0" y="227.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−7,3 %</text>
+</g>
+<text x="30" y="264" font-size="26">Vector</text>
+<g><title>Vector: 2.207 → 1.959 B (−11.2 %)</title>
+<rect class="menos" x="326.3" y="241.0" width="460.7" height="29" rx="3"/>
+<text x="779.0" y="264.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−11,2 %</text>
+</g>
+<text x="30" y="302" font-size="26">Funciones y recursión</text>
+<g><title>Funciones y recursión: 3.002 → 2.788 B (−7.1 %)</title>
+<rect class="menos" x="494.7" y="278.0" width="292.3" height="29" rx="3"/>
+<text x="779.0" y="301.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−7,1 %</text>
+</g>
+<text x="30" y="338" font-size="26">Sintético 10</text>
+<g><title>Sintético 10: 3.566 → 3.289 B (−7.8 %)</title>
+<rect class="menos" x="468.5" y="315.0" width="318.5" height="29" rx="3"/>
+<text x="779.0" y="338.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−7,8 %</text>
+</g>
+<text x="30" y="376" font-size="26">Sintético 1.000</text>
+<g><title>Sintético 1.000: 124.002 → 110.892 B (−10.6 %)</title>
+<rect class="menos" x="353.5" y="352.0" width="433.5" height="29" rx="3"/>
+<text x="779.0" y="375.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−10,6 %</text>
+</g>
+<text x="30" y="412" font-size="26">Sintético 10.000</text>
+<g><title>Sintético 10.000: 1.176.402 → 1.054.049 B (−10.4 %)</title>
+<rect class="menos" x="360.6" y="389.0" width="426.4" height="29" rx="3"/>
+<text x="779.0" y="412.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−10,4 %</text>
+</g>
+<text x="30" y="450" font-size="26">División por cero</text>
+<g><title>División por cero: 565 → 553 B (−2.1 %)</title>
+<rect class="menos" x="699.9" y="426.0" width="87.1" height="29" rx="3"/>
+<text x="691.9" y="449.0" font-size="24" font-weight="700" text-anchor="end">−2,1 %</text>
+</g>
+<text x="30" y="486" font-size="26">Desbordamiento</text>
+<g><title>Desbordamiento: 2.433 → 2.264 B (−6.9 %)</title>
+<rect class="menos" x="502.2" y="463.0" width="284.8" height="29" rx="3"/>
+<text x="779.0" y="486.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−6,9 %</text>
+</g>
+<text x="30" y="524" font-size="26">Structs</text>
+<g><title>Structs: 1.474 → 1.366 B (−7.3 %)</title>
+<rect class="menos" x="486.6" y="500.0" width="300.4" height="29" rx="3"/>
+<text x="779.0" y="523.0" font-size="24" font-weight="700" style="fill:#ffffff" text-anchor="end">−7,3 %</text>
+</g>
+<line class="eje" x1="787.0" x2="787.0" y1="124" y2="535"/>
+<line class="mediana" x1="486.6" x2="486.6" y1="124" y2="543"/>
+<text x="486.6" y="569" font-size="26" font-weight="700" text-anchor="middle">mediana −7,3 %</text>
+</svg>

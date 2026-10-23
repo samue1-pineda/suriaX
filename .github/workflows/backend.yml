@@ -7,32 +7,38 @@ name: Backend (VM contra interprete)
 # (un cambio en la documentacion, en el web) no dice nada nuevo y cuesta
 # minutos. El release la corre siempre ('python test/main.py --todo').
 
+# TEMPORALMENTE SOLO MANUAL (decisión del mantenedor, 0.4.1): la VM está
+# atrasada respecto de la V0 y 17 pruebas de 'backend' fallan por eso, todas
+# listadas en c_errorstfix.md (secciones 1 y 12). En cada push el workflow
+# salía rojo por algo ya sabido y tapaba cualquier fallo nuevo. Se sigue
+# corriendo a mano (Actions -> "Run workflow") y el release la corre siempre.
+# RESTAURAR los disparadores de abajo al cerrar el lote que pone la VM al día.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - "CMake/**"
-      - "CMakeLists.txt"
-      - "V0/src/HIR/**"
-      - "lib/**"
-      - "runtime/**"
-      - "test/backend/**"
-      - "test/helpers.py"
-      - "version.py"
-      - ".github/workflows/backend.yml"
-  pull_request:
-    paths:
-      - "backend/**"
-      - "CMake/**"
-      - "CMakeLists.txt"
-      - "V0/src/HIR/**"
-      - "lib/**"
-      - "runtime/**"
-      - "test/backend/**"
-      - "test/helpers.py"
-      - "version.py"
-      - ".github/workflows/backend.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "backend/**"
+  #     - "CMake/**"
+  #     - "CMakeLists.txt"
+  #     - "V0/src/HIR/**"
+  #     - "lib/**"
+  #     - "runtime/**"
+  #     - "test/backend/**"
+  #     - "test/helpers.py"
+  #     - "version.py"
+  #     - ".github/workflows/backend.yml"
+  # pull_request:
+  #   paths:
+  #     - "backend/**"
+  #     - "CMake/**"
+  #     - "CMakeLists.txt"
+  #     - "V0/src/HIR/**"
+  #     - "lib/**"
+  #     - "runtime/**"
+  #     - "test/backend/**"
+  #     - "test/helpers.py"
+  #     - "version.py"
+  #     - ".github/workflows/backend.yml"
   workflow_dispatch:
 
 permissions:

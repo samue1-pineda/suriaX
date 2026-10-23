@@ -86,6 +86,40 @@ Tamaño (medido, es exacto, sin ruido): el `.phir` del programa ocupa con el esq
 | ejecución vm | 3 | 1 | 7 |
 | ejecución web | 1 | 0 | 8 |
 
+### Pruebas estadísticas: esquema 1 frente a esquema 2
+
+El criterio de ruido de arriba describe; estas pruebas contrastan. Salen de los mismos datos, sin volver a medir; son bilaterales y con α = 0.05.
+
+**Tamaño del `.phir` del programa**: Wilcoxon de rangos con signo, pareada por programa (el mismo programa con los dos esquemas). El tamaño es exacto, así que aquí no hay ruido que separar: la prueba dice si el cambio va en la misma dirección en los programas más de lo que daría el azar.
+
+- 11 programas: el esquema 2 es más pequeño en 10, más grande en 1 e igual en 0 (los iguales no entran en la prueba).
+- W+ = 1, W− = 65, n = 11; p = 0.002 (exacta); correlación biserial de rangos -0.97 (−1: todas las diferencias a favor del esquema 2).
+- Con α = 0.05 se rechaza la hipótesis nula (las diferencias se reparten simétricas alrededor de 0).
+
+**Lectura** (cargar, decodificar y ligar): U de Mann-Whitney por celda (programa × target), las corridas del esquema 1 contra las del 2. Los p-valores van corregidos con Holm sobre todas las celdas comparadas (las rechazadas no cuentan, como arriba). **P(2 < 1)** es la probabilidad de que una corrida del esquema 2 tarde menos que una del 1: 0.5 es que no hay diferencia; 1, que siempre es más rápido. En negrita, lo significativo.
+
+| Programa | intérprete (Python) | VM (C++) | web (WebAssembly) |
+|---|---|---|---|
+| `01_hola.srcx` | p 1.000 · P(2 < 1) 0.45 | p 1.000 · P(2 < 1) 0.52 | p 1.000 · P(2 < 1) 0.48 |
+| `02_aritmetica.srcx` | **p 0.004** · P(2 < 1) 0.79 | p 1.000 · P(2 < 1) 0.53 | p 1.000 · P(2 < 1) 0.58 |
+| `03_control.srcx` | p 1.000 · P(2 < 1) 0.53 | p 1.000 · P(2 < 1) 0.55 | p 0.167 · P(2 < 1) 0.30 |
+| `04_vector.srcx` | **p < 0.001** · P(2 < 1) 0.94 | **p < 0.001** · P(2 < 1) 0.92 | — |
+| `05_funciones.srcx` | p 1.000 · P(2 < 1) 0.53 | p 1.000 · P(2 < 1) 0.48 | p 1.000 · P(2 < 1) 0.51 |
+| `06_sintetico_10.srcx` | **p < 0.001** · P(2 < 1) 0.81 | p 0.753 · P(2 < 1) 0.65 | p 0.408 · P(2 < 1) 0.67 |
+| `06_sintetico_1000.srcx` | **p < 0.001** · P(2 < 1) 1.00 | **p < 0.001** · P(2 < 1) 0.90 | p 0.102 · P(2 < 1) 0.71 |
+| `06_sintetico_10000.srcx` | **p < 0.001** · P(2 < 1) 1.00 | **p < 0.001** · P(2 < 1) 1.00 | **p < 0.001** · P(2 < 1) 1.00 |
+| `07_division_cero.srcx` | p 0.118 · P(2 < 1) 0.71 | p 1.000 · P(2 < 1) 0.45 | p 0.141 · P(2 < 1) 0.70 |
+| `08_desbordamiento.srcx` | p 1.000 · P(2 < 1) 0.48 | **p 0.015** · P(2 < 1) 0.24 | **p 0.026** · P(2 < 1) 0.75 |
+| `09_structs.srcx` | p 1.000 · P(2 < 1) 0.57 | p 0.244 · P(2 < 1) 0.69 | — |
+
+Con α = 0.05 tras Holm, el esquema 2 lee más rápido en 10 de 31 celdas, más lento en 1 y sin diferencia significativa en 20.
+
+**Límites de estas pruebas** (se leen con ellas):
+
+- Los programas se eligieron a mano, por cobertura del lenguaje, no al azar: la Wilcoxon habla de ESTOS programas, no de cualquier programa de suriaX.
+- Mann-Whitney supone corridas independientes. Aquí son consecutivas, en una sola máquina, y todas las del esquema 1 de un programa se hacen ANTES que las del 2 (el orden no se alterna): una deriva de la máquina (temperatura, caché, otro proceso) puede pasar por efecto del esquema. Los p-valores son, por eso, optimistas.
+- Los tiempos incluyen arrancar el proceso (ver los arranques en "Cómo se mide"): en los programas pequeños el arranque domina y la diferencia del esquema queda diluida.
+
 ## Entorno
 
 | | |

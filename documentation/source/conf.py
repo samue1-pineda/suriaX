@@ -162,7 +162,13 @@ _REPO_ROOT = _SOURCE_DIR.parents[1]
 _DOC_BY_SOURCE = {source: target for source, target in REPO_DOCS}
 
 #: Enlace Markdown ``[texto](destino)`` con destino relativo (no http/mailto/#).
-_MD_LINK = re.compile(r"\[([^\]]*)\]\((?!https?://|mailto:|#)([^)\s]+)\)")
+#: El texto puede ser una imagen, como una medalla:
+#: ``[![Versión](https://img.shields.io/...)](version.py)``. Sin la primera
+#: alternativa, el ``]`` de la imagen cortaba el texto, el enlace a
+#: ``version.py`` llegaba sin reescribir a Sphinx y, con ``-W``, su
+#: ``myst.xref_missing`` rompía el build (ROADMAP.md, commit 130b528).
+_MD_LINK = re.compile(r"\[((?:!\[[^\]]*\]\([^)\s]*\)|[^\]])*)\]"
+                      r"\((?!https?://|mailto:|#)([^)\s]+)\)")
 
 
 def _rewrite_link(origin_rel: str, target: str) -> str | None:

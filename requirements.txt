@@ -2,6 +2,12 @@
 # esta lista es para los interesados en el desarrollo del compilador, no para los usuarios,
 # ellos con el .exe/.o no necesitan instalar nada de esto
 
+# Versiones EXACTAS (==), no cotas: sin version, el escaner de vulnerabilidades
+# (OSV, el que usa OpenSSF Scorecard) supone la mas antigua que el archivo
+# permite, y las viejas de protobuf y pyyaml tienen CVE conocidos. Las sube
+# Dependabot (.github/dependabot.yml) con un PR que hay que revisar. La CI
+# instala con '-c requirements.txt' para usar estas mismas versiones.
+
 # Nota: LLVM-22 normalmente NO se instala con pip, sino con el gestor de
 # paquetes del sistema (apt/pacman/brew) o desde llvm.org. Se lista aqui como
 # referencia de version; compilerconfig.py lo detecta via 'llvm-config'.
@@ -11,15 +17,15 @@
 #   propio hir.proto (V0/src/HIR/{schema,wire}.py). Ver PROTOBUF_BRIDGE.md
 #   secc. 2 — el motivo es que protoc y el runtime se instalan por vias
 #   distintas y tienen que ser compatibles entre si, cosa que nada garantiza.
-protobuf           # OPCIONAL: solo para la comprobacion cruzada del codec
+protobuf==7.36.2   # OPCIONAL: solo para la comprobacion cruzada del codec
                    # (test_hir_reproducible); sin el, esa prueba se salta y
                    # todo lo demas funciona igual
 
 # interoperabilidad C++
-pybind11           # bindings Python <-> C++
+pybind11==3.1.0    # bindings Python <-> C++
 
 # config
-pyyaml             # formato de compilacion (.suriaX_config.yaml)
+pyyaml==6.0.3      # formato de compilacion (.suriaX_config.yaml)
 
 # playground (playground/server.py)
 #   El servidor NO añade dependencias: usa 'http.server' de la biblioteca

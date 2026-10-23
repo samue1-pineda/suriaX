@@ -6,3 +6,5 @@ log/
 *.phir.*
 __pycache__/
 # los resultados (RESULTS.md, results.json) SÍ se versionan
+# PNG a 3x para pegar en el poster: se regeneran
+export/

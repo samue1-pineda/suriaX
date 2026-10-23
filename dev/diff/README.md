@@ -220,7 +220,7 @@ Start-Process python -ArgumentList "dev/diff/run_diff.py" -RedirectStandardOutpu
 | `--cell-budget S` | si el calentamiento de una celda dice que N corridas pasarían de S segundos (por defecto 1200), esa celda hace menos corridas, y queda escrito en `RESULTS.md` |
 | `--timeout S` | límite de UNA corrida. Por defecto, 3600 s |
 | `--vm`, `--node` | rutas de la VM y de node |
-| `--render-only` | no mide nada: reescribe `RESULTS.md` desde el `results.json` que ya existe |
+| `--render-only` | no mide nada: reescribe `RESULTS.md` y las figuras (`.svg`) desde el `results.json` que ya existe |
 
 Qué hace el arnés, en orden:
 
@@ -249,8 +249,10 @@ Qué hace el arnés, en orden:
    | VM | `build/bin/suriax-hir x.phir --link` | `build/bin/suriax-hir x.phir --run --quiet` |
    | web | `node dev/diff/read_web.ts x.phir` | `node web/main.ts x.phir --run` |
 
-5. **Escribe los resultados**, `RESULTS.md` y `results.json`, después de cada
-   programa: una corrida interrumpida deja guardado lo medido hasta ahí.
+5. **Escribe los resultados** después de cada programa: `results.json` (los
+   datos crudos) y, desde esos mismos datos, `RESULTS.md` y las figuras
+   (`figure.svg`, `size_change.svg`, `methodology.svg`). Una corrida
+   interrumpida deja guardado lo medido hasta ahí.
 
 En `<repo>/lib`, `<repo>` es la ruta del repositorio en cada máquina.
 
@@ -275,7 +277,10 @@ que git ignora.
      esquema 2 y compilador V1);
    - el **esquema 2 frente al 1**: el tamaño, la emisión, la lectura y la
      ejecución por target, y en cuántos programas el 2 es mejor, peor o
-     indistinguible.
+     indistinguible;
+   - las **pruebas estadísticas**: Wilcoxon de rangos con signo para el
+     tamaño (pareada por programa, exacta) y U de Mann-Whitney para la
+     lectura (por celda, con Holm), con sus límites escritos al lado.
 2. **Entorno** y cómo se mide.
 3. **Apartado 1**, esquema 1 frente a esquema 2, programa por programa.
    Termina con una tabla de los sintéticos.
@@ -290,7 +295,8 @@ Cómo leer las tablas:
 - **Esquema 1 → 2**: aparece como `mediana 1 → mediana 2 (cambio %; RIC 1 /
   RIC 2)` y un veredicto. Si los RIC de los dos se **solapan**, la diferencia
   se marca **"dentro del ruido"**. Es un criterio simple, no una prueba
-  estadística, y no hay que leer en él más de lo que dice.
+  estadística, y no hay que leer en él más de lo que dice: las pruebas van
+  en su propia subsección.
 - **Tamaño**: es exacto (no tiene ruido).
 
 [results.json](results.json) guarda, ya sin rutas de la máquina:
@@ -300,6 +306,39 @@ Cómo leer las tablas:
 - las salidas de la primera corrida;
 - los códigos de salida;
 - si todas las corridas dieron lo mismo (`deterministic`).
+
+### Las figuras del póster
+
+- `figure.svg`, el resultado central: el estado de los 11 programas en los
+  tres targets (OK, No soportado o Error, con color, etiqueta y la causa en
+  palabras cuando no es OK). Hecha para un hueco de 26 × 21 cm: a esa
+  escala el texto sale a unos 20 pt.
+- `size_change.svg`, el detalle del tamaño: el cambio del `.phir` del
+  esquema 1 al 2 para los 11 programas, en una sola escala y con la mediana
+  (−7,3 %). En el póster va como un número; este gráfico es para el informe
+  o el QR.
+- `methodology.svg`, la metodología: las tres fases (diseño,
+  implementación, evaluación) con su objetivo, la referencia y las tres
+  categorías. Para un hueco de 26 × 28 cm.
+
+Las escribe **el mismo `run_diff.py` que escribe `RESULTS.md`**, en el mismo
+paso y desde el mismo `results.json`: no hay un segundo script que correr,
+así que la figura y el informe no pueden venir de corridas distintas. Para
+rehacerlas sin volver a medir:
+
+```bash
+python dev/diff/run_diff.py --render-only    # RESULTS.md y las tres .svg
+```
+
+`figure.py` y `methodology.py` son módulos de `run_diff.py`, no scripts:
+`figure.py` clasifica cada celda con la misma función que escribe
+`RESULTS.md` (`cell_status`), y hasta el título de `figure.svg` ("los estados
+son idénticos") se calcula de los datos. Son SVG sin dependencias, con fondo
+blanco: escalan sin perder calidad al imprimirlos.
+
+`contract.svg` es la excepción: es un diagrama conceptual (el `.phir` como
+contrato entre el frontend y los tres backends), no un resultado, así que no
+sale de ninguna corrida y se edita a mano.
 
 ## 8. Los programas
 
