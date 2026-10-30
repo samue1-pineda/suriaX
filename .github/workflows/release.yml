@@ -43,7 +43,7 @@ jobs:
       publicar: ${{ steps.v.outputs.publicar }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0      # las etiquetas: hacen falta para saber si ya existe
 
@@ -94,7 +94,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar Python
         uses: actions/setup-python@v5
@@ -142,7 +142,7 @@ jobs:
       contents: write     # crear la etiqueta y el release
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0   # el historial completo: hace falta para las notas
 
