@@ -48,7 +48,7 @@ jobs:
           fetch-depth: 0      # las etiquetas: hacen falta para saber si ya existe
 
       - name: Preparar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -97,7 +97,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Preparar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: "pip"
